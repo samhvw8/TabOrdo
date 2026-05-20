@@ -128,7 +128,7 @@
     });
   }
 
-  function updateResults() {
+  async function updateResults() {
     const { prefix, query: searchQuery } = parseCommand(query);
 
     if (query.startsWith("/") && !query.includes(" ")) {
@@ -148,7 +148,21 @@
       handlePrefixSearch(prefix, searchQuery);
     } else {
       const indices = search(searchHaystack, query, searchMode);
-      results = indices.map((i) => allTabs[i]);
+      const tabResults = indices.map((i) => allTabs[i]);
+
+      if (query.trim().length >= 2) {
+        const [bookmarkResults, historyResults] = await Promise.all([
+          searchBookmarks(query, 5),
+          searchHistory(query, 5),
+        ]);
+        results = [
+          ...tabResults,
+          ...(bookmarkResults.length > 0 ? [{ type: "divider" as const, id: "div-bookmarks", title: "Bookmarks", url: "" }, ...bookmarkResults] : []),
+          ...(historyResults.length > 0 ? [{ type: "divider" as const, id: "div-history", title: "History", url: "" }, ...historyResults] : []),
+        ];
+      } else {
+        results = tabResults;
+      }
     }
     selectedIndex = 0;
   }
@@ -332,9 +346,16 @@
       placeholder="Search tabs... (/ for commands)"
       onfocuschange={(f) => { inputFocused = f; }}
       onkeydown={(e) => {
-        if (e.key === "Tab") {
+        if (e.key === "Tab" && e.shiftKey) {
           e.preventDefault();
           cycleSearchMode();
+        } else if (e.key === "Tab" && !e.shiftKey) {
+          e.preventDefault();
+          const hints = matchCommands(query);
+          if (query.startsWith("/") && hints.length > 0) {
+            const target = paletteMode === "commands" && hints[selectedIndex] ? hints[selectedIndex] : hints[0];
+            handleCommandSelect(target);
+          }
         } else if (e.key === "ArrowDown") {
           e.preventDefault();
           selectedIndex = Math.min(selectedIndex + 1, (paletteMode === "commands" ? commandHints.length : results.length) - 1);
@@ -391,7 +412,7 @@
           onmousedown={(e) => { e.preventDefault(); searchModeIndex = i; if (query) updateResults(); }}
         >{m.label}</button>
       {/each}
-      <span class="text-[10px] text-text-muted ml-auto">Tab to cycle</span>
+      <span class="text-[10px] text-text-muted ml-auto">⇧Tab cycle</span>
     </div>
   {/if}
 

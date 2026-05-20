@@ -62,6 +62,12 @@
     </div>
   {:else}
     {#each results as item, i}
+      {#if item.type === "divider"}
+        <div class="flex items-center gap-2 px-2 py-1 mt-1">
+          <span class="text-[10px] font-semibold uppercase tracking-wider text-text-muted">{item.title}</span>
+          <div class="flex-1 h-px bg-border/50"></div>
+        </div>
+      {:else}
       <div
         role="button"
         tabindex="0"
@@ -115,6 +121,7 @@
           </button>
         {/if}
       </div>
+      {/if}
     {/each}
   {/if}
 </div>

@@ -2,7 +2,7 @@ import uFuzzy from "@leeoniya/ufuzzy";
 import type { TabInfo } from "./tabs.ts";
 
 export interface SearchResult {
-  type: "tab" | "bookmark" | "history";
+  type: "tab" | "bookmark" | "history" | "divider";
   id: string;
   title: string;
   url: string;
