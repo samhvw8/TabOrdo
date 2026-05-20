@@ -4,11 +4,13 @@
     placeholder = "Search...",
     onkeydown,
     oninput,
+    onfocuschange,
   }: {
     value: string;
     placeholder?: string;
     onkeydown?: (e: KeyboardEvent) => void;
     oninput?: () => void;
+    onfocuschange?: (focused: boolean) => void;
   } = $props();
 
   let inputEl: HTMLInputElement;
@@ -39,6 +41,8 @@
     {placeholder}
     {onkeydown}
     oninput={() => oninput?.()}
+    onfocus={() => onfocuschange?.(true)}
+    onblur={() => onfocuschange?.(false)}
     type="text"
     class="w-full pl-8 pr-3 py-2 bg-surface-hover border border-border rounded-lg text-text placeholder:text-text-muted text-sm outline-none focus:border-primary transition-colors"
     spellcheck="false"

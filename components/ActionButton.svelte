@@ -5,18 +5,21 @@
     onclick,
     variant = "default",
     disabled = false,
+    tooltip = "",
   }: {
     label: string;
     icon: string;
     onclick: () => void;
     variant?: "default" | "danger";
     disabled?: boolean;
+    tooltip?: string;
   } = $props();
 </script>
 
 <button
   {onclick}
   {disabled}
+  title={tooltip}
   class="flex flex-col items-center gap-1 px-3 py-2.5 rounded-lg border transition-all text-sm
     {disabled ? 'opacity-40 cursor-not-allowed border-border bg-surface' :
      variant === 'danger'

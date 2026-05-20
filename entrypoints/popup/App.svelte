@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { getAllTabs, getCurrentWindowTabs, switchToTab, closeTabs, sortTabsInWindow, sortTabsInGroup, groupTabsByDomain, ungroupAll, removeDuplicates, mergeAllWindows, muteTab, splitTabToWindow, discardTabs, type TabInfo } from "../../lib/tabs.ts";
   import { search, tabsToSearchItems, searchBookmarks, searchHistory, parseCommand, SEARCH_MODES, type SearchResult, type SearchMode } from "../../lib/search.ts";
+  import { getAutoGroup, setAutoGroup, getUseRules, setUseRules } from "../../lib/rules.ts";
   import { matchCommands, ALL_COMMANDS, CATEGORY_STYLES, type CommandDefinition, type CommandCategory } from "../../lib/commands.ts";
   import SearchInput from "../../components/SearchInput.svelte";
   import ResultList from "../../components/ResultList.svelte";
@@ -9,6 +10,7 @@
   import StatusBar from "../../components/StatusBar.svelte";
   import ActionButton from "../../components/ActionButton.svelte";
   import TabCard from "../../components/TabCard.svelte";
+  import RulesEditor from "../../components/RulesEditor.svelte";
 
   let query = $state("");
   let results = $state<SearchResult[]>([]);
@@ -21,10 +23,27 @@
   let searchMode = $derived<SearchMode>(SEARCH_MODES[searchModeIndex].mode);
 
   let showHelp = $state(false);
+  let showRules = $state(false);
 
   function cycleSearchMode() {
     searchModeIndex = (searchModeIndex + 1) % SEARCH_MODES.length;
     if (query) updateResults();
+  }
+
+  let autoGroupEnabled = $state(false);
+  let useRulesEnabled = $state(false);
+  let inputFocused = $state(true);
+  let collapsedGroups = $state<Set<number>>(new Set());
+
+  function setCollapsed(s: Set<number>) {
+    collapsedGroups = s;
+    chrome.storage.local.set({ collapsedGroups: [...s] });
+  }
+
+  function toggleGroupCollapse(groupId: number) {
+    const next = new Set(collapsedGroups);
+    if (next.has(groupId)) next.delete(groupId); else next.add(groupId);
+    setCollapsed(next);
   }
 
   let allTabs = $state<SearchResult[]>([]);
@@ -217,6 +236,17 @@
     selectedTabs = next;
   }
 
+  function toggleSelectGroup(tabIds: number[]) {
+    const allSelected = tabIds.every((id) => selectedTabs.has(id));
+    const next = new Set(selectedTabs);
+    if (allSelected) {
+      for (const id of tabIds) next.delete(id);
+    } else {
+      for (const id of tabIds) next.add(id);
+    }
+    selectedTabs = next;
+  }
+
   async function dashAction(fn: () => Promise<string | void>) {
     const msg = await fn();
     if (msg) statusMessage = msg;
@@ -225,8 +255,12 @@
     setTimeout(() => { statusMessage = ""; }, 3000);
   }
 
-  onMount(() => {
+  onMount(async () => {
     loadTabs();
+    autoGroupEnabled = await getAutoGroup();
+    useRulesEnabled = await getUseRules();
+    const stored = await chrome.storage.local.get("collapsedGroups");
+    if (stored.collapsedGroups) collapsedGroups = new Set(stored.collapsedGroups);
   });
 
   function onQueryChange() {
@@ -242,6 +276,7 @@
       bind:value={query}
       oninput={onQueryChange}
       placeholder="Search tabs... (/ for commands)"
+      onfocuschange={(f) => { inputFocused = f; }}
       onkeydown={(e) => {
         if (e.key === "Tab") {
           e.preventDefault();
@@ -268,24 +303,38 @@
     />
     </div>
     <button
+      class="shrink-0 w-7 h-7 rounded-md flex items-center justify-center transition-colors
+        {showRules ? 'bg-primary text-white' : 'bg-surface-hover text-text-muted hover:text-text'}"
+      onclick={() => { showRules = !showRules; showHelp = false; }}
+      title="Group rules"
+    >
+      <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>
+      </svg>
+    </button>
+    <button
       class="shrink-0 w-7 h-7 rounded-md flex items-center justify-center text-xs font-bold transition-colors
         {showHelp ? 'bg-primary text-white' : 'bg-surface-hover text-text-muted hover:text-text'}"
-      onclick={() => { showHelp = !showHelp; }}
+      onclick={() => { showHelp = !showHelp; showRules = false; }}
       title="Command guide"
     >?</button>
   </div>
-  <div class="flex items-center gap-1 px-3 pb-1">
-    {#each SEARCH_MODES as m, i}
-      <button
-        class="px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors
-          {i === searchModeIndex ? 'bg-primary text-white' : 'bg-surface-hover text-text-muted hover:text-text'}"
-        onclick={() => { searchModeIndex = i; if (query) updateResults(); }}
-      >{m.label}</button>
+  {#if inputFocused}
+    <div class="flex items-center gap-1 px-3 pb-1">
+      {#each SEARCH_MODES as m, i}
+        <button
+          class="px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors
+            {i === searchModeIndex ? 'bg-primary text-white' : 'bg-surface-hover text-text-muted hover:text-text'}"
+          onmousedown={(e) => { e.preventDefault(); searchModeIndex = i; if (query) updateResults(); }}
+        >{m.label}</button>
       {/each}
-    <span class="text-[10px] text-text-muted ml-auto">Tab to cycle</span>
-  </div>
+      <span class="text-[10px] text-text-muted ml-auto">Tab to cycle</span>
+    </div>
+  {/if}
 
-  {#if showHelp}
+  {#if showRules}
+    <RulesEditor onclose={() => { showRules = false; }} />
+  {:else if showHelp}
     <!-- Help guide -->
     <div class="flex-1 overflow-y-auto px-3 py-2 min-h-0">
       <div class="text-xs font-semibold text-text mb-2">Command Guide</div>
@@ -328,64 +377,133 @@
     <div class="flex-1 overflow-y-auto min-h-0">
       <!-- Action buttons -->
       <div class="grid grid-cols-4 gap-1.5 px-3 pb-2">
-        <ActionButton label="Sort All" icon="↕️" onclick={() => dashAction(async () => { await sortTabsInWindow(currentWindowId); return "Sorted"; })} />
-        <ActionButton label="Group+" icon="📁" onclick={() => dashAction(async () => { await groupTabsByDomain("additive"); return "Grouped (kept existing)"; })} />
-        <ActionButton label="Regroup" icon="🔀" onclick={() => dashAction(async () => { await groupTabsByDomain("rebuild"); return "Regrouped from scratch"; })} />
-        <ActionButton label="Dedup" icon="🔄" onclick={() => dashAction(async () => { const n = await removeDuplicates(); return n > 0 ? `${n} removed` : "No dupes"; })} />
-        <ActionButton label="Ungroup" icon="📤" onclick={() => dashAction(async () => { await ungroupAll(); return "Ungrouped all"; })} />
-        <ActionButton label="Merge" icon="🔗" onclick={() => dashAction(async () => { await mergeAllWindows(); return "Merged"; })} />
+        <ActionButton label="Sort All" icon="↕️" tooltip="Sort tabs by domain. Groups stay left sorted by name, ungrouped tabs go right." onclick={() => dashAction(async () => { await sortTabsInWindow(currentWindowId); return "Sorted"; })} />
+        <ActionButton label="Group+" icon="📁" tooltip="Group ungrouped tabs by domain. Keeps existing groups, adds new ones. Respects rules if enabled." onclick={() => dashAction(async () => { await groupTabsByDomain("additive"); return "Grouped (kept existing)"; })} />
+        <ActionButton label="Regroup" icon="🔀" tooltip="Ungroup everything, then regroup all tabs from scratch by domain. Respects rules if enabled." onclick={() => dashAction(async () => { await groupTabsByDomain("rebuild"); return "Regrouped from scratch"; })} />
+        <ActionButton label="Dedup" icon="🔄" tooltip="Find and close duplicate tabs across all windows. Keeps the most recently accessed copy." onclick={() => dashAction(async () => { const n = await removeDuplicates(); return n > 0 ? `${n} removed` : "No dupes"; })} />
+        <ActionButton label="Ungroup" icon="📤" tooltip="Remove all tab groups across all windows. Tabs stay in place." onclick={() => dashAction(async () => { await ungroupAll(); return "Ungrouped all"; })} />
+        <ActionButton label="Merge" icon="🔗" tooltip="Move all tabs from other windows into the current window." onclick={() => dashAction(async () => { await mergeAllWindows(); return "Merged"; })} />
         <ActionButton label="Close Sel." icon="✕" variant="danger" disabled={selectedTabs.size === 0}
-          onclick={() => dashAction(async () => { await closeTabs([...selectedTabs]); return `Closed ${selectedTabs.size}`; })} />
+          tooltip="Close all selected tabs." onclick={() => dashAction(async () => { await closeTabs([...selectedTabs]); return `Closed ${selectedTabs.size}`; })} />
         <ActionButton label="Discard Sel." icon="💤" disabled={selectedTabs.size === 0}
-          onclick={() => dashAction(async () => { await discardTabs([...selectedTabs]); return `Discarded ${selectedTabs.size}`; })} />
+          tooltip="Suspend selected tabs to free memory. They reload when clicked." onclick={() => dashAction(async () => { await discardTabs([...selectedTabs]); return `Discarded ${selectedTabs.size}`; })} />
       </div>
 
-      <!-- Selection controls -->
+      <!-- Toggles -->
+      <div class="flex items-center gap-1.5 px-3 pb-2">
+        <button
+          class="flex items-center gap-1.5 px-2 py-1 rounded-md text-[10px] transition-colors
+            {useRulesEnabled ? 'bg-accent-green/15 text-accent-green border border-accent-green/30' : 'bg-surface-hover text-text-muted border border-border'}"
+          onclick={async () => { useRulesEnabled = !useRulesEnabled; await setUseRules(useRulesEnabled); }}
+          title="When ON, Group+ and Regroup use your custom rules to merge multiple domains into one group. Configure rules with the ⚙ button."
+        >
+          <span class="w-2 h-2 rounded-full {useRulesEnabled ? 'bg-accent-green' : 'bg-border'}"></span>
+          Rules
+        </button>
+        <button
+          class="flex items-center gap-1.5 px-2 py-1 rounded-md text-[10px] transition-colors
+            {autoGroupEnabled ? 'bg-primary/15 text-primary border border-primary/30' : 'bg-surface-hover text-text-muted border border-border'}"
+          onclick={async () => { autoGroupEnabled = !autoGroupEnabled; await setAutoGroup(autoGroupEnabled); }}
+          title="When ON (and Rules is ON), new tabs are automatically grouped by matching rules as they load."
+        >
+          <span class="w-2 h-2 rounded-full {autoGroupEnabled ? 'bg-primary' : 'bg-border'}"></span>
+          Auto
+        </button>
+      </div>
+
+      <!-- Selection + collapse controls -->
       <div class="flex items-center gap-3 px-3 pb-2 text-xs">
-        <button onclick={() => { selectedTabs = new Set(dashboardTabs.map((t) => t.id)); }} class="text-primary hover:text-primary-hover transition-colors">All</button>
-        <button onclick={() => { selectedTabs = new Set(); }} class="text-text-muted hover:text-text transition-colors">None</button>
+        <button onmousedown={(e) => { e.preventDefault(); selectedTabs = new Set(dashboardTabs.map((t) => t.id)); }} class="text-primary hover:text-primary-hover transition-colors">All</button>
+        <button onmousedown={(e) => { e.preventDefault(); selectedTabs = new Set(); }} class="text-text-muted hover:text-text transition-colors">None</button>
         {#if selectedTabs.size > 0}
           <span class="text-text-muted">{selectedTabs.size} selected</span>
         {/if}
+        <div class="flex-1"></div>
+        <button
+          onmousedown={(e) => { e.preventDefault(); setCollapsed(new Set([...groups.keys(), -1])); }}
+          class="text-text-muted hover:text-text transition-colors">Fold</button>
+        <button
+          onmousedown={(e) => { e.preventDefault(); setCollapsed(new Set()); }}
+          class="text-text-muted hover:text-text transition-colors">Unfold</button>
       </div>
 
       <!-- Tab groups -->
       {#each [...groups.entries()] as [groupId, group]}
+        {@const collapsed = collapsedGroups.has(groupId)}
+        {@const allSelected = group.tabs.every((t) => selectedTabs.has(t.id))}
+        {@const someSelected = group.tabs.some((t) => selectedTabs.has(t.id))}
         <div class="mx-3 mb-2 border rounded-lg overflow-hidden {groupColors[group.color] || 'border-border'} {groupBg[group.color] || 'bg-surface-hover'}">
-          <div class="flex items-center gap-2 px-2.5 py-1.5 border-b {groupColors[group.color] || 'border-border'}">
-            <span class="w-2 h-2 rounded-full {dotColors[group.color] || 'bg-border'}"></span>
-            <span class="text-xs font-medium text-text">{group.title}</span>
-            <span class="text-[10px] text-text-muted">({group.tabs.length})</span>
-            <div class="flex-1"></div>
-            <button class="text-[10px] text-text-muted hover:text-text transition-colors"
-              onclick={() => dashAction(async () => { await sortTabsInGroup(groupId); return `Sorted "${group.title}"`; })}>
-              Sort
+          <div
+            class="w-full flex items-center gap-2 px-2.5 py-1.5 text-left transition-colors hover:brightness-110 cursor-pointer
+              {collapsed ? '' : 'border-b'} {groupColors[group.color] || 'border-border'}"
+          >
+            <input
+              type="checkbox"
+              checked={allSelected}
+              indeterminate={someSelected && !allSelected}
+              onchange={() => { toggleSelectGroup(group.tabs.map(t => t.id)); }}
+              onclick={(e) => e.stopPropagation()}
+              class="shrink-0 w-3 h-3 rounded accent-primary"
+              title="Select all tabs in this group"
+            />
+            <button class="flex items-center gap-2 flex-1 min-w-0" onclick={() => toggleGroupCollapse(groupId)}>
+              <svg class="w-3 h-3 text-text-muted transition-transform shrink-0 {collapsed ? '' : 'rotate-90'}" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+              <span class="w-2 h-2 rounded-full shrink-0 {dotColors[group.color] || 'bg-border'}"></span>
+              <span class="text-xs font-medium text-text truncate">{group.title}</span>
+              <span class="text-[10px] text-text-muted shrink-0">({group.tabs.length})</span>
             </button>
+            <span class="text-[10px] text-text-muted hover:text-text transition-colors shrink-0 cursor-pointer"
+              onclick={(e) => { e.stopPropagation(); dashAction(async () => { await sortTabsInGroup(groupId); return `Sorted "${group.title}"`; }); }}
+              role="button" tabindex="0" onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); } }}>
+              Sort
+            </span>
           </div>
-          <div class="p-1 grid gap-0.5">
-            {#each group.tabs as tab}
-              <TabCard {tab} selected={selectedTabs.has(tab.id)}
-                ontoggle={() => toggleSelect(tab.id)}
-                onclose={() => dashAction(async () => { await closeTabs([tab.id]); })} />
-            {/each}
-          </div>
+          {#if !collapsed}
+            <div class="p-1 grid gap-0.5">
+              {#each group.tabs as tab}
+                <TabCard {tab} selected={selectedTabs.has(tab.id)}
+                  ontoggle={() => toggleSelect(tab.id)}
+                  onclose={() => dashAction(async () => { await closeTabs([tab.id]); })} />
+              {/each}
+            </div>
+          {/if}
         </div>
       {/each}
 
       <!-- Ungrouped -->
       {#if ungrouped.length > 0}
-        <div class="mx-3 mb-2 border border-border rounded-lg">
-          <div class="px-2.5 py-1.5 border-b border-border">
-            <span class="text-xs font-medium text-text-muted">Ungrouped</span>
-            <span class="text-[10px] text-text-muted ml-1">({ungrouped.length})</span>
+        {@const ungroupedCollapsed = collapsedGroups.has(-1)}
+        {@const allUngroupedSelected = ungrouped.every((t) => selectedTabs.has(t.id))}
+        {@const someUngroupedSelected = ungrouped.some((t) => selectedTabs.has(t.id))}
+        <div class="mx-3 mb-2 border border-border rounded-lg overflow-hidden">
+          <div
+            class="w-full flex items-center gap-2 px-2.5 py-1.5 text-left transition-colors hover:bg-surface-hover cursor-pointer
+              {ungroupedCollapsed ? '' : 'border-b border-border'}"
+          >
+            <input
+              type="checkbox"
+              checked={allUngroupedSelected}
+              indeterminate={someUngroupedSelected && !allUngroupedSelected}
+              onchange={() => toggleSelectGroup(ungrouped.map(t => t.id))}
+              onclick={(e) => e.stopPropagation()}
+              class="shrink-0 w-3 h-3 rounded accent-primary"
+              title="Select all ungrouped tabs"
+            />
+            <button class="flex items-center gap-2 flex-1" onclick={() => toggleGroupCollapse(-1)}>
+              <svg class="w-3 h-3 text-text-muted transition-transform {ungroupedCollapsed ? '' : 'rotate-90'}" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+              <span class="text-xs font-medium text-text-muted">Ungrouped</span>
+              <span class="text-[10px] text-text-muted">({ungrouped.length})</span>
+            </button>
           </div>
-          <div class="p-1 grid gap-0.5">
-            {#each ungrouped as tab}
-              <TabCard {tab} selected={selectedTabs.has(tab.id)}
-                ontoggle={() => toggleSelect(tab.id)}
-                onclose={() => dashAction(async () => { await closeTabs([tab.id]); })} />
-            {/each}
-          </div>
+          {#if !ungroupedCollapsed}
+            <div class="p-1 grid gap-0.5">
+              {#each ungrouped as tab}
+                <TabCard {tab} selected={selectedTabs.has(tab.id)}
+                  ontoggle={() => toggleSelect(tab.id)}
+                  onclose={() => dashAction(async () => { await closeTabs([tab.id]); })} />
+              {/each}
+            </div>
+          {/if}
         </div>
       {/if}
     </div>

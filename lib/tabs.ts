@@ -1,4 +1,5 @@
 import { getDomain as tldtsDomain } from "tldts";
+import { getRules, getUseRules, matchDomainToRule } from "./rules.ts";
 
 export interface TabInfo {
   id: number;
@@ -158,6 +159,8 @@ function compareTabs(
 export async function groupTabsByDomain(
   mode: "additive" | "rebuild" = "additive"
 ): Promise<void> {
+  const useRules = await getUseRules();
+  const rules = useRules ? await getRules() : [];
   const allTabs = await chrome.tabs.query({});
 
   if (mode === "rebuild") {
@@ -168,49 +171,84 @@ export async function groupTabsByDomain(
   }
 
   const freshTabs = await chrome.tabs.query({});
-  const ungrouped = freshTabs.filter(
-    (t) => !t.pinned && t.groupId === chrome.tabGroups.TAB_GROUP_ID_NONE
-  );
+  const existingGroups = await chrome.tabGroups.query({});
+  const groupTitleMap = new Map(existingGroups.map((g) => [g.id, g.title || ""]));
 
+  const ruleGroupMap = new Map<string, { rule: typeof rules[0]; tabs: chrome.tabs.Tab[] }>();
   const domainMap = new Map<string, chrome.tabs.Tab[]>();
-  for (const tab of ungrouped) {
-    const domain = getDomain(tab.url || "");
-    if (!domain) continue;
-    if (!domainMap.has(domain)) domainMap.set(domain, []);
-    domainMap.get(domain)!.push(tab);
+
+  const candidates = freshTabs.filter((t) => !t.pinned);
+  for (const tab of candidates) {
+    const hostname = getFullHostname(tab.url || "");
+    if (!hostname) continue;
+
+    const rule = matchDomainToRule(hostname, rules);
+    if (rule) {
+      const currentGroupTitle = groupTitleMap.get(tab.groupId) || "";
+      if (tab.groupId !== -1 && currentGroupTitle === rule.name) continue;
+      if (tab.groupId !== -1) {
+        await chrome.tabs.ungroup(tab.id!);
+      }
+      if (!ruleGroupMap.has(rule.id)) ruleGroupMap.set(rule.id, { rule, tabs: [] });
+      ruleGroupMap.get(rule.id)!.tabs.push(tab);
+    } else if (tab.groupId === -1) {
+      const domain = getDomain(tab.url || "");
+      if (!domain) continue;
+      if (!domainMap.has(domain)) domainMap.set(domain, []);
+      domainMap.get(domain)!.push(tab);
+    }
   }
 
   if (mode === "additive") {
-    const existingGroups = await chrome.tabGroups.query({});
-    for (const group of existingGroups) {
-      const groupTabs = freshTabs.filter((t) => t.groupId === group.id);
-      if (groupTabs.length === 0) continue;
-      const groupDomain = group.title || "";
-      const matching = domainMap.get(groupDomain);
+    const currentGroups = await chrome.tabGroups.query({});
+    for (const group of currentGroups) {
+      if (!group.title) continue;
+
+      const ruleEntry = [...ruleGroupMap.entries()].find(([, e]) => e.rule.name === group.title);
+      if (ruleEntry) {
+        const [ruleId, entry] = ruleEntry;
+        for (const tab of entry.tabs) {
+          if (tab.windowId !== group.windowId) {
+            await chrome.tabs.move(tab.id!, { windowId: group.windowId, index: -1 });
+          }
+        }
+        await chrome.tabs.group({ tabIds: entry.tabs.map((t) => t.id!), groupId: group.id });
+        ruleGroupMap.delete(ruleId);
+        continue;
+      }
+
+      const matching = domainMap.get(group.title);
       if (matching && matching.length > 0) {
         for (const tab of matching) {
           if (tab.windowId !== group.windowId) {
             await chrome.tabs.move(tab.id!, { windowId: group.windowId, index: -1 });
           }
         }
-        await chrome.tabs.group({
-          tabIds: matching.map((t) => t.id!),
-          groupId: group.id,
-        });
-        domainMap.delete(groupDomain);
+        await chrome.tabs.group({ tabIds: matching.map((t) => t.id!), groupId: group.id });
+        domainMap.delete(group.title);
       }
     }
   }
 
-  for (const [domain, domainTabs] of domainMap) {
-    if (domainTabs.length < 2) continue;
-
-    const targetWindowId = pickMajorityWindow(domainTabs);
-    const needsMove = domainTabs.filter((t) => t.windowId !== targetWindowId);
-    for (const tab of needsMove) {
+  for (const [, entry] of ruleGroupMap) {
+    if (entry.tabs.length < 1) continue;
+    const targetWindowId = pickMajorityWindow(entry.tabs);
+    for (const tab of entry.tabs.filter((t) => t.windowId !== targetWindowId)) {
       await chrome.tabs.move(tab.id!, { windowId: targetWindowId, index: -1 });
     }
+    const groupId = await chrome.tabs.group({
+      tabIds: entry.tabs.map((t) => t.id!),
+      createProperties: { windowId: targetWindowId },
+    });
+    await chrome.tabGroups.update(groupId, { title: entry.rule.name, color: entry.rule.color });
+  }
 
+  for (const [domain, domainTabs] of domainMap) {
+    if (domainTabs.length < 2) continue;
+    const targetWindowId = pickMajorityWindow(domainTabs);
+    for (const tab of domainTabs.filter((t) => t.windowId !== targetWindowId)) {
+      await chrome.tabs.move(tab.id!, { windowId: targetWindowId, index: -1 });
+    }
     const groupId = await chrome.tabs.group({
       tabIds: domainTabs.map((t) => t.id!),
       createProperties: { windowId: targetWindowId },
@@ -330,6 +368,14 @@ function getDomain(url: string): string {
     return tldtsDomain(url, { allowPrivateDomains: false }) || new URL(url).hostname;
   } catch {
     return url;
+  }
+}
+
+function getFullHostname(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "";
   }
 }
 
