@@ -4,10 +4,10 @@
   import { search, tabsToSearchItems, searchBookmarks, searchHistory, parseCommand, SEARCH_MODES, type SearchResult, type SearchMode } from "../../lib/search.ts";
   import { getAutoGroup, setAutoGroup, getUseRules, setUseRules } from "../../lib/rules.ts";
   import { matchCommands, ALL_COMMANDS, CATEGORY_STYLES, type CommandDefinition, type CommandCategory } from "../../lib/commands.ts";
+  import { snapshotBeforeClose, snapshotBeforeGroup, executeUndo, peekUndo } from "../../lib/undo.ts";
   import SearchInput from "../../components/SearchInput.svelte";
   import ResultList from "../../components/ResultList.svelte";
   import CommandHints from "../../components/CommandHints.svelte";
-  import StatusBar from "../../components/StatusBar.svelte";
   import ActionButton from "../../components/ActionButton.svelte";
   import TabCard from "../../components/TabCard.svelte";
   import RulesEditor from "../../components/RulesEditor.svelte";
@@ -33,6 +33,15 @@
   let autoGroupEnabled = $state(false);
   let useRulesEnabled = $state(false);
   let inputFocused = $state(true);
+  let canUndo = $state(false);
+
+  async function handleUndo() {
+    const msg = await executeUndo();
+    statusMessage = msg;
+    canUndo = !!peekUndo();
+    await loadTabs();
+    setTimeout(() => { statusMessage = ""; }, 3000);
+  }
   let collapsedGroups = $state<Set<number>>(new Set());
 
   function setCollapsed(s: Set<number>) {
@@ -49,9 +58,16 @@
   let allTabs = $state<SearchResult[]>([]);
   let searchHaystack = $state<string[]>([]);
 
+  interface WindowData {
+    windowId: number;
+    isCurrent: boolean;
+    groups: Map<number, { title: string; color: string; tabs: TabInfo[] }>;
+    ungrouped: TabInfo[];
+    tabCount: number;
+  }
+
+  let windows = $state<WindowData[]>([]);
   let dashboardTabs = $state<TabInfo[]>([]);
-  let groups = $state<Map<number, { title: string; color: string; tabs: TabInfo[] }>>(new Map());
-  let ungrouped = $state<TabInfo[]>([]);
   let selectedTabs = $state<Set<number>>(new Set());
   let currentWindowId = $state(0);
 
@@ -80,23 +96,36 @@
 
     allTabs = tabsToSearchItems(tabs);
     searchHaystack = allTabs.map((t) => `${t.title} ${t.url}`);
+    dashboardTabs = tabs;
 
-    dashboardTabs = tabs.filter((t) => t.windowId === currentWindowId);
-    const groupMap = new Map<number, { title: string; color: string; tabs: TabInfo[] }>();
-    const ungroupedList: TabInfo[] = [];
-
-    for (const tab of dashboardTabs) {
+    const windowMap = new Map<number, WindowData>();
+    for (const tab of tabs) {
+      if (!windowMap.has(tab.windowId)) {
+        windowMap.set(tab.windowId, {
+          windowId: tab.windowId,
+          isCurrent: tab.windowId === currentWindowId,
+          groups: new Map(),
+          ungrouped: [],
+          tabCount: 0,
+        });
+      }
+      const w = windowMap.get(tab.windowId)!;
+      w.tabCount++;
       if (tab.groupId !== -1) {
-        if (!groupMap.has(tab.groupId)) {
-          groupMap.set(tab.groupId, { title: tab.groupTitle || "Unnamed", color: tab.groupColor || "grey", tabs: [] });
+        if (!w.groups.has(tab.groupId)) {
+          w.groups.set(tab.groupId, { title: tab.groupTitle || "Unnamed", color: tab.groupColor || "grey", tabs: [] });
         }
-        groupMap.get(tab.groupId)!.tabs.push(tab);
+        w.groups.get(tab.groupId)!.tabs.push(tab);
       } else {
-        ungroupedList.push(tab);
+        w.ungrouped.push(tab);
       }
     }
-    groups = groupMap;
-    ungrouped = ungroupedList;
+
+    windows = [...windowMap.values()].sort((a, b) => {
+      if (a.isCurrent) return -1;
+      if (b.isCurrent) return 1;
+      return b.tabCount - a.tabCount;
+    });
   }
 
   function updateResults() {
@@ -162,7 +191,13 @@
           break;
         }
         default:
-          await handleActionCommand(prefix, searchQuery);
+          if (ACTION_PREFIXES.has(prefix)) {
+            const indices = searchQuery ? search(searchHaystack, searchQuery, searchMode) : [];
+            results = indices.map((i) => allTabs[i]);
+          } else {
+            const indices = search(searchHaystack, `/${prefix} ${searchQuery}`, searchMode);
+            results = indices.map((i) => allTabs[i]);
+          }
       }
     } finally {
       loading = false;
@@ -170,42 +205,58 @@
     selectedIndex = 0;
   }
 
+  const ACTION_PREFIXES = new Set(["close", "group", "merge", "sort", "dedup", "mute", "unmute", "split", "discard", "reload"]);
+
   async function handleActionCommand(prefix: string, searchQuery: string) {
+    if (!ACTION_PREFIXES.has(prefix)) return;
+
     const matchingIndices = searchQuery ? search(searchHaystack, searchQuery, searchMode) : [];
     const matchingTabs = matchingIndices.map((i) => allTabs[i]).filter((t) => t.tabId);
     const tabIds = matchingTabs.map((t) => t.tabId!);
+    let acted = false;
 
     switch (prefix) {
       case "close":
-        if (tabIds.length > 0) { await closeTabs(tabIds); statusMessage = `Closed ${tabIds.length} tab(s)`; await loadTabs(); }
+        if (tabIds.length > 0) { await snapshotBeforeClose(tabIds); await closeTabs(tabIds); statusMessage = `Closed ${tabIds.length} tab(s)`; await loadTabs(); acted = true; }
         break;
       case "group":
         if (tabIds.length > 0) {
+          await snapshotBeforeGroup();
           const gid = await chrome.tabs.group({ tabIds });
           await chrome.tabGroups.update(gid, { title: searchQuery || "Grouped" });
-          statusMessage = `Grouped ${tabIds.length} tab(s)`; await loadTabs();
+          statusMessage = `Grouped ${tabIds.length} tab(s)`; await loadTabs(); acted = true;
         }
         break;
       case "merge":
-        await mergeAllWindows(); statusMessage = "Merged all windows"; await loadTabs(); break;
+        await snapshotBeforeGroup(); await mergeAllWindows(); statusMessage = "Merged all windows"; await loadTabs(); acted = true; break;
       case "sort":
-        await sortTabsInWindow(currentWindowId); statusMessage = "Sorted tabs by domain"; await loadTabs(); break;
+        await snapshotBeforeGroup(); await sortTabsInWindow(currentWindowId); statusMessage = "Sorted tabs by domain"; await loadTabs(); acted = true; break;
       case "dedup": {
+        await snapshotBeforeGroup();
         const count = await removeDuplicates();
-        statusMessage = count > 0 ? `Removed ${count} duplicate(s)` : "No duplicates found"; await loadTabs(); break;
+        statusMessage = count > 0 ? `Removed ${count} duplicate(s)` : "No duplicates found"; await loadTabs(); acted = true; break;
       }
       case "mute":
-        for (const id of tabIds) await muteTab(id, true); statusMessage = `Muted ${tabIds.length} tab(s)`; break;
+        if (tabIds.length > 0) { for (const id of tabIds) await muteTab(id, true); statusMessage = `Muted ${tabIds.length} tab(s)`; acted = true; }
+        break;
       case "unmute":
-        for (const id of tabIds) await muteTab(id, false); statusMessage = `Unmuted ${tabIds.length} tab(s)`; break;
+        if (tabIds.length > 0) { for (const id of tabIds) await muteTab(id, false); statusMessage = `Unmuted ${tabIds.length} tab(s)`; acted = true; }
+        break;
       case "split":
-        if (tabIds.length > 0) { await splitTabToWindow(tabIds[0]); statusMessage = "Split tab to new window"; } break;
+        if (tabIds.length > 0) { await splitTabToWindow(tabIds[0]); statusMessage = "Split tab to new window"; acted = true; }
+        break;
       case "discard":
-        if (tabIds.length > 0) { await discardTabs(tabIds); statusMessage = `Discarded ${tabIds.length} tab(s)`; } break;
+        if (tabIds.length > 0) { await discardTabs(tabIds); statusMessage = `Discarded ${tabIds.length} tab(s)`; acted = true; }
+        break;
       case "reload":
-        for (const id of tabIds) chrome.tabs.reload(id); statusMessage = `Reloaded ${tabIds.length} tab(s)`; break;
+        if (tabIds.length > 0) { for (const id of tabIds) chrome.tabs.reload(id); statusMessage = `Reloaded ${tabIds.length} tab(s)`; acted = true; }
+        break;
     }
-    query = "";
+    if (acted) {
+      query = "";
+      canUndo = !!peekUndo();
+      await loadTabs();
+    }
   }
 
   async function handleSelect(item: SearchResult) {
@@ -213,9 +264,11 @@
     else if (item.url) { await chrome.tabs.create({ url: item.url }); window.close(); }
   }
 
-  function handleClose(item: SearchResult) {
+  async function handleClose(item: SearchResult) {
     if (item.tabId) {
-      closeTabs([item.tabId]);
+      await snapshotBeforeClose([item.tabId]);
+      await closeTabs([item.tabId]);
+      canUndo = true;
       results = results.filter((r) => r.id !== item.id);
       allTabs = allTabs.filter((t) => t.id !== item.id);
       searchHaystack = allTabs.map((t) => `${t.title} ${t.url}`);
@@ -250,6 +303,7 @@
   async function dashAction(fn: () => Promise<string | void>) {
     const msg = await fn();
     if (msg) statusMessage = msg;
+    canUndo = !!peekUndo();
     await loadTabs();
     selectedTabs = new Set();
     setTimeout(() => { statusMessage = ""; }, 3000);
@@ -289,11 +343,20 @@
           selectedIndex = Math.max(selectedIndex - 1, 0);
         } else if (e.key === "Enter") {
           e.preventDefault();
-          if (paletteMode === "commands" && commandHints[selectedIndex]) handleCommandSelect(commandHints[selectedIndex]);
-          else if (results[selectedIndex]) handleSelect(results[selectedIndex]);
+          const { prefix, query: searchQuery } = parseCommand(query);
+          if (prefix && ACTION_PREFIXES.has(prefix)) {
+            handleActionCommand(prefix, searchQuery);
+          } else if (paletteMode === "commands" && commandHints[selectedIndex]) {
+            handleCommandSelect(commandHints[selectedIndex]);
+          } else if (results[selectedIndex]) {
+            handleSelect(results[selectedIndex]);
+          }
         } else if (e.key === "Delete" && e.ctrlKey && results[selectedIndex]) {
           e.preventDefault();
           handleClose(results[selectedIndex]);
+        } else if (e.key === "z" && (e.ctrlKey || e.metaKey) && canUndo) {
+          e.preventDefault();
+          handleUndo();
         } else if (e.key === "Escape" && query) {
           e.preventDefault();
           query = "";
@@ -377,16 +440,16 @@
     <div class="flex-1 overflow-y-auto min-h-0">
       <!-- Action buttons -->
       <div class="grid grid-cols-4 gap-1.5 px-3 pb-2">
-        <ActionButton label="Sort All" icon="↕️" tooltip="Sort tabs by domain. Groups stay left sorted by name, ungrouped tabs go right." onclick={() => dashAction(async () => { await sortTabsInWindow(currentWindowId); return "Sorted"; })} />
-        <ActionButton label="Group+" icon="📁" tooltip="Group ungrouped tabs by domain. Keeps existing groups, adds new ones. Respects rules if enabled." onclick={() => dashAction(async () => { await groupTabsByDomain("additive"); return "Grouped (kept existing)"; })} />
-        <ActionButton label="Regroup" icon="🔀" tooltip="Ungroup everything, then regroup all tabs from scratch by domain. Respects rules if enabled." onclick={() => dashAction(async () => { await groupTabsByDomain("rebuild"); return "Regrouped from scratch"; })} />
-        <ActionButton label="Dedup" icon="🔄" tooltip="Find and close duplicate tabs across all windows. Keeps the most recently accessed copy." onclick={() => dashAction(async () => { const n = await removeDuplicates(); return n > 0 ? `${n} removed` : "No dupes"; })} />
-        <ActionButton label="Ungroup" icon="📤" tooltip="Remove all tab groups across all windows. Tabs stay in place." onclick={() => dashAction(async () => { await ungroupAll(); return "Ungrouped all"; })} />
-        <ActionButton label="Merge" icon="🔗" tooltip="Move all tabs from other windows into the current window." onclick={() => dashAction(async () => { await mergeAllWindows(); return "Merged"; })} />
+        <ActionButton label="Sort All" icon="↕️" tooltip="Sort tabs by domain. Groups left, ungrouped right." onclick={() => dashAction(async () => { await snapshotBeforeGroup(); await sortTabsInWindow(currentWindowId); return "Sorted"; })} />
+        <ActionButton label="Group+" icon="📁" tooltip="Group ungrouped tabs by domain. Keeps existing groups." onclick={() => dashAction(async () => { await snapshotBeforeGroup(); await groupTabsByDomain("additive"); return "Grouped"; })} />
+        <ActionButton label="Regroup" icon="🔀" tooltip="Ungroup everything, then regroup all from scratch." onclick={() => dashAction(async () => { await snapshotBeforeGroup(); await groupTabsByDomain("rebuild"); return "Regrouped"; })} />
+        <ActionButton label="Dedup" icon="🔄" tooltip="Close duplicate tabs. Keeps most recently accessed." onclick={() => dashAction(async () => { await snapshotBeforeGroup(); const n = await removeDuplicates(); return n > 0 ? `${n} removed` : "No dupes"; })} />
+        <ActionButton label="Ungroup" icon="📤" tooltip="Remove all tab groups. Tabs stay in place." onclick={() => dashAction(async () => { await snapshotBeforeGroup(); await ungroupAll(); return "Ungrouped all"; })} />
+        <ActionButton label="Merge" icon="🔗" tooltip="Move all tabs from other windows here." onclick={() => dashAction(async () => { await snapshotBeforeGroup(); await mergeAllWindows(); return "Merged"; })} />
         <ActionButton label="Close Sel." icon="✕" variant="danger" disabled={selectedTabs.size === 0}
-          tooltip="Close all selected tabs." onclick={() => dashAction(async () => { await closeTabs([...selectedTabs]); return `Closed ${selectedTabs.size}`; })} />
+          tooltip="Close all selected tabs." onclick={() => dashAction(async () => { await snapshotBeforeClose([...selectedTabs]); await closeTabs([...selectedTabs]); return `Closed ${selectedTabs.size}`; })} />
         <ActionButton label="Discard Sel." icon="💤" disabled={selectedTabs.size === 0}
-          tooltip="Suspend selected tabs to free memory. They reload when clicked." onclick={() => dashAction(async () => { await discardTabs([...selectedTabs]); return `Discarded ${selectedTabs.size}`; })} />
+          tooltip="Suspend selected tabs to free memory." onclick={() => dashAction(async () => { await discardTabs([...selectedTabs]); return `Discarded ${selectedTabs.size}`; })} />
       </div>
 
       <!-- Toggles -->
@@ -420,94 +483,119 @@
         {/if}
         <div class="flex-1"></div>
         <button
-          onmousedown={(e) => { e.preventDefault(); setCollapsed(new Set([...groups.keys(), -1])); }}
+          onmousedown={(e) => { e.preventDefault(); const all = new Set<number>(); windows.forEach(w => { w.groups.forEach((_, k) => all.add(k)); all.add(-w.windowId); }); setCollapsed(all); }}
           class="text-text-muted hover:text-text transition-colors">Fold</button>
         <button
           onmousedown={(e) => { e.preventDefault(); setCollapsed(new Set()); }}
           class="text-text-muted hover:text-text transition-colors">Unfold</button>
       </div>
 
-      <!-- Tab groups -->
-      {#each [...groups.entries()] as [groupId, group]}
-        {@const collapsed = collapsedGroups.has(groupId)}
-        {@const allSelected = group.tabs.every((t) => selectedTabs.has(t.id))}
-        {@const someSelected = group.tabs.some((t) => selectedTabs.has(t.id))}
-        <div class="mx-3 mb-2 border rounded-lg overflow-hidden {groupColors[group.color] || 'border-border'} {groupBg[group.color] || 'bg-surface-hover'}">
-          <div
-            class="w-full flex items-center gap-2 px-2.5 py-1.5 text-left transition-colors hover:brightness-110 cursor-pointer
-              {collapsed ? '' : 'border-b'} {groupColors[group.color] || 'border-border'}"
-          >
-            <input
-              type="checkbox"
-              checked={allSelected}
-              indeterminate={someSelected && !allSelected}
-              onchange={() => { toggleSelectGroup(group.tabs.map(t => t.id)); }}
-              onclick={(e) => e.stopPropagation()}
-              class="shrink-0 w-3 h-3 rounded accent-primary"
-              title="Select all tabs in this group"
-            />
-            <button class="flex items-center gap-2 flex-1 min-w-0" onclick={() => toggleGroupCollapse(groupId)}>
-              <svg class="w-3 h-3 text-text-muted transition-transform shrink-0 {collapsed ? '' : 'rotate-90'}" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
-              <span class="w-2 h-2 rounded-full shrink-0 {dotColors[group.color] || 'bg-border'}"></span>
-              <span class="text-xs font-medium text-text truncate">{group.title}</span>
-              <span class="text-[10px] text-text-muted shrink-0">({group.tabs.length})</span>
-            </button>
-            <span class="text-[10px] text-text-muted hover:text-text transition-colors shrink-0 cursor-pointer"
-              onclick={(e) => { e.stopPropagation(); dashAction(async () => { await sortTabsInGroup(groupId); return `Sorted "${group.title}"`; }); }}
-              role="button" tabindex="0" onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); } }}>
-              Sort
+      {#each windows as w, wi}
+        {@const winCollapseKey = -(w.windowId + 100000)}
+        {@const winCollapsed = collapsedGroups.has(winCollapseKey)}
+        {@const winTabs = [...[...w.groups.values()].flatMap(g => g.tabs), ...w.ungrouped]}
+        {@const winAllSelected = winTabs.length > 0 && winTabs.every(t => selectedTabs.has(t.id))}
+        {@const winSomeSelected = winTabs.some(t => selectedTabs.has(t.id))}
+        {#if wi > 0}
+          <div class="mx-3 my-2 border-t border-border"></div>
+        {/if}
+        <div class="px-3 pb-1 flex items-center gap-2">
+          <input type="checkbox" checked={winAllSelected} indeterminate={winSomeSelected && !winAllSelected}
+            onchange={() => toggleSelectGroup(winTabs.map(t => t.id))}
+            class="shrink-0 w-3 h-3 rounded accent-primary" title="Select all tabs in this window" />
+          <button class="flex items-center gap-2 flex-1" onclick={() => toggleGroupCollapse(winCollapseKey)}>
+            <svg class="w-3 h-3 text-text-muted transition-transform shrink-0 {winCollapsed ? '' : 'rotate-90'}" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+            <span class="text-[10px] font-semibold uppercase tracking-wider {w.isCurrent ? 'text-primary' : 'text-text-muted'}">
+              {w.isCurrent ? "Current Window" : `Window ${wi + 1}`}
             </span>
-          </div>
-          {#if !collapsed}
-            <div class="p-1 grid gap-0.5">
-              {#each group.tabs as tab}
-                <TabCard {tab} selected={selectedTabs.has(tab.id)}
-                  ontoggle={() => toggleSelect(tab.id)}
-                  onclose={() => dashAction(async () => { await closeTabs([tab.id]); })} />
-              {/each}
-            </div>
-          {/if}
+            <span class="text-[10px] text-text-muted">({w.tabCount})</span>
+          </button>
+          <div class="flex-1 h-px bg-border/40"></div>
         </div>
-      {/each}
 
-      <!-- Ungrouped -->
-      {#if ungrouped.length > 0}
-        {@const ungroupedCollapsed = collapsedGroups.has(-1)}
-        {@const allUngroupedSelected = ungrouped.every((t) => selectedTabs.has(t.id))}
-        {@const someUngroupedSelected = ungrouped.some((t) => selectedTabs.has(t.id))}
-        <div class="mx-3 mb-2 border border-border rounded-lg overflow-hidden">
-          <div
-            class="w-full flex items-center gap-2 px-2.5 py-1.5 text-left transition-colors hover:bg-surface-hover cursor-pointer
-              {ungroupedCollapsed ? '' : 'border-b border-border'}"
-          >
-            <input
-              type="checkbox"
-              checked={allUngroupedSelected}
-              indeterminate={someUngroupedSelected && !allUngroupedSelected}
-              onchange={() => toggleSelectGroup(ungrouped.map(t => t.id))}
-              onclick={(e) => e.stopPropagation()}
-              class="shrink-0 w-3 h-3 rounded accent-primary"
-              title="Select all ungrouped tabs"
-            />
-            <button class="flex items-center gap-2 flex-1" onclick={() => toggleGroupCollapse(-1)}>
-              <svg class="w-3 h-3 text-text-muted transition-transform {ungroupedCollapsed ? '' : 'rotate-90'}" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
-              <span class="text-xs font-medium text-text-muted">Ungrouped</span>
-              <span class="text-[10px] text-text-muted">({ungrouped.length})</span>
-            </button>
-          </div>
-          {#if !ungroupedCollapsed}
-            <div class="p-1 grid gap-0.5">
-              {#each ungrouped as tab}
-                <TabCard {tab} selected={selectedTabs.has(tab.id)}
-                  ontoggle={() => toggleSelect(tab.id)}
-                  onclose={() => dashAction(async () => { await closeTabs([tab.id]); })} />
-              {/each}
+        {#if !winCollapsed}
+        {#each [...w.groups.entries()] as [groupId, group]}
+          {@const collapsed = collapsedGroups.has(groupId)}
+          {@const allSelected = group.tabs.every((t) => selectedTabs.has(t.id))}
+          {@const someSelected = group.tabs.some((t) => selectedTabs.has(t.id))}
+          <div class="mx-3 mb-2 border rounded-lg overflow-hidden {groupColors[group.color] || 'border-border'} {groupBg[group.color] || 'bg-surface-hover'}">
+            <div class="w-full flex items-center gap-2 px-2.5 py-1.5 text-left transition-colors hover:brightness-110 cursor-pointer
+              {collapsed ? '' : 'border-b'} {groupColors[group.color] || 'border-border'}">
+              <input type="checkbox" checked={allSelected} indeterminate={someSelected && !allSelected}
+                onchange={() => toggleSelectGroup(group.tabs.map(t => t.id))} onclick={(e) => e.stopPropagation()}
+                class="shrink-0 w-3 h-3 rounded accent-primary" title="Select all tabs in this group" />
+              <button class="flex items-center gap-2 flex-1 min-w-0" onclick={() => toggleGroupCollapse(groupId)}>
+                <svg class="w-3 h-3 text-text-muted transition-transform shrink-0 {collapsed ? '' : 'rotate-90'}" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+                <span class="w-2 h-2 rounded-full shrink-0 {dotColors[group.color] || 'bg-border'}"></span>
+                <span class="text-xs font-medium text-text truncate">{group.title}</span>
+                <span class="text-[10px] text-text-muted shrink-0">({group.tabs.length})</span>
+              </button>
+              <span class="text-[10px] text-text-muted hover:text-text transition-colors shrink-0 cursor-pointer"
+                onclick={(e) => { e.stopPropagation(); dashAction(async () => { await sortTabsInGroup(groupId); return `Sorted "${group.title}"`; }); }}
+                role="button" tabindex="0" onkeydown={(e) => { if (e.key === 'Enter') e.stopPropagation(); }}>Sort</span>
             </div>
-          {/if}
-        </div>
-      {/if}
+            {#if !collapsed}
+              <div class="p-1 grid gap-0.5">
+                {#each group.tabs as tab}
+                  <TabCard {tab} selected={selectedTabs.has(tab.id)}
+                    ontoggle={() => toggleSelect(tab.id)}
+                    onclose={() => dashAction(async () => { await closeTabs([tab.id]); })} />
+                {/each}
+              </div>
+            {/if}
+          </div>
+        {/each}
+
+        {#if w.ungrouped.length > 0}
+          {@const ungroupedKey = -w.windowId}
+          {@const ungroupedCollapsed = collapsedGroups.has(ungroupedKey)}
+          {@const allUngroupedSelected = w.ungrouped.every((t) => selectedTabs.has(t.id))}
+          {@const someUngroupedSelected = w.ungrouped.some((t) => selectedTabs.has(t.id))}
+          <div class="mx-3 mb-2 border border-border rounded-lg overflow-hidden">
+            <div class="w-full flex items-center gap-2 px-2.5 py-1.5 text-left transition-colors hover:bg-surface-hover cursor-pointer
+              {ungroupedCollapsed ? '' : 'border-b border-border'}">
+              <input type="checkbox" checked={allUngroupedSelected} indeterminate={someUngroupedSelected && !allUngroupedSelected}
+                onchange={() => toggleSelectGroup(w.ungrouped.map(t => t.id))} onclick={(e) => e.stopPropagation()}
+                class="shrink-0 w-3 h-3 rounded accent-primary" title="Select all ungrouped tabs" />
+              <button class="flex items-center gap-2 flex-1" onclick={() => toggleGroupCollapse(ungroupedKey)}>
+                <svg class="w-3 h-3 text-text-muted transition-transform {ungroupedCollapsed ? '' : 'rotate-90'}" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+                <span class="text-xs font-medium text-text-muted">Ungrouped</span>
+                <span class="text-[10px] text-text-muted">({w.ungrouped.length})</span>
+              </button>
+            </div>
+            {#if !ungroupedCollapsed}
+              <div class="p-1 grid gap-0.5">
+                {#each w.ungrouped as tab}
+                  <TabCard {tab} selected={selectedTabs.has(tab.id)}
+                    ontoggle={() => toggleSelect(tab.id)}
+                    onclose={() => dashAction(async () => { await closeTabs([tab.id]); })} />
+                {/each}
+              </div>
+            {/if}
+          </div>
+        {/if}
+        {/if}
+      {/each}
     </div>
   {/if}
 
-  <StatusBar tabCount={allTabs.length} message={statusMessage} />
+  <div class="flex items-center justify-between px-3 py-1.5 border-t border-border text-[11px] text-text-muted">
+    <span>{allTabs.length} tab{allTabs.length !== 1 ? "s" : ""}</span>
+    {#if statusMessage}
+      <span class="text-accent-green">{statusMessage}</span>
+    {/if}
+    {#if canUndo}
+      <button
+        class="px-1.5 py-0.5 rounded bg-accent-orange/10 text-accent-orange hover:bg-accent-orange/20 text-[10px] font-medium transition-colors"
+        onclick={handleUndo}
+        title="Undo last action (Ctrl+Z)"
+      >Undo</button>
+    {:else if !statusMessage}
+      <span>
+        <kbd class="px-1 py-0.5 rounded bg-surface-hover text-[10px]">↑↓</kbd> navigate
+        <kbd class="px-1 py-0.5 rounded bg-surface-hover text-[10px] ml-1">↵</kbd> open
+        <kbd class="px-1 py-0.5 rounded bg-surface-hover text-[10px] ml-1">Ctrl+Z</kbd> undo
+      </span>
+    {/if}
+  </div>
 </div>
