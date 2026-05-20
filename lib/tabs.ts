@@ -1,0 +1,233 @@
+export interface TabInfo {
+  id: number;
+  windowId: number;
+  title: string;
+  url: string;
+  favIconUrl?: string;
+  pinned: boolean;
+  active: boolean;
+  groupId: number;
+  groupTitle?: string;
+  groupColor?: string;
+  audible?: boolean;
+  mutedInfo?: chrome.tabs.MutedInfo;
+  discarded?: boolean;
+  lastAccessed?: number;
+}
+
+export interface TabGroup {
+  id: number;
+  title?: string;
+  color: chrome.tabGroups.ColorEnum;
+  collapsed: boolean;
+  windowId: number;
+  tabs: TabInfo[];
+}
+
+const GROUP_COLORS: chrome.tabGroups.ColorEnum[] = [
+  "blue",
+  "cyan",
+  "green",
+  "yellow",
+  "orange",
+  "pink",
+  "purple",
+  "red",
+  "grey",
+];
+
+export async function getAllTabs(): Promise<TabInfo[]> {
+  const tabs = await chrome.tabs.query({});
+  const groups = await getAllGroups();
+  const groupMap = new Map(groups.map((g) => [g.id, g]));
+
+  return tabs.map((tab) => {
+    const group = groupMap.get(tab.groupId);
+    return {
+      id: tab.id!,
+      windowId: tab.windowId,
+      title: tab.title || "",
+      url: tab.url || "",
+      favIconUrl: tab.favIconUrl,
+      pinned: tab.pinned,
+      active: tab.active,
+      groupId: tab.groupId,
+      groupTitle: group?.title,
+      groupColor: group?.color,
+      audible: tab.audible,
+      mutedInfo: tab.mutedInfo,
+      discarded: tab.discarded,
+      lastAccessed: tab.lastAccessed,
+    };
+  });
+}
+
+export async function getCurrentWindowTabs(): Promise<TabInfo[]> {
+  const all = await getAllTabs();
+  const currentWindow = await chrome.windows.getCurrent();
+  return all.filter((t) => t.windowId === currentWindow.id);
+}
+
+export async function getAllGroups(): Promise<chrome.tabGroups.TabGroup[]> {
+  return chrome.tabGroups.query({});
+}
+
+export async function switchToTab(tabId: number): Promise<void> {
+  const tab = await chrome.tabs.update(tabId, { active: true });
+  await chrome.windows.update(tab.windowId!, { focused: true });
+}
+
+export async function closeTabs(tabIds: number[]): Promise<void> {
+  await chrome.tabs.remove(tabIds);
+}
+
+export async function sortTabsInWindow(
+  windowId: number,
+  by: "title" | "url" | "domain" = "domain"
+): Promise<void> {
+  const tabs = await chrome.tabs.query({ windowId });
+  const unpinned = tabs.filter((t) => !t.pinned);
+
+  unpinned.sort((a, b) => {
+    switch (by) {
+      case "title":
+        return (a.title || "").localeCompare(b.title || "");
+      case "url":
+        return (a.url || "").localeCompare(b.url || "");
+      case "domain": {
+        const domA = getDomain(a.url || "");
+        const domB = getDomain(b.url || "");
+        return domA.localeCompare(domB) || (a.title || "").localeCompare(b.title || "");
+      }
+    }
+  });
+
+  for (let i = 0; i < unpinned.length; i++) {
+    await chrome.tabs.move(unpinned[i].id!, { index: -1 });
+  }
+}
+
+export async function sortTabsInGroup(groupId: number): Promise<void> {
+  const tabs = await chrome.tabs.query({ groupId });
+  tabs.sort((a, b) => (a.title || "").localeCompare(b.title || ""));
+
+  for (const tab of tabs) {
+    await chrome.tabs.move(tab.id!, { index: -1 });
+  }
+  await chrome.tabs.group({ tabIds: tabs.map((t) => t.id!), groupId });
+}
+
+export async function groupTabsByDomain(windowId: number): Promise<void> {
+  const tabs = await chrome.tabs.query({ windowId });
+  const unpinned = tabs.filter((t) => !t.pinned && t.groupId === chrome.tabGroups.TAB_GROUP_ID_NONE);
+  const domainMap = new Map<string, chrome.tabs.Tab[]>();
+
+  for (const tab of unpinned) {
+    const domain = getDomain(tab.url || "");
+    if (!domainMap.has(domain)) domainMap.set(domain, []);
+    domainMap.get(domain)!.push(tab);
+  }
+
+  for (const [domain, domainTabs] of domainMap) {
+    if (domainTabs.length < 2) continue;
+    const groupId = await chrome.tabs.group({
+      tabIds: domainTabs.map((t) => t.id!),
+    });
+    await chrome.tabGroups.update(groupId, {
+      title: domain,
+      color: GROUP_COLORS[Math.abs(hashCode(domain)) % GROUP_COLORS.length],
+    });
+  }
+}
+
+export async function findDuplicates(): Promise<Map<string, TabInfo[]>> {
+  const tabs = await getAllTabs();
+  const urlMap = new Map<string, TabInfo[]>();
+
+  for (const tab of tabs) {
+    const normalized = normalizeUrl(tab.url);
+    if (!normalized) continue;
+    if (!urlMap.has(normalized)) urlMap.set(normalized, []);
+    urlMap.get(normalized)!.push(tab);
+  }
+
+  const duplicates = new Map<string, TabInfo[]>();
+  for (const [url, group] of urlMap) {
+    if (group.length > 1) duplicates.set(url, group);
+  }
+  return duplicates;
+}
+
+export async function removeDuplicates(): Promise<number> {
+  const duplicates = await findDuplicates();
+  const toClose: number[] = [];
+
+  for (const [, tabs] of duplicates) {
+    const sorted = tabs.sort(
+      (a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0)
+    );
+    for (let i = 1; i < sorted.length; i++) {
+      toClose.push(sorted[i].id);
+    }
+  }
+
+  if (toClose.length > 0) {
+    await chrome.tabs.remove(toClose);
+  }
+  return toClose.length;
+}
+
+export async function mergeAllWindows(): Promise<void> {
+  const currentWindow = await chrome.windows.getCurrent();
+  const allTabs = await chrome.tabs.query({});
+  const otherTabs = allTabs.filter(
+    (t) => t.windowId !== currentWindow.id && !t.pinned
+  );
+
+  for (const tab of otherTabs) {
+    await chrome.tabs.move(tab.id!, {
+      windowId: currentWindow.id!,
+      index: -1,
+    });
+  }
+}
+
+export async function splitTabToWindow(tabId: number): Promise<void> {
+  await chrome.windows.create({ tabId });
+}
+
+export async function discardTabs(tabIds: number[]): Promise<void> {
+  for (const id of tabIds) {
+    await chrome.tabs.discard(id).catch(() => {});
+  }
+}
+
+export async function muteTab(tabId: number, muted: boolean): Promise<void> {
+  await chrome.tabs.update(tabId, { muted });
+}
+
+function getDomain(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
+}
+
+function normalizeUrl(url: string): string | null {
+  try {
+    const u = new URL(url);
+    if (u.protocol === "chrome:" || u.protocol === "chrome-extension:") return null;
+    return `${u.protocol}//${u.host}${u.pathname}`;
+  } catch {
+    return null;
+  }
+}
+
+function hashCode(str: string): number {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) - hash + str.charCodeAt(i)) | 0;
+  }
+  return hash;
+}
