@@ -14,12 +14,14 @@ export interface SearchResult {
   audible?: boolean;
 }
 
-export interface Command {
-  prefix: string;
-  name: string;
-  description: string;
-  execute: (query: string) => Promise<void>;
-}
+export type SearchMode = "fuzzy" | "exact" | "regex" | "prefix";
+
+export const SEARCH_MODES: { mode: SearchMode; label: string; key: string }[] = [
+  { mode: "fuzzy", label: "Fuzzy", key: "fzf" },
+  { mode: "exact", label: "Exact", key: "exact" },
+  { mode: "prefix", label: "Prefix", key: "pre" },
+  { mode: "regex", label: "Regex", key: "re" },
+];
 
 const fuzzy = new uFuzzy({
   intraMode: 1,
@@ -27,17 +29,63 @@ const fuzzy = new uFuzzy({
   interIns: 3,
 });
 
-export function fuzzySearch(
+export function search(
   haystack: string[],
   needle: string,
+  mode: SearchMode = "fuzzy",
   limit = 50
 ): number[] {
   if (!needle.trim()) return haystack.map((_, i) => i).slice(0, limit);
 
+  switch (mode) {
+    case "fuzzy":
+      return fuzzySearch(haystack, needle, limit);
+    case "exact":
+      return exactSearch(haystack, needle, limit);
+    case "prefix":
+      return prefixSearch(haystack, needle, limit);
+    case "regex":
+      return regexSearch(haystack, needle, limit);
+  }
+}
+
+function fuzzySearch(haystack: string[], needle: string, limit: number): number[] {
   const [idxs, info, order] = fuzzy.search(haystack, needle);
   if (!idxs || !order) return [];
-
   return order.slice(0, limit).map((i) => (info ? info.idx[i] : idxs[i]));
+}
+
+function exactSearch(haystack: string[], needle: string, limit: number): number[] {
+  const lower = needle.toLowerCase();
+  const results: number[] = [];
+  for (let i = 0; i < haystack.length && results.length < limit; i++) {
+    if (haystack[i].toLowerCase().includes(lower)) results.push(i);
+  }
+  return results;
+}
+
+function prefixSearch(haystack: string[], needle: string, limit: number): number[] {
+  const lower = needle.toLowerCase();
+  const results: number[] = [];
+  for (let i = 0; i < haystack.length && results.length < limit; i++) {
+    const words = haystack[i].toLowerCase().split(/[\s/.:_-]+/);
+    if (words.some((w) => w.startsWith(lower))) results.push(i);
+  }
+  return results;
+}
+
+function regexSearch(haystack: string[], needle: string, limit: number): number[] {
+  let re: RegExp;
+  try {
+    re = new RegExp(needle, "i");
+  } catch {
+    return [];
+  }
+  const results: number[] = [];
+  for (let i = 0; i < haystack.length && results.length < limit; i++) {
+    if (re.test(haystack[i])) results.push(i);
+  }
+  return results;
 }
 
 export function tabsToSearchItems(tabs: TabInfo[]): SearchResult[] {

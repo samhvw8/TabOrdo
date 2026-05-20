@@ -41,8 +41,13 @@
     }
   }
 
-  function scrollIntoView(el: HTMLElement | null) {
-    el?.scrollIntoView({ block: "nearest" });
+  function scrollIntoView(node: HTMLElement, active: boolean) {
+    if (active) node.scrollIntoView({ block: "nearest" });
+    return {
+      update(active: boolean) {
+        if (active) node.scrollIntoView({ block: "nearest" });
+      },
+    };
   }
 </script>
 
@@ -60,7 +65,7 @@
       <div
         role="button"
         tabindex="0"
-        use:scrollIntoView={i === selectedIndex ? undefined : null}
+        use:scrollIntoView={i === selectedIndex}
         class="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left transition-colors group cursor-pointer
           {i === selectedIndex ? 'bg-surface-active' : 'hover:bg-surface-hover'}"
         onclick={() => onselect(item)}

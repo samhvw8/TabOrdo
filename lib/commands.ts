@@ -1,29 +1,38 @@
+export type CommandCategory = "search" | "action" | "view";
+
 export interface CommandDefinition {
   prefix: string;
   label: string;
   description: string;
-  category: "search" | "action";
+  category: CommandCategory;
+  color: string;
 }
 
+export const CATEGORY_STYLES: Record<CommandCategory, { label: string; color: string; bg: string }> = {
+  search: { label: "Search", color: "text-accent-blue", bg: "bg-accent-blue/10" },
+  action: { label: "Actions", color: "text-accent-orange", bg: "bg-accent-orange/10" },
+  view: { label: "View", color: "text-accent-purple", bg: "bg-accent-purple/10" },
+};
+
 export const SEARCH_COMMANDS: CommandDefinition[] = [
-  { prefix: "b", label: "/b", description: "Search bookmarks", category: "search" },
-  { prefix: "h", label: "/h", description: "Search history", category: "search" },
-  { prefix: "w", label: "/w", description: "Search current window tabs", category: "search" },
-  { prefix: "p", label: "/p", description: "Search pinned tabs", category: "search" },
-  { prefix: "g", label: "/g", description: "Search tabs in current group", category: "search" },
+  { prefix: "b", label: "/b", description: "Search bookmarks", category: "search", color: "text-accent-blue" },
+  { prefix: "h", label: "/h", description: "Search history", category: "search", color: "text-accent-cyan" },
+  { prefix: "w", label: "/w", description: "Current window tabs", category: "search", color: "text-accent-blue" },
+  { prefix: "p", label: "/p", description: "Pinned tabs only", category: "search", color: "text-accent-yellow" },
+  { prefix: "g", label: "/g", description: "Current group tabs", category: "search", color: "text-accent-green" },
 ];
 
 export const ACTION_COMMANDS: CommandDefinition[] = [
-  { prefix: "close", label: "/close", description: "Close matching tabs", category: "action" },
-  { prefix: "group", label: "/group", description: "Group matching tabs", category: "action" },
-  { prefix: "merge", label: "/merge", description: "Merge all windows", category: "action" },
-  { prefix: "sort", label: "/sort", description: "Sort tabs by domain", category: "action" },
-  { prefix: "dedup", label: "/dedup", description: "Remove duplicate tabs", category: "action" },
-  { prefix: "mute", label: "/mute", description: "Mute matching tabs", category: "action" },
-  { prefix: "unmute", label: "/unmute", description: "Unmute matching tabs", category: "action" },
-  { prefix: "split", label: "/split", description: "Split tab to new window", category: "action" },
-  { prefix: "discard", label: "/discard", description: "Discard matching tabs", category: "action" },
-  { prefix: "reload", label: "/reload", description: "Reload matching tabs", category: "action" },
+  { prefix: "close", label: "/close", description: "Close matching tabs", category: "action", color: "text-accent-red" },
+  { prefix: "group", label: "/group", description: "Group matching tabs", category: "action", color: "text-accent-orange" },
+  { prefix: "merge", label: "/merge", description: "Merge all windows", category: "action", color: "text-accent-orange" },
+  { prefix: "sort", label: "/sort", description: "Sort tabs by domain", category: "action", color: "text-accent-orange" },
+  { prefix: "dedup", label: "/dedup", description: "Remove duplicate tabs", category: "action", color: "text-accent-orange" },
+  { prefix: "mute", label: "/mute", description: "Mute matching tabs", category: "action", color: "text-accent-purple" },
+  { prefix: "unmute", label: "/unmute", description: "Unmute matching tabs", category: "action", color: "text-accent-purple" },
+  { prefix: "split", label: "/split", description: "Split tab to new window", category: "action", color: "text-accent-cyan" },
+  { prefix: "discard", label: "/discard", description: "Discard matching tabs", category: "action", color: "text-accent-pink" },
+  { prefix: "reload", label: "/reload", description: "Reload matching tabs", category: "action", color: "text-accent-green" },
 ];
 
 export const ALL_COMMANDS = [...SEARCH_COMMANDS, ...ACTION_COMMANDS];

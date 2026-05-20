@@ -24,7 +24,7 @@
 </script>
 
 <div
-  class="flex items-center gap-2 px-2 py-1.5 rounded-md group transition-colors
+  class="flex items-center gap-2 px-2 py-1.5 rounded-md group transition-colors overflow-hidden
     {selected ? 'bg-primary/10 border border-primary/30' : 'hover:bg-surface-hover border border-transparent'}"
 >
   <input
@@ -51,7 +51,7 @@
     class="flex-1 min-w-0 text-left"
     onclick={() => switchToTab(tab.id)}
   >
-    <div class="flex items-center gap-1">
+    <div class="flex items-center gap-1 min-w-0">
       {#if tab.pinned}
         <span class="text-[10px]">📌</span>
       {/if}

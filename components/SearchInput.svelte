@@ -3,10 +3,12 @@
     value = $bindable(""),
     placeholder = "Search...",
     onkeydown,
+    oninput,
   }: {
     value: string;
     placeholder?: string;
     onkeydown?: (e: KeyboardEvent) => void;
+    oninput?: () => void;
   } = $props();
 
   let inputEl: HTMLInputElement;
@@ -36,6 +38,7 @@
     bind:value
     {placeholder}
     {onkeydown}
+    oninput={() => oninput?.()}
     type="text"
     class="w-full pl-8 pr-3 py-2 bg-surface-hover border border-border rounded-lg text-text placeholder:text-text-muted text-sm outline-none focus:border-primary transition-colors"
     spellcheck="false"
