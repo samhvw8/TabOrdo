@@ -1,3 +1,5 @@
+import { getFullHostname } from "./tabs.ts";
+
 export interface GroupRule {
   id: string;
   name: string;
@@ -96,10 +98,8 @@ export async function populateFromCurrentGroups(): Promise<number> {
     const groupTabs = allTabs.filter((t) => t.groupId === group.id);
     const domains = new Set<string>();
     for (const tab of groupTabs) {
-      try {
-        const hostname = new URL(tab.url || "").hostname.replace(/^www\./, "");
-        if (hostname) domains.add(hostname);
-      } catch {}
+      const hostname = getFullHostname(tab.url || "");
+      if (hostname) domains.add(hostname);
     }
 
     if (domains.size === 0) continue;
@@ -126,18 +126,19 @@ export function matchDomainToRule(
   return null;
 }
 
-/**
- * Pattern matching:
- *   "github.com"       — exact match or subdomain match (docs.github.com)
- *   "*.github.io"      — wildcard subdomain (user.github.io)
- *   "*google*"         — contains match (any domain containing "google")
- */
+const regexCache = new Map<string, RegExp>();
+
 function domainMatches(domain: string, pattern: string): boolean {
   if (pattern.includes("*")) {
-    const regex = pattern
-      .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-      .replace(/\*/g, ".*");
-    return new RegExp(`^${regex}$`, "i").test(domain);
+    let re = regexCache.get(pattern);
+    if (!re) {
+      const escaped = pattern
+        .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+        .replace(/\*/g, ".*");
+      re = new RegExp(`^${escaped}$`, "i");
+      regexCache.set(pattern, re);
+    }
+    return re.test(domain);
   }
   return domain === pattern || domain.endsWith("." + pattern);
 }

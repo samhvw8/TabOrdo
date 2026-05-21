@@ -1,4 +1,4 @@
-import { getAutoGroup, getUseRules, getRules, matchDomainToRule } from "../../lib/rules.ts";
+import { getConfig, matchDomainToRule } from "../../lib/rules.ts";
 import { getFullHostname } from "../../lib/tabs.ts";
 
 export default defineBackground(() => {
@@ -6,15 +6,13 @@ export default defineBackground(() => {
     if (changeInfo.status !== "complete" || !tab.url) return;
     if (tab.pinned || tab.groupId !== -1) return;
 
-    const enabled = await getAutoGroup();
-    const rulesOn = await getUseRules();
-    if (!enabled || !rulesOn) return;
+    const config = await getConfig();
+    if (!config.autoGroup || !config.useRules) return;
 
     const hostname = getFullHostname(tab.url);
     if (!hostname) return;
 
-    const rules = await getRules();
-    const rule = matchDomainToRule(hostname, rules);
+    const rule = matchDomainToRule(hostname, config.rules);
     if (!rule) return;
 
     const existingGroups = await chrome.tabGroups.query({ windowId: tab.windowId });

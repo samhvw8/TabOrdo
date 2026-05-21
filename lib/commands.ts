@@ -36,6 +36,7 @@ export const ACTION_COMMANDS: CommandDefinition[] = [
   { prefix: "mute", label: "/mute", description: "Mute matching tabs", category: "action", color: "text-accent-purple" },
   { prefix: "unmute", label: "/unmute", description: "Unmute matching tabs", category: "action", color: "text-accent-purple" },
   { prefix: "split", label: "/split", description: "Split tab to new window", category: "action", color: "text-accent-cyan" },
+  { prefix: "extract", label: "/extract", description: "Extract tab group to new window", category: "action", color: "text-accent-cyan" },
   { prefix: "discard", label: "/discard", description: "Discard matching tabs", category: "action", color: "text-accent-pink" },
   { prefix: "reload", label: "/reload", description: "Reload matching tabs", category: "action", color: "text-accent-green" },
 ];

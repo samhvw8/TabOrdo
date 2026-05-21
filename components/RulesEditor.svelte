@@ -138,6 +138,7 @@
 
   <!-- Rules list -->
   {#each rules as rule}
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
     <div class="mb-2 p-2 rounded-lg border transition-colors
       {mergeSource === rule.id ? 'border-primary bg-primary/5' :
        mergeSource ? 'border-accent-green/50 bg-accent-green/5 cursor-pointer' : 'border-border bg-surface-hover'}"

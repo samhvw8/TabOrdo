@@ -310,10 +310,10 @@ async function collapseAllExceptActive(): Promise<void> {
   const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   const allGroups = await chrome.tabGroups.query({});
 
-  for (const group of allGroups) {
+  await Promise.all(allGroups.map((group) => {
     const shouldExpand = activeTab && activeTab.groupId === group.id;
-    await chrome.tabGroups.update(group.id, { collapsed: !shouldExpand });
-  }
+    return chrome.tabGroups.update(group.id, { collapsed: !shouldExpand });
+  }));
 }
 
 export async function removeDuplicates(): Promise<number> {
@@ -352,6 +352,18 @@ export async function mergeAllWindows(): Promise<void> {
 
 export async function splitTabToWindow(tabId: number): Promise<void> {
   await chrome.windows.create({ tabId });
+}
+
+export async function extractGroupToWindow(groupId: number): Promise<number> {
+  const tabs = await chrome.tabs.query({ groupId });
+  if (tabs.length === 0) return 0;
+  const [first, ...rest] = tabs;
+  const newWindow = await chrome.windows.create({ tabId: first.id! });
+  if (rest.length > 0) {
+    await chrome.tabs.move(rest.map((t) => t.id!), { windowId: newWindow.id!, index: -1 });
+    await chrome.tabs.group({ tabIds: tabs.map((t) => t.id!), groupId });
+  }
+  return tabs.length;
 }
 
 export async function discardTabs(tabIds: number[]): Promise<void> {

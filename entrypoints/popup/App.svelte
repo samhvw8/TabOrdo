@@ -1,10 +1,10 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { getAllTabs, getCurrentWindowTabs, switchToTab, closeTabs, sortTabsInWindow, sortTabsInGroup, groupTabsByDomain, ungroupAll, removeDuplicates, mergeAllWindows, muteTab, splitTabToWindow, discardTabs, closeTabsToLeft, closeTabsToRight, closeTabsSameSite, closeOldTabs, type TabInfo } from "../../lib/tabs.ts";
+  import { getAllTabs, getCurrentWindowTabs, switchToTab, closeTabs, sortTabsInWindow, sortTabsInGroup, groupTabsByDomain, ungroupAll, removeDuplicates, mergeAllWindows, muteTab, splitTabToWindow, extractGroupToWindow, discardTabs, closeTabsToLeft, closeTabsToRight, closeTabsSameSite, closeOldTabs, type TabInfo } from "../../lib/tabs.ts";
   import { archiveTabs, getArchiveCount } from "../../lib/archive.ts";
-  import { search, tabsToSearchItems, searchBookmarks, searchHistory, parseCommand, stripDiacritics, SEARCH_MODES, type SearchResult, type SearchMode } from "../../lib/search.ts";
+  import { search, tabsToSearchItems, searchBookmarks, searchHistory, parseCommand, buildSearchHaystack, SEARCH_MODES, type SearchResult, type SearchMode } from "../../lib/search.ts";
   import { getAutoGroup, setAutoGroup, getUseRules, setUseRules } from "../../lib/rules.ts";
-  import { matchCommands, ALL_COMMANDS, CATEGORY_STYLES, type CommandDefinition, type CommandCategory } from "../../lib/commands.ts";
+  import { matchCommands, ALL_COMMANDS, ACTION_COMMANDS, CATEGORY_STYLES, type CommandDefinition, type CommandCategory } from "../../lib/commands.ts";
   import { snapshotBeforeClose, snapshotBeforeGroup, executeUndo, peekUndo } from "../../lib/undo.ts";
   import SearchInput from "../../components/SearchInput.svelte";
   import ResultList from "../../components/ResultList.svelte";
@@ -97,11 +97,7 @@
     currentWindowId = win.id!;
 
     allTabs = tabsToSearchItems(tabs);
-    searchHaystack = allTabs.map((t) => {
-      const original = `${t.title} ${t.url}`;
-      const stripped = stripDiacritics(original);
-      return original === stripped ? original : `${original} ${stripped}`;
-    });
+    searchHaystack = buildSearchHaystack(allTabs);
     dashboardTabs = tabs;
 
     const windowMap = new Map<number, WindowData>();
@@ -188,14 +184,14 @@
         case "w": {
           const windowTabs = await getCurrentWindowTabs();
           const items = tabsToSearchItems(windowTabs);
-          const hay = items.map((t) => `${t.title} ${t.url}`);
+          const hay = buildSearchHaystack(items);
           const indices = search(hay, searchQuery, searchMode);
           results = indices.map((i) => items[i]);
           break;
         }
         case "p": {
           const pinned = allTabs.filter((t) => t.pinned);
-          const hay = pinned.map((t) => `${t.title} ${t.url}`);
+          const hay = buildSearchHaystack(pinned);
           const indices = search(hay, searchQuery, searchMode);
           results = indices.map((i) => pinned[i]);
           break;
@@ -205,7 +201,7 @@
           const groupTabs = activeTab?.groupId && activeTab.groupId !== -1
             ? allTabs.filter((t) => t.groupTitle === allTabs.find((at) => at.tabId === activeTab.id)?.groupTitle)
             : allTabs.filter((t) => !t.groupTitle);
-          const hay = groupTabs.map((t) => `${t.title} ${t.url}`);
+          const hay = buildSearchHaystack(groupTabs);
           const indices = search(hay, searchQuery, searchMode);
           results = indices.map((i) => groupTabs[i]);
           break;
@@ -225,7 +221,7 @@
     selectedIndex = 0;
   }
 
-  const ACTION_PREFIXES = new Set(["close", "closeleft", "closeright", "closeold", "closesite", "archive", "group", "merge", "sort", "dedup", "mute", "unmute", "split", "discard", "reload"]);
+  const ACTION_PREFIXES = new Set(ACTION_COMMANDS.map((c) => c.prefix));
 
   async function handleActionCommand(prefix: string, searchQuery: string) {
     if (!ACTION_PREFIXES.has(prefix)) return;
@@ -237,7 +233,7 @@
 
     switch (prefix) {
       case "close":
-        if (tabIds.length > 0) { await snapshotBeforeClose(tabIds); await closeTabs(tabIds); statusMessage = `Closed ${tabIds.length} tab(s)`; await loadTabs(); acted = true; }
+        if (tabIds.length > 0) { await snapshotBeforeClose(tabIds); await closeTabs(tabIds); statusMessage = `Closed ${tabIds.length} tab(s)`; acted = true; }
         break;
       case "closeleft": {
         const n = await closeTabsToLeft();
@@ -266,10 +262,10 @@
       case "archive":
         if (tabIds.length > 0) {
           const tabData = matchingTabs.map((t) => ({ url: t.url, title: t.title, favIconUrl: t.favIconUrl, groupName: t.groupTitle }));
-          await archiveTabs(tabData);
+          const archived = await archiveTabs(tabData);
           await closeTabs(tabIds);
-          statusMessage = `Archived ${tabIds.length} tab(s)`;
-          await loadTabs(); acted = true;
+          statusMessage = `Archived ${archived} tab(s)`;
+          acted = true;
         }
         break;
       case "group":
@@ -298,6 +294,18 @@
       case "split":
         if (tabIds.length > 0) { await splitTabToWindow(tabIds[0]); statusMessage = "Split tab to new window"; acted = true; }
         break;
+      case "extract": {
+        const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (activeTab?.groupId && activeTab.groupId !== -1) {
+          const n = await extractGroupToWindow(activeTab.groupId);
+          statusMessage = `Extracted ${n} tab(s) to new window`;
+          acted = true;
+        } else {
+          statusMessage = "Active tab is not in a group";
+          acted = true;
+        }
+        break;
+      }
       case "discard":
         if (tabIds.length > 0) { await discardTabs(tabIds); statusMessage = `Discarded ${tabIds.length} tab(s)`; acted = true; }
         break;
@@ -325,12 +333,7 @@
       canUndo = true;
       results = results.filter((r) => r.id !== item.id);
       allTabs = allTabs.filter((t) => t.id !== item.id);
-      searchHaystack = allTabs.map((t) => {
-        const original = `${t.title} ${t.url}`;
-        const stripped = stripDiacritics(original);
-        return original === stripped ? original : `${original} ${stripped}`;
-      });
-      loadTabs();
+      searchHaystack = buildSearchHaystack(allTabs);
     }
   }
 
@@ -518,9 +521,9 @@
           tooltip="Archive selected tabs (save & close). View in Archive page." onclick={() => dashAction(async () => {
             const tabs = dashboardTabs.filter((t) => selectedTabs.has(t.id));
             const tabData = tabs.map((t) => ({ url: t.url, title: t.title, favIconUrl: t.favIconUrl, groupName: t.groupTitle }));
-            await archiveTabs(tabData);
+            const archived = await archiveTabs(tabData);
             await closeTabs([...selectedTabs]);
-            return `Archived ${tabs.length}`;
+            return `Archived ${archived}`;
           })} />
         <ActionButton label="Close Left" icon="⬅️"
           tooltip="Close all tabs to the left of active tab in current window." onclick={() => dashAction(async () => { const n = await closeTabsToLeft(); return n > 0 ? `Closed ${n} left` : "None to close"; })} />
@@ -608,6 +611,9 @@
                 <span class="text-xs font-medium text-text truncate">{group.title}</span>
                 <span class="text-[10px] text-text-muted shrink-0">({group.tabs.length})</span>
               </button>
+              <span class="text-[10px] text-text-muted hover:text-text transition-colors shrink-0 cursor-pointer"
+                onclick={(e) => { e.stopPropagation(); dashAction(async () => { const n = await extractGroupToWindow(groupId); return `Extracted ${n} tab(s)`; }); }}
+                role="button" tabindex="0" onkeydown={(e) => { if (e.key === 'Enter') e.stopPropagation(); }}>Extract</span>
               <span class="text-[10px] text-text-muted hover:text-text transition-colors shrink-0 cursor-pointer"
                 onclick={(e) => { e.stopPropagation(); dashAction(async () => { await sortTabsInGroup(groupId); return `Sorted "${group.title}"`; }); }}
                 role="button" tabindex="0" onkeydown={(e) => { if (e.key === 'Enter') e.stopPropagation(); }}>Sort</span>

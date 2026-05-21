@@ -144,6 +144,14 @@ export async function searchHistory(
   }));
 }
 
+export function buildSearchHaystack(items: { title: string; url: string }[]): string[] {
+  return items.map((t) => {
+    const original = `${t.title} ${t.url}`;
+    const stripped = stripDiacritics(original);
+    return original === stripped ? original : `${original} ${stripped}`;
+  });
+}
+
 export function parseCommand(input: string): {
   prefix: string | null;
   query: string;
