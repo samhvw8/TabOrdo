@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { TabInfo } from "../lib/tabs.ts";
-  import { switchToTab } from "../lib/tabs.ts";
+  import { switchToTab, getFullHostname } from "../lib/tabs.ts";
 
   let {
     tab,
@@ -13,14 +13,6 @@
     ontoggle: () => void;
     onclose: () => void;
   } = $props();
-
-  function getDomain(url: string): string {
-    try {
-      return new URL(url).hostname.replace(/^www\./, "");
-    } catch {
-      return "";
-    }
-  }
 </script>
 
 <div
@@ -43,7 +35,7 @@
     />
   {:else}
     <span class="w-4 h-4 shrink-0 rounded-sm bg-surface-active flex items-center justify-center text-[9px] text-text-muted">
-      {getDomain(tab.url).charAt(0).toUpperCase()}
+      {getFullHostname(tab.url).charAt(0).toUpperCase()}
     </span>
   {/if}
 
@@ -63,7 +55,7 @@
       {/if}
       <span class="truncate text-sm text-text">{tab.title || "Untitled"}</span>
     </div>
-    <div class="truncate text-xs text-text-muted">{getDomain(tab.url)}</div>
+    <div class="truncate text-xs text-text-muted">{getFullHostname(tab.url)}</div>
   </button>
 
   <button

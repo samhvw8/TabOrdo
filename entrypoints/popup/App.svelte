@@ -240,21 +240,21 @@
         if (tabIds.length > 0) { await snapshotBeforeClose(tabIds); await closeTabs(tabIds); statusMessage = `Closed ${tabIds.length} tab(s)`; await loadTabs(); acted = true; }
         break;
       case "closeleft": {
-        await snapshotBeforeClose([]);
         const n = await closeTabsToLeft();
-        if (n > 0) { statusMessage = `Closed ${n} tab(s) to left`; acted = true; }
+        statusMessage = n > 0 ? `Closed ${n} tab(s) to left` : "None to close";
+        acted = true;
         break;
       }
       case "closeright": {
-        await snapshotBeforeClose([]);
         const n = await closeTabsToRight();
-        if (n > 0) { statusMessage = `Closed ${n} tab(s) to right`; acted = true; }
+        statusMessage = n > 0 ? `Closed ${n} tab(s) to right` : "None to close";
+        acted = true;
         break;
       }
       case "closeold": {
         const n = await closeOldTabs();
-        if (n > 0) { statusMessage = `Closed ${n} old tab(s)`; acted = true; }
-        else { statusMessage = "No old tabs found"; acted = true; }
+        statusMessage = n > 0 ? `Closed ${n} old tab(s)` : "No old tabs found";
+        acted = true;
         break;
       }
       case "closesite": {
@@ -265,7 +265,7 @@
       }
       case "archive":
         if (tabIds.length > 0) {
-          const tabData = matchingTabs.map((t) => ({ url: t.url, title: t.title, favIconUrl: t.favIconUrl }));
+          const tabData = matchingTabs.map((t) => ({ url: t.url, title: t.title, favIconUrl: t.favIconUrl, groupName: t.groupTitle }));
           await archiveTabs(tabData);
           await closeTabs(tabIds);
           statusMessage = `Archived ${tabIds.length} tab(s)`;
@@ -309,6 +309,7 @@
       query = "";
       canUndo = !!peekUndo();
       await loadTabs();
+      setTimeout(() => { statusMessage = ""; }, 3000);
     }
   }
 
@@ -324,7 +325,11 @@
       canUndo = true;
       results = results.filter((r) => r.id !== item.id);
       allTabs = allTabs.filter((t) => t.id !== item.id);
-      searchHaystack = allTabs.map((t) => `${t.title} ${t.url}`);
+      searchHaystack = allTabs.map((t) => {
+        const original = `${t.title} ${t.url}`;
+        const stripped = stripDiacritics(original);
+        return original === stripped ? original : `${original} ${stripped}`;
+      });
       loadTabs();
     }
   }

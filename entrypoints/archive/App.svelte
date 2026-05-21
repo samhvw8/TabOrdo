@@ -7,7 +7,7 @@
   let selectedIds = $state<Set<string>>(new Set());
   let statusMessage = $state("");
 
-  let filtered = $derived(() => {
+  let filtered = $derived.by(() => {
     if (!searchQuery.trim()) return archive;
     const q = searchQuery.toLowerCase();
     return archive.filter((a) => a.title.toLowerCase().includes(q) || a.url.toLowerCase().includes(q));
@@ -18,8 +18,8 @@
     items: ArchivedTab[];
   }
 
-  let grouped = $derived<DateGroup[]>(() => {
-    const items = filtered();
+  let grouped = $derived.by<DateGroup[]>(() => {
+    const items = filtered;
     const map = new Map<string, ArchivedTab[]>();
     for (const item of items) {
       const d = new Date(item.archivedAt);
@@ -66,7 +66,7 @@
   }
 
   function selectAll() {
-    selectedIds = new Set(filtered().map((a) => a.id));
+    selectedIds = new Set(filtered.map((a) => a.id));
   }
 
   function selectNone() {
@@ -136,10 +136,10 @@
         <p class="text-sm">Archive is empty</p>
         <p class="text-xs mt-1">Use /archive or the Archive button in the popup to save tabs here</p>
       </div>
-    {:else if filtered().length === 0}
+    {:else if filtered.length === 0}
       <div class="text-center py-8 text-text-muted text-sm">No results for "{searchQuery}"</div>
     {:else}
-      {#each grouped() as group}
+      {#each grouped as group}
         <div class="mb-6">
           <div class="flex items-center gap-3 mb-2">
             <span class="text-xs font-semibold text-text-muted uppercase tracking-wider">{group.label}</span>

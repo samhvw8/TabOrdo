@@ -40,8 +40,13 @@ export function undoStackSize(): number {
 
 export async function snapshotBeforeClose(tabIds: number[]): Promise<void> {
   const tabs = await chrome.tabs.query({});
-  const toClose = tabs.filter((t) => tabIds.includes(t.id!));
-  const data: ClosedTabData[] = toClose.map((t) => ({
+  const idSet = new Set(tabIds);
+  const toClose = tabs.filter((t) => idSet.has(t.id!));
+  snapshotClosedTabs(toClose);
+}
+
+export function snapshotClosedTabs(tabs: chrome.tabs.Tab[]): void {
+  const data: ClosedTabData[] = tabs.map((t) => ({
     url: t.url || "",
     pinned: t.pinned,
     windowId: t.windowId,

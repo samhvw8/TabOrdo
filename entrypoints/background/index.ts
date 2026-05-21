@@ -1,4 +1,5 @@
 import { getAutoGroup, getUseRules, getRules, matchDomainToRule } from "../../lib/rules.ts";
+import { getFullHostname } from "../../lib/tabs.ts";
 
 export default defineBackground(() => {
   chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
@@ -9,7 +10,7 @@ export default defineBackground(() => {
     const rulesOn = await getUseRules();
     if (!enabled || !rulesOn) return;
 
-    const hostname = getHostname(tab.url);
+    const hostname = getFullHostname(tab.url);
     if (!hostname) return;
 
     const rules = await getRules();
@@ -28,10 +29,3 @@ export default defineBackground(() => {
   });
 });
 
-function getHostname(url: string): string {
-  try {
-    return new URL(url).hostname.replace(/^www\./, "");
-  } catch {
-    return "";
-  }
-}

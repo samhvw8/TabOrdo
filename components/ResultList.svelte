@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { SearchResult } from "../lib/search.ts";
+  import { getFullHostname } from "../lib/tabs.ts";
 
   let {
     results,
@@ -43,14 +44,6 @@
     red: "bg-accent-red",
     grey: "bg-border",
   };
-
-  function getDomain(url: string): string {
-    try {
-      return new URL(url).hostname.replace(/^www\./, "");
-    } catch {
-      return "";
-    }
-  }
 
   function scrollIntoView(node: HTMLElement, active: boolean) {
     if (active) node.scrollIntoView({ block: "nearest" });
@@ -113,7 +106,7 @@
             <span class="truncate text-sm text-text">{item.title || "Untitled"}</span>
           </div>
           <div class="truncate text-xs text-text-muted">
-            {getDomain(item.url)}
+            {getFullHostname(item.url)}
             {#if item.groupTitle}
               <span class="ml-1 text-[10px] opacity-70">• {item.groupTitle}</span>
             {/if}
