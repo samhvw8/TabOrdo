@@ -24,6 +24,11 @@ export const SEARCH_COMMANDS: CommandDefinition[] = [
 
 export const ACTION_COMMANDS: CommandDefinition[] = [
   { prefix: "close", label: "/close", description: "Close matching tabs", category: "action", color: "text-accent-red" },
+  { prefix: "closeleft", label: "/closeleft", description: "Close tabs to left of active", category: "action", color: "text-accent-red" },
+  { prefix: "closeright", label: "/closeright", description: "Close tabs to right of active", category: "action", color: "text-accent-red" },
+  { prefix: "closeold", label: "/closeold", description: "Close tabs older than 7 days", category: "action", color: "text-accent-red" },
+  { prefix: "closesite", label: "/closesite", description: "Close all tabs from same site", category: "action", color: "text-accent-red" },
+  { prefix: "archive", label: "/archive", description: "Archive matching tabs", category: "action", color: "text-accent-yellow" },
   { prefix: "group", label: "/group", description: "Group matching tabs", category: "action", color: "text-accent-orange" },
   { prefix: "merge", label: "/merge", description: "Merge all windows", category: "action", color: "text-accent-orange" },
   { prefix: "sort", label: "/sort", description: "Sort tabs by domain", category: "action", color: "text-accent-orange" },

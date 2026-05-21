@@ -5,15 +5,26 @@
     results,
     selectedIndex = 0,
     loading = false,
+    currentWindowId = 0,
+    windowIds = [] as number[],
     onselect,
     onclose,
   }: {
     results: SearchResult[];
     selectedIndex: number;
     loading?: boolean;
+    currentWindowId?: number;
+    windowIds?: number[];
     onselect: (item: SearchResult) => void;
     onclose: (item: SearchResult) => void;
   } = $props();
+
+  function windowLabel(wid: number | undefined): string | null {
+    if (!wid || !currentWindowId || windowIds.length <= 1) return null;
+    if (wid === currentWindowId) return null;
+    const idx = windowIds.indexOf(wid);
+    return idx >= 0 ? `W${idx + 1}` : "Other";
+  }
 
   const typeIcons: Record<string, string> = {
     tab: "🔵",
@@ -105,6 +116,9 @@
             {getDomain(item.url)}
             {#if item.groupTitle}
               <span class="ml-1 text-[10px] opacity-70">• {item.groupTitle}</span>
+            {/if}
+            {#if windowLabel(item.windowId)}
+              <span class="ml-1 px-1 py-px rounded text-[9px] font-medium bg-accent-cyan/15 text-accent-cyan">{windowLabel(item.windowId)}</span>
             {/if}
           </div>
         </div>

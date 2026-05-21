@@ -8,6 +8,7 @@ export interface SearchResult {
   url: string;
   favIconUrl?: string;
   tabId?: number;
+  windowId?: number;
   groupTitle?: string;
   groupColor?: string;
   pinned?: boolean;
@@ -27,7 +28,15 @@ const fuzzy = new uFuzzy({
   intraMode: 1,
   intraIns: 1,
   interIns: 3,
+  unicode: true,
 });
+
+export function stripDiacritics(s: string): string {
+  return s
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[đĐ]/g, "d");
+}
 
 export function search(
   haystack: string[],
@@ -96,6 +105,7 @@ export function tabsToSearchItems(tabs: TabInfo[]): SearchResult[] {
     url: tab.url,
     favIconUrl: tab.favIconUrl,
     tabId: tab.id,
+    windowId: tab.windowId,
     groupTitle: tab.groupTitle,
     groupColor: tab.groupColor,
     pinned: tab.pinned,

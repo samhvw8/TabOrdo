@@ -359,6 +359,47 @@ export async function discardTabs(tabIds: number[]): Promise<void> {
   }
 }
 
+export async function closeTabsToLeft(): Promise<number> {
+  const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!active) return 0;
+  const tabs = await chrome.tabs.query({ windowId: active.windowId });
+  const toClose = tabs.filter((t) => !t.pinned && t.index < active.index);
+  if (toClose.length > 0) await chrome.tabs.remove(toClose.map((t) => t.id!));
+  return toClose.length;
+}
+
+export async function closeTabsToRight(): Promise<number> {
+  const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!active) return 0;
+  const tabs = await chrome.tabs.query({ windowId: active.windowId });
+  const toClose = tabs.filter((t) => !t.pinned && t.index > active.index);
+  if (toClose.length > 0) await chrome.tabs.remove(toClose.map((t) => t.id!));
+  return toClose.length;
+}
+
+export async function closeTabsSameSite(): Promise<number> {
+  const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!active?.url) return 0;
+  const activeDomain = getDomain(active.url);
+  if (!activeDomain) return 0;
+  const tabs = await chrome.tabs.query({});
+  const toClose = tabs.filter(
+    (t) => !t.pinned && t.id !== active.id && getDomain(t.url || "") === activeDomain
+  );
+  if (toClose.length > 0) await chrome.tabs.remove(toClose.map((t) => t.id!));
+  return toClose.length;
+}
+
+export async function closeOldTabs(maxAgeDays: number = 7): Promise<number> {
+  const cutoff = Date.now() - maxAgeDays * 24 * 60 * 60 * 1000;
+  const tabs = await chrome.tabs.query({});
+  const toClose = tabs.filter(
+    (t) => !t.pinned && !t.active && (t.lastAccessed || 0) < cutoff
+  );
+  if (toClose.length > 0) await chrome.tabs.remove(toClose.map((t) => t.id!));
+  return toClose.length;
+}
+
 export async function muteTab(tabId: number, muted: boolean): Promise<void> {
   await chrome.tabs.update(tabId, { muted });
 }

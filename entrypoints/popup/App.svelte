@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { getAllTabs, getCurrentWindowTabs, switchToTab, closeTabs, sortTabsInWindow, sortTabsInGroup, groupTabsByDomain, ungroupAll, removeDuplicates, mergeAllWindows, muteTab, splitTabToWindow, discardTabs, type TabInfo } from "../../lib/tabs.ts";
-  import { search, tabsToSearchItems, searchBookmarks, searchHistory, parseCommand, SEARCH_MODES, type SearchResult, type SearchMode } from "../../lib/search.ts";
+  import { getAllTabs, getCurrentWindowTabs, switchToTab, closeTabs, sortTabsInWindow, sortTabsInGroup, groupTabsByDomain, ungroupAll, removeDuplicates, mergeAllWindows, muteTab, splitTabToWindow, discardTabs, closeTabsToLeft, closeTabsToRight, closeTabsSameSite, closeOldTabs, type TabInfo } from "../../lib/tabs.ts";
+  import { archiveTabs, getArchiveCount } from "../../lib/archive.ts";
+  import { search, tabsToSearchItems, searchBookmarks, searchHistory, parseCommand, stripDiacritics, SEARCH_MODES, type SearchResult, type SearchMode } from "../../lib/search.ts";
   import { getAutoGroup, setAutoGroup, getUseRules, setUseRules } from "../../lib/rules.ts";
   import { matchCommands, ALL_COMMANDS, CATEGORY_STYLES, type CommandDefinition, type CommandCategory } from "../../lib/commands.ts";
   import { snapshotBeforeClose, snapshotBeforeGroup, executeUndo, peekUndo } from "../../lib/undo.ts";
@@ -34,6 +35,7 @@
   let useRulesEnabled = $state(false);
   let inputFocused = $state(true);
   let canUndo = $state(false);
+  let archiveCount = $state(0);
 
   async function handleUndo() {
     const msg = await executeUndo();
@@ -95,7 +97,11 @@
     currentWindowId = win.id!;
 
     allTabs = tabsToSearchItems(tabs);
-    searchHaystack = allTabs.map((t) => `${t.title} ${t.url}`);
+    searchHaystack = allTabs.map((t) => {
+      const original = `${t.title} ${t.url}`;
+      const stripped = stripDiacritics(original);
+      return original === stripped ? original : `${original} ${stripped}`;
+    });
     dashboardTabs = tabs;
 
     const windowMap = new Map<number, WindowData>();
@@ -219,7 +225,7 @@
     selectedIndex = 0;
   }
 
-  const ACTION_PREFIXES = new Set(["close", "group", "merge", "sort", "dedup", "mute", "unmute", "split", "discard", "reload"]);
+  const ACTION_PREFIXES = new Set(["close", "closeleft", "closeright", "closeold", "closesite", "archive", "group", "merge", "sort", "dedup", "mute", "unmute", "split", "discard", "reload"]);
 
   async function handleActionCommand(prefix: string, searchQuery: string) {
     if (!ACTION_PREFIXES.has(prefix)) return;
@@ -232,6 +238,39 @@
     switch (prefix) {
       case "close":
         if (tabIds.length > 0) { await snapshotBeforeClose(tabIds); await closeTabs(tabIds); statusMessage = `Closed ${tabIds.length} tab(s)`; await loadTabs(); acted = true; }
+        break;
+      case "closeleft": {
+        await snapshotBeforeClose([]);
+        const n = await closeTabsToLeft();
+        if (n > 0) { statusMessage = `Closed ${n} tab(s) to left`; acted = true; }
+        break;
+      }
+      case "closeright": {
+        await snapshotBeforeClose([]);
+        const n = await closeTabsToRight();
+        if (n > 0) { statusMessage = `Closed ${n} tab(s) to right`; acted = true; }
+        break;
+      }
+      case "closeold": {
+        const n = await closeOldTabs();
+        if (n > 0) { statusMessage = `Closed ${n} old tab(s)`; acted = true; }
+        else { statusMessage = "No old tabs found"; acted = true; }
+        break;
+      }
+      case "closesite": {
+        const n = await closeTabsSameSite();
+        statusMessage = n > 0 ? `Closed ${n} same-site tab(s)` : "No other tabs from this site";
+        acted = true;
+        break;
+      }
+      case "archive":
+        if (tabIds.length > 0) {
+          const tabData = matchingTabs.map((t) => ({ url: t.url, title: t.title, favIconUrl: t.favIconUrl }));
+          await archiveTabs(tabData);
+          await closeTabs(tabIds);
+          statusMessage = `Archived ${tabIds.length} tab(s)`;
+          await loadTabs(); acted = true;
+        }
         break;
       case "group":
         if (tabIds.length > 0) {
@@ -327,6 +366,7 @@
     loadTabs();
     autoGroupEnabled = await getAutoGroup();
     useRulesEnabled = await getUseRules();
+    archiveCount = await getArchiveCount();
     const stored = await chrome.storage.local.get("collapsedGroups");
     if (stored.collapsedGroups) collapsedGroups = new Set(stored.collapsedGroups);
   });
@@ -454,7 +494,7 @@
     {#if paletteMode === "commands"}
       <CommandHints commands={commandHints} {selectedIndex} onselect={handleCommandSelect} />
     {:else}
-      <ResultList {results} {selectedIndex} {loading} onselect={handleSelect} onclose={handleClose} />
+      <ResultList {results} {selectedIndex} {loading} {currentWindowId} windowIds={windows.map(w => w.windowId)} onselect={handleSelect} onclose={handleClose} />
     {/if}
   {:else}
     <!-- Dashboard mode -->
@@ -469,6 +509,18 @@
         <ActionButton label="Merge" icon="🔗" tooltip="Move all tabs from other windows here." onclick={() => dashAction(async () => { await snapshotBeforeGroup(); await mergeAllWindows(); return "Merged"; })} />
         <ActionButton label="Close Sel." icon="✕" variant="danger" disabled={selectedTabs.size === 0}
           tooltip="Close all selected tabs." onclick={() => dashAction(async () => { await snapshotBeforeClose([...selectedTabs]); await closeTabs([...selectedTabs]); return `Closed ${selectedTabs.size}`; })} />
+        <ActionButton label="Archive Sel." icon="📦" disabled={selectedTabs.size === 0}
+          tooltip="Archive selected tabs (save & close). View in Archive page." onclick={() => dashAction(async () => {
+            const tabs = dashboardTabs.filter((t) => selectedTabs.has(t.id));
+            const tabData = tabs.map((t) => ({ url: t.url, title: t.title, favIconUrl: t.favIconUrl, groupName: t.groupTitle }));
+            await archiveTabs(tabData);
+            await closeTabs([...selectedTabs]);
+            return `Archived ${tabs.length}`;
+          })} />
+        <ActionButton label="Close Left" icon="⬅️"
+          tooltip="Close all tabs to the left of active tab in current window." onclick={() => dashAction(async () => { const n = await closeTabsToLeft(); return n > 0 ? `Closed ${n} left` : "None to close"; })} />
+        <ActionButton label="Close Right" icon="➡️"
+          tooltip="Close all tabs to the right of active tab in current window." onclick={() => dashAction(async () => { const n = await closeTabsToRight(); return n > 0 ? `Closed ${n} right` : "None to close"; })} />
         <ActionButton label="Discard Sel." icon="💤" disabled={selectedTabs.size === 0}
           tooltip="Suspend selected tabs to free memory." onclick={() => dashAction(async () => { await discardTabs([...selectedTabs]); return `Discarded ${selectedTabs.size}`; })} />
       </div>
@@ -601,7 +653,16 @@
   {/if}
 
   <div class="flex items-center justify-between px-3 py-1.5 border-t border-border text-[11px] text-text-muted">
-    <span>{allTabs.length} tab{allTabs.length !== 1 ? "s" : ""}</span>
+    <span class="flex items-center gap-2">
+      {allTabs.length} tab{allTabs.length !== 1 ? "s" : ""}
+      {#if archiveCount > 0}
+        <button
+          class="text-accent-yellow hover:text-accent-yellow/80 transition-colors"
+          onclick={() => { chrome.tabs.create({ url: chrome.runtime.getURL("/archive.html") }); }}
+          title="Open archive ({archiveCount} saved)"
+        >📦 {archiveCount}</button>
+      {/if}
+    </span>
     {#if statusMessage}
       <span class="text-accent-green">{statusMessage}</span>
     {/if}
