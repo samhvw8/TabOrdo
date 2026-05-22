@@ -142,7 +142,7 @@
 
     if ((query.startsWith("/") || query.startsWith("@")) && !query.includes(" ")) {
       commandHints = matchCommands(query);
-      if (commandHints.length > 0 && searchQuery === "") {
+      if (commandHints.length > 0) {
         paletteMode = "commands";
         results = [];
         return;
@@ -363,9 +363,11 @@
       }
       case "mute":
         if (tabIds.length > 0) { for (const id of tabIds) await muteTab(id, true); statusMessage = `Muted ${tabIds.length} tab(s)`; acted = true; }
+        else if (!searchQuery) { const [active] = await chrome.tabs.query({ active: true, currentWindow: true }); if (active?.id) { await muteTab(active.id, true); statusMessage = "Muted active tab"; acted = true; } }
         break;
       case "unmute":
         if (tabIds.length > 0) { for (const id of tabIds) await muteTab(id, false); statusMessage = `Unmuted ${tabIds.length} tab(s)`; acted = true; }
+        else if (!searchQuery) { const [active] = await chrome.tabs.query({ active: true, currentWindow: true }); if (active?.id) { await muteTab(active.id, false); statusMessage = "Unmuted active tab"; acted = true; } }
         break;
       case "split":
         if (tabIds.length > 0) { await splitTabToWindow(tabIds[0]); statusMessage = "Split tab to new window"; acted = true; }
@@ -804,7 +806,8 @@
                 {#each group.tabs as tab}
                   <TabCard {tab} selected={selectedTabs.has(tab.id)}
                     ontoggle={() => toggleSelect(tab.id)}
-                    onclose={() => dashAction(async () => { await closeTabs([tab.id]); })} />
+                    onclose={() => dashAction(async () => { await closeTabs([tab.id]); })}
+                    onmute={() => loadTabs()} />
                 {/each}
               </div>
             {/if}
@@ -833,7 +836,8 @@
                 {#each w.ungrouped as tab}
                   <TabCard {tab} selected={selectedTabs.has(tab.id)}
                     ontoggle={() => toggleSelect(tab.id)}
-                    onclose={() => dashAction(async () => { await closeTabs([tab.id]); })} />
+                    onclose={() => dashAction(async () => { await closeTabs([tab.id]); })}
+                    onmute={() => loadTabs()} />
                 {/each}
               </div>
             {/if}

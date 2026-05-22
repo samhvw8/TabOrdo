@@ -1,18 +1,26 @@
 <script lang="ts">
   import type { TabInfo } from "../lib/tabs.ts";
-  import { switchToTab, getFullHostname } from "../lib/tabs.ts";
+  import { switchToTab, getFullHostname, muteTab } from "../lib/tabs.ts";
 
   let {
     tab,
     selected = false,
     ontoggle,
     onclose,
+    onmute,
   }: {
     tab: TabInfo;
     selected: boolean;
     ontoggle: () => void;
     onclose: () => void;
+    onmute?: () => void;
   } = $props();
+
+  async function toggleMute() {
+    const muted = !tab.mutedInfo?.muted;
+    await muteTab(tab.id, muted);
+    onmute?.();
+  }
 </script>
 
 <div
@@ -47,8 +55,11 @@
       {#if tab.pinned}
         <span class="text-[10px]">📌</span>
       {/if}
-      {#if tab.audible}
+      {#if tab.audible && !tab.mutedInfo?.muted}
         <span class="text-[10px]">🔊</span>
+      {/if}
+      {#if tab.mutedInfo?.muted}
+        <span class="text-[10px]">🔇</span>
       {/if}
       {#if tab.discarded}
         <span class="text-[10px]">💤</span>
@@ -57,6 +68,24 @@
     </div>
     <div class="truncate text-xs text-text-muted">{getFullHostname(tab.url)}</div>
   </button>
+
+  {#if tab.audible || tab.mutedInfo?.muted}
+    <button
+      class="shrink-0 p-1 rounded hover:bg-accent-purple/20 hover:text-accent-purple text-text-muted transition-all"
+      onclick={(e) => { e.stopPropagation(); toggleMute(); }}
+      title={tab.mutedInfo?.muted ? "Unmute tab" : "Mute tab"}
+    >
+      {#if tab.mutedInfo?.muted}
+        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M11 5 6 9H2v6h4l5 4V5Z"/><line x1="23" x2="17" y1="9" y2="15"/><line x1="17" x2="23" y1="9" y2="15"/>
+        </svg>
+      {:else}
+        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+        </svg>
+      {/if}
+    </button>
+  {/if}
 
   <button
     class="shrink-0 p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-accent-red/20 hover:text-accent-red text-text-muted transition-all"
