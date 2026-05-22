@@ -13,6 +13,9 @@ export interface SearchResult {
   groupColor?: string;
   pinned?: boolean;
   audible?: boolean;
+  lastAccessed?: number;
+  discarded?: boolean;
+  muted?: boolean;
 }
 
 export type SearchMode = "fuzzy" | "exact" | "regex" | "prefix";
@@ -110,6 +113,9 @@ export function tabsToSearchItems(tabs: TabInfo[]): SearchResult[] {
     groupColor: tab.groupColor,
     pinned: tab.pinned,
     audible: tab.audible,
+    lastAccessed: tab.lastAccessed,
+    discarded: tab.discarded,
+    muted: tab.mutedInfo?.muted,
   }));
 }
 
@@ -156,6 +162,10 @@ export function parseCommand(input: string): {
   prefix: string | null;
   query: string;
 } {
+  const atMatch = input.match(/^(@\w?)\s*(.*)/);
+  if (atMatch) {
+    return { prefix: atMatch[1], query: atMatch[2] };
+  }
   const match = input.match(/^\/(\w+)\s*(.*)/);
   if (match) {
     return { prefix: match[1], query: match[2] };

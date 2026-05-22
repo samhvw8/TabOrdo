@@ -4,7 +4,7 @@
   import { archiveTabs, getArchiveCount } from "../../lib/archive.ts";
   import { search, tabsToSearchItems, searchBookmarks, searchHistory, parseCommand, buildSearchHaystack, SEARCH_MODES, type SearchResult, type SearchMode } from "../../lib/search.ts";
   import { getAutoGroup, setAutoGroup, getUseRules, setUseRules, getAutoSort, setAutoSort, getAutoPinFollow, setAutoPinFollow, getAutoDiscard, setAutoDiscard } from "../../lib/rules.ts";
-  import { matchCommands, ALL_COMMANDS, ACTION_COMMANDS, CATEGORY_STYLES, type CommandDefinition, type CommandCategory } from "../../lib/commands.ts";
+  import { matchCommands, ALL_COMMANDS, ACTION_COMMANDS, TRIAGE_COMMANDS, CATEGORY_STYLES, type CommandDefinition, type CommandCategory } from "../../lib/commands.ts";
   import { snapshotBeforeClose, snapshotBeforeGroup, executeUndo, peekUndo } from "../../lib/undo.ts";
   import { focusMode, unfocusMode, hasSavedWorkspace, exportTabsToFile, loadTabsFromText } from "../../lib/workspace.ts";
   import SearchInput from "../../components/SearchInput.svelte";
@@ -140,7 +140,7 @@
   async function updateResults() {
     const { prefix, query: searchQuery } = parseCommand(query);
 
-    if (query.startsWith("/") && !query.includes(" ")) {
+    if ((query.startsWith("/") || query.startsWith("@")) && !query.includes(" ")) {
       commandHints = matchCommands(query);
       if (commandHints.length > 0 && searchQuery === "") {
         paletteMode = "commands";
@@ -213,6 +213,60 @@
           results = indices.map((i) => groupTabs[i]);
           break;
         }
+        case "@": {
+          const triageResults: SearchResult[] = [];
+          const audioTabs = allTabs.filter((t) => t.audible);
+          const mutedTabs = allTabs.filter((t) => t.muted);
+          const dupTabs = findDuplicateTabs(allTabs);
+          const recentTabs = [...allTabs].filter((t) => t.type === "tab").sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0)).slice(0, 15);
+          const suspendedTabs = allTabs.filter((t) => t.discarded);
+
+          if (searchQuery) {
+            const all = [...new Map([...audioTabs, ...mutedTabs, ...dupTabs, ...recentTabs, ...suspendedTabs].map((t) => [t.id, t])).values()];
+            const hay = buildSearchHaystack(all);
+            const indices = search(hay, searchQuery, searchMode);
+            results = indices.map((i) => all[i]);
+          } else {
+            if (audioTabs.length > 0) { triageResults.push({ type: "divider", id: "div-triage-audio", title: `Playing Audio (${audioTabs.length})`, url: "" }); triageResults.push(...audioTabs); }
+            if (mutedTabs.length > 0) { triageResults.push({ type: "divider", id: "div-triage-muted", title: `Muted (${mutedTabs.length})`, url: "" }); triageResults.push(...mutedTabs); }
+            if (dupTabs.length > 0) { triageResults.push({ type: "divider", id: "div-triage-dupes", title: `Duplicates (${dupTabs.length})`, url: "" }); triageResults.push(...dupTabs); }
+            if (recentTabs.length > 0) { triageResults.push({ type: "divider", id: "div-triage-recent", title: "Recently Active", url: "" }); triageResults.push(...recentTabs); }
+            if (suspendedTabs.length > 0) { triageResults.push({ type: "divider", id: "div-triage-suspended", title: `Suspended (${suspendedTabs.length})`, url: "" }); triageResults.push(...suspendedTabs); }
+            results = triageResults.length > 0 ? triageResults : [];
+            if (triageResults.length === 0) statusMessage = "All clear — no tabs need attention";
+          }
+          break;
+        }
+        case "@a": {
+          const audio = allTabs.filter((t) => t.audible);
+          if (searchQuery) { const hay = buildSearchHaystack(audio); const indices = search(hay, searchQuery, searchMode); results = indices.map((i) => audio[i]); }
+          else results = audio;
+          break;
+        }
+        case "@m": {
+          const muted = allTabs.filter((t) => t.muted);
+          if (searchQuery) { const hay = buildSearchHaystack(muted); const indices = search(hay, searchQuery, searchMode); results = indices.map((i) => muted[i]); }
+          else results = muted;
+          break;
+        }
+        case "@d": {
+          const dupes = findDuplicateTabs(allTabs);
+          if (searchQuery) { const hay = buildSearchHaystack(dupes); const indices = search(hay, searchQuery, searchMode); results = indices.map((i) => dupes[i]); }
+          else results = dupes;
+          break;
+        }
+        case "@r": {
+          const recent = [...allTabs].filter((t) => t.type === "tab").sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0)).slice(0, 20);
+          if (searchQuery) { const hay = buildSearchHaystack(recent); const indices = search(hay, searchQuery, searchMode); results = indices.map((i) => recent[i]); }
+          else results = recent;
+          break;
+        }
+        case "@s": {
+          const suspended = allTabs.filter((t) => t.discarded);
+          if (searchQuery) { const hay = buildSearchHaystack(suspended); const indices = search(hay, searchQuery, searchMode); results = indices.map((i) => suspended[i]); }
+          else results = suspended;
+          break;
+        }
         default:
           if (ACTION_PREFIXES.has(prefix)) {
             const indices = searchQuery ? search(searchHaystack, searchQuery, searchMode) : [];
@@ -229,6 +283,21 @@
   }
 
   const ACTION_PREFIXES = new Set(ACTION_COMMANDS.map((c) => c.prefix));
+
+  function findDuplicateTabs(tabs: SearchResult[]): SearchResult[] {
+    const urlMap = new Map<string, SearchResult[]>();
+    for (const tab of tabs) {
+      if (tab.type !== "tab" || !tab.url) continue;
+      const existing = urlMap.get(tab.url);
+      if (existing) existing.push(tab);
+      else urlMap.set(tab.url, [tab]);
+    }
+    const dupes: SearchResult[] = [];
+    for (const group of urlMap.values()) {
+      if (group.length > 1) dupes.push(...group);
+    }
+    return dupes;
+  }
 
   async function handleActionCommand(prefix: string, searchQuery: string) {
     if (!ACTION_PREFIXES.has(prefix)) return;
@@ -384,7 +453,7 @@
   }
 
   function handleCommandSelect(cmd: CommandDefinition) {
-    query = `/${cmd.prefix} `;
+    query = cmd.prefix.startsWith("@") ? `${cmd.prefix} ` : `/${cmd.prefix} `;
     paletteMode = "search";
     commandHints = [];
     updateResults();
@@ -451,7 +520,7 @@
     <SearchInput
       bind:value={query}
       oninput={onQueryChange}
-      placeholder="Search tabs... (/ for commands)"
+      placeholder="Search tabs... (/ commands, @ triage)"
       onfocuschange={(f) => { inputFocused = f; }}
       onkeydown={(e) => {
         if (e.key === "Tab" && e.shiftKey) {
@@ -460,7 +529,7 @@
         } else if (e.key === "Tab" && !e.shiftKey) {
           e.preventDefault();
           const hints = matchCommands(query);
-          if (query.startsWith("/") && hints.length > 0) {
+          if ((query.startsWith("/") || query.startsWith("@")) && hints.length > 0) {
             const target = paletteMode === "commands" && hints[selectedIndex] ? hints[selectedIndex] : hints[0];
             handleCommandSelect(target);
           }
@@ -530,15 +599,15 @@
     <!-- Help guide -->
     <div class="flex-1 overflow-y-auto px-3 py-2 min-h-0">
       <div class="text-xs font-semibold text-text mb-2">Command Guide</div>
-      {#each (["search", "action"] as CommandCategory[]) as cat}
+      {#each (["search", "action", "view"] as CommandCategory[]) as cat}
         <div class="flex items-center gap-2 mb-1 mt-2">
           <span class="text-[10px] font-semibold uppercase tracking-wider {CATEGORY_STYLES[cat].color}">{CATEGORY_STYLES[cat].label}</span>
           <div class="flex-1 h-px bg-border/50"></div>
         </div>
-        {#each ALL_COMMANDS.filter(c => c.category === cat) as cmd}
+        {#each [...ALL_COMMANDS, ...TRIAGE_COMMANDS].filter(c => c.category === cat) as cmd}
           <button
             class="w-full flex items-center gap-2 px-2 py-1 rounded hover:bg-surface-hover transition-colors text-left"
-            onclick={() => { query = `/${cmd.prefix} `; showHelp = false; updateResults(); }}
+            onclick={() => { query = cmd.prefix.startsWith("@") ? `${cmd.prefix} ` : `/${cmd.prefix} `; showHelp = false; updateResults(); }}
           >
             <span class="font-mono text-xs font-medium w-16 shrink-0 {cmd.color}">{cmd.label}</span>
             <span class="text-xs text-text-muted">{cmd.description}</span>

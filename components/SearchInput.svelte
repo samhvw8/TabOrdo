@@ -20,7 +20,7 @@
   });
 
   let cmdPart = $derived((() => {
-    const m = value.match(/^(\/\w+)(\s.*)?$/);
+    const m = value.match(/^(\/\w+|@\w?)(\s.*)?$/);
     return m ? { cmd: m[1], rest: m[2] || "" } : null;
   })());
 </script>

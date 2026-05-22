@@ -103,6 +103,12 @@
             {#if item.audible}
               <span class="text-[10px] text-accent-blue shrink-0">🔊</span>
             {/if}
+            {#if item.muted}
+              <span class="text-[10px] text-accent-purple shrink-0">🔇</span>
+            {/if}
+            {#if item.discarded}
+              <span class="text-[10px] text-text-muted shrink-0">💤</span>
+            {/if}
             <span class="truncate text-sm text-text">{item.title || "Untitled"}</span>
           </div>
           <div class="truncate text-xs text-text-muted">

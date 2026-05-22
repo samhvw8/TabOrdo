@@ -53,13 +53,47 @@ export const ACTION_COMMANDS: CommandDefinition[] = [
   { prefix: "reload", label: "/reload", description: "Reload matching tabs", category: "action", color: "text-accent-green" },
 ];
 
-export const ALL_COMMANDS = [...SEARCH_COMMANDS, ...ACTION_COMMANDS];
+export const VIEW_COMMANDS: CommandDefinition[] = [
+  { prefix: "@", label: "@", description: "Smart tab triage", category: "view", color: "text-accent-cyan" },
+];
+
+export const TRIAGE_COMMANDS: CommandDefinition[] = [
+  { prefix: "@a", label: "@a", description: "Tabs playing audio", category: "view", color: "text-accent-red" },
+  { prefix: "@m", label: "@m", description: "Muted tabs", category: "view", color: "text-accent-purple" },
+  { prefix: "@d", label: "@d", description: "Duplicate tabs", category: "view", color: "text-accent-orange" },
+  { prefix: "@r", label: "@r", description: "Recently active tabs", category: "view", color: "text-accent-blue" },
+  { prefix: "@s", label: "@s", description: "Suspended tabs", category: "view", color: "text-accent-pink" },
+];
+
+export const ALL_COMMANDS = [...SEARCH_COMMANDS, ...ACTION_COMMANDS, ...VIEW_COMMANDS];
+
+function fuzzyMatch(text: string, pattern: string): boolean {
+  let j = 0;
+  for (let i = 0; i < text.length && j < pattern.length; i++) {
+    if (text[i] === pattern[j]) j++;
+  }
+  return j === pattern.length;
+}
+
+function fuzzyFilterCommands(commands: CommandDefinition[], typed: string): CommandDefinition[] {
+  const exact = commands.filter(
+    (cmd) => cmd.prefix.startsWith(typed) || cmd.label.toLowerCase().includes(typed)
+  );
+  if (exact.length > 0) return exact;
+  return commands.filter(
+    (cmd) => fuzzyMatch(cmd.prefix, typed) || fuzzyMatch(cmd.description.toLowerCase(), typed)
+  );
+}
 
 export function matchCommands(input: string): CommandDefinition[] {
+  if (input.startsWith("@")) {
+    const typed = input.toLowerCase();
+    if (typed === "@") return TRIAGE_COMMANDS;
+    return fuzzyFilterCommands(TRIAGE_COMMANDS, typed.slice(1));
+  }
   if (!input.startsWith("/")) return [];
   const typed = input.slice(1).toLowerCase();
   if (!typed) return ALL_COMMANDS;
-  return ALL_COMMANDS.filter(
-    (cmd) => cmd.prefix.startsWith(typed) || cmd.label.startsWith(input)
-  );
+
+  return fuzzyFilterCommands(ALL_COMMANDS, typed);
 }
