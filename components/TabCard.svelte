@@ -26,7 +26,7 @@
   }
 
   async function handleVolume(e: Event) {
-    volume = parseInt((e.target as HTMLInputElement).value);
+    volume = parseInt((e.target as HTMLInputElement).value, 10);
     await setTabVolume(tab.id, volume / 100);
   }
 </script>
