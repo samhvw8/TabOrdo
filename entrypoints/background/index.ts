@@ -3,6 +3,16 @@ import { getFullHostname, getDomain, sortTabsInWindow, GROUP_COLORS, hashCode } 
 
 let pinSyncInProgress = false;
 
+async function tryGroupTab(tabId: number, groupId: number, title: string, color: chrome.tabGroups.ColorEnum): Promise<void> {
+  try {
+    await chrome.tabs.group({ tabIds: [tabId], groupId });
+  } catch (e) {
+    console.warn("[TabOrdo] stale group", groupId, "- creating new:", e);
+    const newGroupId = await chrome.tabs.group({ tabIds: [tabId] }).catch((e2) => { console.error("[TabOrdo] fallback group create:", e2); return null; });
+    if (newGroupId) await chrome.tabGroups.update(newGroupId, { title, color }).catch((e2) => console.error("[TabOrdo] fallback group update:", e2));
+  }
+}
+
 export default defineBackground(() => {
   // Auto-group and other tab automations
   chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
@@ -25,10 +35,10 @@ export default defineBackground(() => {
               const existingGroups = await chrome.tabGroups.query({ windowId: tab.windowId });
               const match = existingGroups.find((g) => g.title === rule.name);
               if (match) {
-                await chrome.tabs.group({ tabIds: [tabId], groupId: match.id });
+                await tryGroupTab(tabId, match.id, rule.name, rule.color);
               } else {
-                const groupId = await chrome.tabs.group({ tabIds: [tabId] });
-                await chrome.tabGroups.update(groupId, { title: rule.name, color: rule.color });
+                const groupId = await chrome.tabs.group({ tabIds: [tabId] }).catch((e) => { console.error("[TabOrdo] rule group create:", e); return null; });
+                if (groupId) await chrome.tabGroups.update(groupId, { title: rule.name, color: rule.color }).catch((e) => console.error("[TabOrdo] rule group update:", e));
               }
               grouped = true;
             }
@@ -39,13 +49,13 @@ export default defineBackground(() => {
               const existingGroups = await chrome.tabGroups.query({ windowId: tab.windowId });
               const match = existingGroups.find((g) => g.title === domain);
               if (match) {
-                await chrome.tabs.group({ tabIds: [tabId], groupId: match.id });
+                await tryGroupTab(tabId, match.id, domain, GROUP_COLORS[Math.abs(hashCode(domain)) % GROUP_COLORS.length]);
               } else {
                 const windowTabs = await chrome.tabs.query({ windowId: tab.windowId });
                 const sameDomain = windowTabs.filter((t) => t.id !== tabId && t.groupId === -1 && getDomain(t.url || "") === domain);
                 if (sameDomain.length > 0) {
-                  const groupId = await chrome.tabs.group({ tabIds: [tabId, ...sameDomain.map((t) => t.id!)] });
-                  await chrome.tabGroups.update(groupId, { title: domain, color: GROUP_COLORS[Math.abs(hashCode(domain)) % GROUP_COLORS.length] });
+                  const groupId = await chrome.tabs.group({ tabIds: [tabId, ...sameDomain.map((t) => t.id!)] }).catch((e) => { console.error("[TabOrdo] domain group create:", e); return null; });
+                  if (groupId) await chrome.tabGroups.update(groupId, { title: domain, color: GROUP_COLORS[Math.abs(hashCode(domain)) % GROUP_COLORS.length] }).catch((e) => console.error("[TabOrdo] domain group update:", e));
                 }
               }
             }

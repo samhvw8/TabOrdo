@@ -9,6 +9,10 @@ export default defineConfig({
     css: {
       transformer: "postcss",
     },
+    build: {
+      sourcemap: "inline",
+      minify: false,
+    },
   }),
   manifest: {
     name: "TabOrdo",

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { getRules, saveRules, getAutoGroup, setAutoGroup, populateFromCurrentGroups, mergeRules, type GroupRule } from "../lib/rules.ts";
+  import { getFullHostname } from "../lib/tabs.ts";
 
   let {
     onclose,
@@ -40,13 +41,26 @@
     await setAutoGroup(autoGroup);
   }
 
+  function normalizePattern(p: string): string {
+    const trimmed = p.trim();
+    if (trimmed.includes("://")) {
+      const host = getFullHostname(trimmed);
+      return host || trimmed;
+    }
+    return trimmed;
+  }
+
+  function parsePatterns(input: string): string[] {
+    return input.split(",").map(normalizePattern).filter(Boolean);
+  }
+
   async function addRule() {
     if (!newName.trim() || !newPatterns.trim()) return;
     rules = [...rules, {
       id: crypto.randomUUID(),
       name: newName.trim(),
       color: newColor,
-      patterns: newPatterns.split(",").map((p) => p.trim()).filter(Boolean),
+      patterns: parsePatterns(newPatterns),
     }];
     newName = "";
     newPatterns = "";
@@ -62,9 +76,26 @@
 
   async function updatePatterns(id: string, value: string) {
     rules = rules.map((r) =>
-      r.id === id ? { ...r, patterns: value.split(",").map((p) => p.trim()).filter(Boolean) } : r
+      r.id === id ? { ...r, patterns: parsePatterns(value) } : r
     );
     await save();
+  }
+
+  async function addCurrentTab(id: string) {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.url) return;
+    const host = getFullHostname(tab.url);
+    if (!host) return;
+    const rule = rules.find((r) => r.id === id);
+    if (!rule || rule.patterns.includes(host)) {
+      flash(rule?.patterns.includes(host) ? `${host} already in patterns` : "Rule not found");
+      return;
+    }
+    rules = rules.map((r) =>
+      r.id === id ? { ...r, patterns: [...r.patterns, host] } : r
+    );
+    await save();
+    flash(`Added ${host}`);
   }
 
   async function updateColor(id: string, color: chrome.tabGroups.ColorEnum) {
@@ -89,6 +120,17 @@
     const count = await populateFromCurrentGroups();
     rules = await getRules();
     flash(count > 0 ? `Added ${count} rule(s) from groups` : "No new groups to add");
+  }
+
+  async function addFromCurrentTab() {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.url) return;
+    const host = getFullHostname(tab.url);
+    if (!host) return;
+    const domain = host.replace(/^www\./, "").split(".").slice(-2).join(".");
+    newName = domain;
+    newPatterns = host;
+    newColor = "blue";
   }
 
   function flash(msg: string) {
@@ -124,6 +166,10 @@
       class="flex-1 px-2 py-1 rounded bg-surface-hover border border-border text-[10px] text-text-muted hover:text-text transition-colors"
       onclick={handlePopulate}
     >Import from groups</button>
+    <button
+      class="flex-1 px-2 py-1 rounded bg-surface-hover border border-border text-[10px] text-text-muted hover:text-text transition-colors"
+      onclick={addFromCurrentTab}
+    >+ Current tab</button>
     {#if mergeSource}
       <button
         class="px-2 py-1 rounded bg-accent-red/10 border border-accent-red/30 text-[10px] text-accent-red"
@@ -164,6 +210,11 @@
           class="flex-1 bg-transparent border-b border-border text-xs text-text font-medium outline-none focus:border-primary px-0.5"
         />
         <button
+          class="text-[10px] text-accent-green hover:text-accent-green/80 transition-colors"
+          onclick={(e) => { e.stopPropagation(); addCurrentTab(rule.id); }}
+          title="Add current tab's domain to this rule"
+        >+Tab</button>
+        <button
           class="text-[10px] text-accent-blue hover:text-accent-blue/80 transition-colors"
           onclick={(e) => { e.stopPropagation(); mergeSource = mergeSource === rule.id ? null : rule.id; }}
           title="Select to merge with another rule"
@@ -177,7 +228,7 @@
         value={rule.patterns.join(", ")}
         onchange={(e) => updatePatterns(rule.id, (e.target as HTMLInputElement).value)}
         onclick={(e) => e.stopPropagation()}
-        placeholder="domain.com, *.example.io, *keyword*"
+        placeholder="domain.com, https://example.com/page, *.io"
         class="w-full bg-surface border border-border rounded px-1.5 py-1 text-[11px] text-text-muted outline-none focus:border-primary"
       />
       {#if mergeSource && mergeSource !== rule.id}
@@ -230,6 +281,7 @@
       <div><code class="text-accent-blue">github.com</code> — exact + subdomains (docs.github.com)</div>
       <div><code class="text-accent-blue">*.github.io</code> — wildcard subdomains (user.github.io)</div>
       <div><code class="text-accent-blue">*google*</code> — contains "google" anywhere</div>
+      <div><code class="text-accent-blue">https://example.com/page</code> — auto-extracts domain</div>
     </div>
   </div>
 </div>

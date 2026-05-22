@@ -21,14 +21,29 @@ const CONFIG_KEY = "rulesConfig";
 
 export async function getConfig(): Promise<RulesConfig> {
   const data = await chrome.storage.local.get(CONFIG_KEY);
-  if (data[CONFIG_KEY]) return data[CONFIG_KEY];
+  if (data[CONFIG_KEY]) {
+    const stored = data[CONFIG_KEY];
+    const rules = Array.isArray(stored.rules) ? stored.rules : [];
+    return {
+      rules: rules.map((r: any) => ({
+        ...r,
+        patterns: Array.isArray(r.patterns) ? r.patterns : [],
+      })),
+      autoGroup: stored.autoGroup ?? false,
+      useRules: stored.useRules ?? false,
+      autoSort: stored.autoSort ?? false,
+      autoPinFollow: stored.autoPinFollow ?? false,
+      autoDiscard: stored.autoDiscard ?? false,
+    };
+  }
   const config: RulesConfig = { rules: [], autoGroup: false, useRules: false, autoSort: false, autoPinFollow: false, autoDiscard: false };
   await saveConfig(config);
   return config;
 }
 
 export async function saveConfig(config: RulesConfig): Promise<void> {
-  await chrome.storage.local.set({ [CONFIG_KEY]: config });
+  const plain = JSON.parse(JSON.stringify(config));
+  await chrome.storage.local.set({ [CONFIG_KEY]: plain });
 }
 
 export async function getRules(): Promise<GroupRule[]> {
@@ -155,6 +170,7 @@ export function matchDomainToRule(
   rules: GroupRule[]
 ): GroupRule | null {
   for (const rule of rules) {
+    if (!Array.isArray(rule.patterns)) continue;
     for (const pattern of rule.patterns) {
       if (domainMatches(domain, pattern)) return rule;
     }
