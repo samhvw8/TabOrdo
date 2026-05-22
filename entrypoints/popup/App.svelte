@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { getAllTabs, getCurrentWindowTabs, switchToTab, closeTabs, sortTabsInWindow, sortTabsInGroup, groupTabsByDomain, ungroupAll, removeDuplicates, mergeAllWindows, muteTab, splitTabToWindow, extractGroupToWindow, discardTabs, closeTabsToLeft, closeTabsToRight, closeTabsSameSite, closeOldTabs, shuffleTabs, uniteDomain, isolateDomain, splitWindow, splitByDomain, stackWindows, type TabInfo } from "../../lib/tabs.ts";
+  import { getAllTabs, getCurrentWindowTabs, switchToTab, closeTabs, sortTabsInWindow, sortTabsInGroup, groupTabsByDomain, ungroupAll, removeDuplicates, mergeAllWindows, muteTab, setTabVolume, splitTabToWindow, extractGroupToWindow, discardTabs, closeTabsToLeft, closeTabsToRight, closeTabsSameSite, closeOldTabs, shuffleTabs, uniteDomain, isolateDomain, splitWindow, splitByDomain, stackWindows, type TabInfo } from "../../lib/tabs.ts";
   import { archiveTabs, getArchiveCount } from "../../lib/archive.ts";
   import { search, tabsToSearchItems, searchBookmarks, searchHistory, parseCommand, buildSearchHaystack, SEARCH_MODES, type SearchResult, type SearchMode } from "../../lib/search.ts";
   import { getAutoGroup, setAutoGroup, getUseRules, setUseRules, getAutoSort, setAutoSort, getAutoPinFollow, setAutoPinFollow, getAutoDiscard, setAutoDiscard } from "../../lib/rules.ts";
@@ -429,6 +429,27 @@
       case "reload":
         if (tabIds.length > 0) { for (const id of tabIds) chrome.tabs.reload(id); statusMessage = `Reloaded ${tabIds.length} tab(s)`; acted = true; }
         break;
+      case "vol": {
+        const volMatch = searchQuery.match(/^(\d+)\s*(.*)/);
+        if (volMatch) {
+          const level = Math.max(0, Math.min(100, parseInt(volMatch[1])));
+          const filter = volMatch[2].trim();
+          if (filter) {
+            const indices = search(searchHaystack, filter, searchMode);
+            const targets = indices.map((i) => allTabs[i]).filter((t) => t.tabId);
+            for (const t of targets) await setTabVolume(t.tabId!, level / 100);
+            statusMessage = `Volume ${level}% on ${targets.length} tab(s)`;
+          } else {
+            const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+            if (active?.id) { await setTabVolume(active.id, level / 100); statusMessage = `Volume ${level}% on active tab`; }
+          }
+          acted = true;
+        } else {
+          statusMessage = "Usage: /vol 50 [search]";
+          acted = true;
+        }
+        break;
+      }
     }
     if (acted) {
       query = "";
@@ -848,7 +869,7 @@
     </div>
   {/if}
 
-  <div class="flex items-center justify-between px-3 py-1.5 border-t border-border text-[11px] text-text-muted">
+  <div class="shrink-0 flex items-center justify-between px-3 py-1.5 border-t border-border text-[11px] text-text-muted">
     <span class="flex items-center gap-2">
       {allTabs.length} tab{allTabs.length !== 1 ? "s" : ""}
       {#if archiveCount > 0}

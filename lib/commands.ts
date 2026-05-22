@@ -51,6 +51,7 @@ export const ACTION_COMMANDS: CommandDefinition[] = [
   { prefix: "feedback", label: "/feedback", description: "Submit feedback or bugs", category: "action", color: "text-accent-purple" },
   { prefix: "discard", label: "/discard", description: "Discard matching tabs", category: "action", color: "text-accent-pink" },
   { prefix: "reload", label: "/reload", description: "Reload matching tabs", category: "action", color: "text-accent-green" },
+  { prefix: "vol", label: "/vol", description: "Set volume (0-100) for matching tabs", category: "action", color: "text-accent-purple" },
 ];
 
 export const VIEW_COMMANDS: CommandDefinition[] = [

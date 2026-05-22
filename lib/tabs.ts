@@ -427,6 +427,28 @@ export async function muteTab(tabId: number, muted: boolean): Promise<void> {
   await chrome.tabs.update(tabId, { muted });
 }
 
+export async function setTabVolume(tabId: number, volume: number): Promise<void> {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      func: (vol: number) => {
+        const elements = document.querySelectorAll("audio, video");
+        if (elements.length === 0) {
+          console.warn("[TabOrdo] No audio/video elements found on this page");
+          return;
+        }
+        elements.forEach((el) => {
+          (el as HTMLMediaElement).volume = vol;
+        });
+        console.log(`[TabOrdo] Set volume to ${Math.round(vol * 100)}% on ${elements.length} element(s)`);
+      },
+      args: [Math.max(0, Math.min(1, volume))],
+    });
+  } catch (e) {
+    console.error("[TabOrdo] Failed to set volume for tab", tabId, e);
+  }
+}
+
 export function getDomain(url: string): string {
   try {
     return tldtsDomain(url, { allowPrivateDomains: false }) || new URL(url).hostname;

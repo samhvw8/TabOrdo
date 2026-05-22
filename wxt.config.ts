@@ -23,7 +23,8 @@ export default defineConfig({
       48: "assets/icon-48.png",
       128: "assets/icon-128.png",
     },
-    permissions: ["tabs", "tabGroups", "bookmarks", "history", "storage", "alarms"],
+    permissions: ["tabs", "tabGroups", "bookmarks", "history", "storage", "alarms", "scripting", "activeTab"],
+    host_permissions: ["<all_urls>"],
     commands: {
       _execute_action: {
         suggested_key: {
