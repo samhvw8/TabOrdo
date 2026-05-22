@@ -5,7 +5,7 @@
   import { search, tabsToSearchItems, searchBookmarks, searchHistory, parseCommand, buildSearchHaystack, SEARCH_MODES, type SearchResult, type SearchMode } from "../../lib/search.ts";
   import { getAutoGroup, setAutoGroup, getUseRules, setUseRules, getAutoSort, setAutoSort, getAutoPinFollow, setAutoPinFollow, getAutoDiscard, setAutoDiscard } from "../../lib/rules.ts";
   import { matchCommands, ALL_COMMANDS, ACTION_COMMANDS, TRIAGE_COMMANDS, CATEGORY_STYLES, type CommandDefinition, type CommandCategory } from "../../lib/commands.ts";
-  import { snapshotBeforeClose, snapshotBeforeGroup, executeUndo, peekUndo } from "../../lib/undo.ts";
+  import { snapshotBeforeClose, snapshotBeforeGroup, executeUndo, peekUndo, loadUndoStack } from "../../lib/undo.ts";
   import { focusMode, unfocusMode, hasSavedWorkspace, exportTabsToFile, loadTabsFromText } from "../../lib/workspace.ts";
   import SearchInput from "../../components/SearchInput.svelte";
   import ResultList from "../../components/ResultList.svelte";
@@ -42,7 +42,32 @@
   let inputFocused = $state(true);
   let canUndo = $state(false);
   let archiveCount = $state(0);
-  let fileInputEl = $state<HTMLInputElement>(undefined!);
+  let fileInputEl = $state<HTMLInputElement | undefined>(undefined);
+  let busy = $state(false);
+  let searchTimer: ReturnType<typeof setTimeout> | undefined;
+  let pendingConfirm = $state<string | null>(null);
+  let confirmTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function confirmAction(id: string, action: () => void) {
+    if (pendingConfirm === id) {
+      clearTimeout(confirmTimer);
+      pendingConfirm = null;
+      action();
+    } else {
+      pendingConfirm = id;
+      clearTimeout(confirmTimer);
+      confirmTimer = setTimeout(() => { pendingConfirm = null; }, 3000);
+    }
+  }
+
+  async function withBulkLock<T>(fn: () => Promise<T>): Promise<T> {
+    await chrome.storage.session.set({ bulkOpInProgress: true }).catch(() => {});
+    try {
+      return await fn();
+    } finally {
+      await chrome.storage.session.set({ bulkOpInProgress: false }).catch(() => {});
+    }
+  }
 
   async function handleUndo() {
     const msg = await executeUndo();
@@ -158,19 +183,25 @@
     } else {
       const indices = search(searchHaystack, query, searchMode);
       const tabResults = indices.map((i) => allTabs[i]);
+      results = tabResults;
 
+      clearTimeout(searchTimer);
       if (query.trim().length >= 2) {
-        const [bookmarkResults, historyResults] = await Promise.all([
-          searchBookmarks(query, 5),
-          searchHistory(query, 5),
-        ]);
-        results = [
-          ...tabResults,
-          ...(bookmarkResults.length > 0 ? [{ type: "divider" as const, id: "div-bookmarks", title: "Bookmarks", url: "" }, ...bookmarkResults] : []),
-          ...(historyResults.length > 0 ? [{ type: "divider" as const, id: "div-history", title: "History", url: "" }, ...historyResults] : []),
-        ];
-      } else {
-        results = tabResults;
+        const capturedQuery = query;
+        searchTimer = setTimeout(async () => {
+          const [bookmarkResults, historyResults] = await Promise.all([
+            searchBookmarks(capturedQuery, 5),
+            searchHistory(capturedQuery, 5),
+          ]);
+          if (query !== capturedQuery) return;
+          const freshIndices = search(searchHaystack, capturedQuery, searchMode);
+          const freshTabResults = freshIndices.map((i) => allTabs[i]);
+          results = [
+            ...freshTabResults,
+            ...(bookmarkResults.length > 0 ? [{ type: "divider" as const, id: "div-bookmarks", title: "Bookmarks", url: "" }, ...bookmarkResults] : []),
+            ...(historyResults.length > 0 ? [{ type: "divider" as const, id: "div-history", title: "History", url: "" }, ...historyResults] : []),
+          ];
+        }, 200);
       }
     }
     selectedIndex = 0;
@@ -205,9 +236,10 @@
         }
         case "g": {
           const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-          const groupTabs = activeTab?.groupId && activeTab.groupId !== -1
-            ? allTabs.filter((t) => t.groupTitle === allTabs.find((at) => at.tabId === activeTab.id)?.groupTitle)
-            : allTabs.filter((t) => !t.groupTitle);
+          const activeGroupId = activeTab?.groupId ?? -1;
+          const groupTabs = activeGroupId !== -1
+            ? allTabs.filter((t) => t.groupId === activeGroupId)
+            : allTabs.filter((t) => !t.groupId || t.groupId === -1);
           const hay = buildSearchHaystack(groupTabs);
           const indices = search(hay, searchQuery, searchMode);
           results = indices.map((i) => groupTabs[i]);
@@ -301,7 +333,11 @@
 
   async function handleActionCommand(prefix: string, searchQuery: string) {
     if (!ACTION_PREFIXES.has(prefix)) return;
+    if (busy) return;
+    busy = true;
 
+    try {
+    await chrome.storage.session.set({ bulkOpInProgress: true }).catch(() => {});
     const matchingIndices = searchQuery ? search(searchHaystack, searchQuery, searchMode) : [];
     const matchingTabs = matchingIndices.map((i) => allTabs[i]).filter((t) => t.tabId);
     const tabIds = matchingTabs.map((t) => t.tabId!);
@@ -427,7 +463,7 @@
         if (tabIds.length > 0) { await discardTabs(tabIds); statusMessage = `Discarded ${tabIds.length} tab(s)`; acted = true; }
         break;
       case "reload":
-        if (tabIds.length > 0) { for (const id of tabIds) chrome.tabs.reload(id); statusMessage = `Reloaded ${tabIds.length} tab(s)`; acted = true; }
+        if (tabIds.length > 0) { await Promise.allSettled(tabIds.map((id) => chrome.tabs.reload(id))); statusMessage = `Reloaded ${tabIds.length} tab(s)`; acted = true; }
         break;
       case "vol": {
         const volMatch = searchQuery.match(/^(\d+)\s*(.*)/);
@@ -457,6 +493,13 @@
       await loadTabs();
       setTimeout(() => { statusMessage = ""; }, 3000);
     }
+    } catch (e) {
+      statusMessage = `Error: ${e instanceof Error ? e.message : "Action failed"}`;
+      setTimeout(() => { statusMessage = ""; }, 5000);
+    } finally {
+      await chrome.storage.session.set({ bulkOpInProgress: false }).catch(() => {});
+      busy = false;
+    }
   }
 
   async function handleSelect(item: SearchResult) {
@@ -472,6 +515,8 @@
       results = results.filter((r) => r.id !== item.id);
       allTabs = allTabs.filter((t) => t.id !== item.id);
       searchHaystack = buildSearchHaystack(allTabs);
+      dashboardTabs = dashboardTabs.filter((t) => t.id !== item.tabId);
+      await loadTabs();
     }
   }
 
@@ -500,12 +545,21 @@
   }
 
   async function dashAction(fn: () => Promise<string | void>) {
-    const msg = await fn();
-    if (msg) statusMessage = msg;
-    canUndo = !!peekUndo();
-    await loadTabs();
-    selectedTabs = new Set();
-    setTimeout(() => { statusMessage = ""; }, 3000);
+    if (busy) return;
+    busy = true;
+    try {
+      const msg = await withBulkLock(fn);
+      if (msg) statusMessage = msg;
+      canUndo = !!peekUndo();
+      await loadTabs();
+      selectedTabs = new Set();
+      setTimeout(() => { statusMessage = ""; }, 3000);
+    } catch (e) {
+      statusMessage = `Error: ${e instanceof Error ? e.message : "Action failed"}`;
+      setTimeout(() => { statusMessage = ""; }, 5000);
+    } finally {
+      busy = false;
+    }
   }
 
   async function handleFileLoad(e: Event) {
@@ -519,16 +573,21 @@
   }
 
   onMount(async () => {
-    loadTabs();
-    autoGroupEnabled = await getAutoGroup();
-    useRulesEnabled = await getUseRules();
-    autoSortEnabled = await getAutoSort();
-    autoPinFollowEnabled = await getAutoPinFollow();
-    autoDiscardEnabled = await getAutoDiscard();
+    await loadTabs();
+    await loadUndoStack();
+    canUndo = !!peekUndo();
+    const config = await chrome.storage.local.get(["rulesConfig", "collapsedGroups"]);
+    const rc = config.rulesConfig;
+    if (rc) {
+      autoGroupEnabled = rc.autoGroup ?? false;
+      useRulesEnabled = rc.useRules ?? false;
+      autoSortEnabled = rc.autoSort ?? false;
+      autoPinFollowEnabled = rc.autoPinFollow ?? false;
+      autoDiscardEnabled = rc.autoDiscard ?? false;
+    }
     hasWorkspace = await hasSavedWorkspace();
     archiveCount = await getArchiveCount();
-    const stored = await chrome.storage.local.get("collapsedGroups");
-    if (stored.collapsedGroups) collapsedGroups = new Set(stored.collapsedGroups);
+    if (config.collapsedGroups) collapsedGroups = new Set(config.collapsedGroups);
   });
 
   function onQueryChange() {
@@ -660,15 +719,16 @@
     <!-- Dashboard mode -->
     <div class="flex-1 overflow-y-auto min-h-0">
       <!-- Action buttons -->
-      <div class="grid grid-cols-4 gap-1.5 px-3 pb-2">
+      <div class="grid grid-cols-4 gap-1.5 px-3 pb-2 {busy ? 'opacity-50 pointer-events-none' : ''}"
+        aria-busy={busy}>
         <ActionButton label="Sort All" icon="↕️" tooltip="Sort tabs by domain. Groups left, ungrouped right." onclick={() => dashAction(async () => { await snapshotBeforeGroup(); await sortTabsInWindow(currentWindowId); return "Sorted"; })} />
         <ActionButton label="Group+" icon="📁" tooltip="Group ungrouped tabs by domain. Keeps existing groups." onclick={() => dashAction(async () => { await snapshotBeforeGroup(); await groupTabsByDomain("additive"); return "Grouped"; })} />
-        <ActionButton label="Regroup" icon="🔀" tooltip="Ungroup everything, then regroup all from scratch." onclick={() => dashAction(async () => { await snapshotBeforeGroup(); await groupTabsByDomain("rebuild"); return "Regrouped"; })} />
+        <ActionButton label={pendingConfirm === "regroup" ? "Sure?" : "Regroup"} icon="🔀" tooltip="Ungroup everything, then regroup all from scratch." onclick={() => confirmAction("regroup", () => dashAction(async () => { await snapshotBeforeGroup(); await groupTabsByDomain("rebuild"); return "Regrouped"; }))} />
         <ActionButton label="Dedup" icon="🔄" tooltip="Close duplicate tabs. Keeps most recently accessed." onclick={() => dashAction(async () => { await snapshotBeforeGroup(); const n = await removeDuplicates(); return n > 0 ? `${n} removed` : "No dupes"; })} />
-        <ActionButton label="Ungroup" icon="📤" tooltip="Remove all tab groups. Tabs stay in place." onclick={() => dashAction(async () => { await snapshotBeforeGroup(); await ungroupAll(); return "Ungrouped all"; })} />
-        <ActionButton label="Merge" icon="🔗" tooltip="Move all tabs from other windows here." onclick={() => dashAction(async () => { await snapshotBeforeGroup(); await mergeAllWindows(); return "Merged"; })} />
-        <ActionButton label="Close Sel." icon="✕" variant="danger" disabled={selectedTabs.size === 0}
-          tooltip="Close all selected tabs." onclick={() => dashAction(async () => { await snapshotBeforeClose([...selectedTabs]); await closeTabs([...selectedTabs]); return `Closed ${selectedTabs.size}`; })} />
+        <ActionButton label={pendingConfirm === "ungroup" ? "Sure?" : "Ungroup"} icon="📤" tooltip="Remove all tab groups. Tabs stay in place." onclick={() => confirmAction("ungroup", () => dashAction(async () => { await snapshotBeforeGroup(); await ungroupAll(); return "Ungrouped all"; }))} />
+        <ActionButton label={pendingConfirm === "merge" ? "Sure?" : "Merge"} icon="🔗" tooltip="Move all tabs from other windows here." onclick={() => confirmAction("merge", () => dashAction(async () => { await snapshotBeforeGroup(); await mergeAllWindows(); return "Merged"; }))} />
+        <ActionButton label={pendingConfirm === "closeSel" ? "Sure?" : "Close Sel."} icon="✕" variant="danger" disabled={selectedTabs.size === 0}
+          tooltip="Close all selected tabs." onclick={() => confirmAction("closeSel", () => dashAction(async () => { await snapshotBeforeClose([...selectedTabs]); await closeTabs([...selectedTabs]); return `Closed ${selectedTabs.size}`; }))} />
         <ActionButton label="Archive Sel." icon="📦" disabled={selectedTabs.size === 0}
           tooltip="Archive selected tabs (save & close). View in Archive page." onclick={() => dashAction(async () => {
             const tabs = dashboardTabs.filter((t) => selectedTabs.has(t.id));
@@ -817,10 +877,10 @@
               </button>
               <span class="text-[10px] text-text-muted hover:text-text transition-colors shrink-0 cursor-pointer"
                 onclick={(e) => { e.stopPropagation(); dashAction(async () => { const n = await extractGroupToWindow(groupId); return `Extracted ${n} tab(s)`; }); }}
-                role="button" tabindex="0" onkeydown={(e) => { if (e.key === 'Enter') e.stopPropagation(); }}>Extract</span>
+                role="button" tabindex="0" onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); dashAction(async () => { const n = await extractGroupToWindow(groupId); return `Extracted ${n} tab(s)`; }); } }}>Extract</span>
               <span class="text-[10px] text-text-muted hover:text-text transition-colors shrink-0 cursor-pointer"
                 onclick={(e) => { e.stopPropagation(); dashAction(async () => { await sortTabsInGroup(groupId); return `Sorted "${group.title}"`; }); }}
-                role="button" tabindex="0" onkeydown={(e) => { if (e.key === 'Enter') e.stopPropagation(); }}>Sort</span>
+                role="button" tabindex="0" onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); dashAction(async () => { await sortTabsInGroup(groupId); return `Sorted "${group.title}"`; }); } }}>Sort</span>
             </div>
             {#if !collapsed}
               <div class="p-1 grid gap-0.5">
@@ -880,9 +940,7 @@
         >📦 {archiveCount}</button>
       {/if}
     </span>
-    {#if statusMessage}
-      <span class="text-accent-green">{statusMessage}</span>
-    {/if}
+    <span class="text-accent-green" aria-live="polite">{statusMessage}</span>
     {#if canUndo}
       <button
         class="px-1.5 py-0.5 rounded bg-accent-orange/10 text-accent-orange hover:bg-accent-orange/20 text-[10px] font-medium transition-colors"

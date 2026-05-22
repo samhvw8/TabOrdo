@@ -9,6 +9,7 @@ export interface SearchResult {
   favIconUrl?: string;
   tabId?: number;
   windowId?: number;
+  groupId?: number;
   groupTitle?: string;
   groupColor?: string;
   pinned?: boolean;
@@ -87,6 +88,7 @@ function prefixSearch(haystack: string[], needle: string, limit: number): number
 }
 
 function regexSearch(haystack: string[], needle: string, limit: number): number[] {
+  if (needle.length > 200) return [];
   let re: RegExp;
   try {
     re = new RegExp(needle, "i");
@@ -94,8 +96,10 @@ function regexSearch(haystack: string[], needle: string, limit: number): number[
     return [];
   }
   const results: number[] = [];
+  const deadline = Date.now() + 100;
   for (let i = 0; i < haystack.length && results.length < limit; i++) {
     if (re.test(haystack[i])) results.push(i);
+    if (i % 10 === 0 && Date.now() > deadline) break;
   }
   return results;
 }
@@ -109,6 +113,7 @@ export function tabsToSearchItems(tabs: TabInfo[]): SearchResult[] {
     favIconUrl: tab.favIconUrl,
     tabId: tab.id,
     windowId: tab.windowId,
+    groupId: tab.groupId,
     groupTitle: tab.groupTitle,
     groupColor: tab.groupColor,
     pinned: tab.pinned,

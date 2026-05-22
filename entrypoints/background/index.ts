@@ -24,7 +24,8 @@ export default defineBackground(() => {
     const config = await getConfig();
 
     // Auto-group by domain (or rules if enabled) — trigger on URL change for responsiveness
-    if (isUrlChange && config.autoGroup && !tab.pinned && tab.groupId === -1) {
+    const session = await chrome.storage.session.get("bulkOpInProgress").catch(() => ({}));
+    if (isUrlChange && config.autoGroup && !tab.pinned && tab.groupId === -1 && !session.bulkOpInProgress) {
       try {
         const hostname = getFullHostname(tab.url);
         if (hostname && !tab.url.startsWith("chrome://")) {
@@ -67,7 +68,7 @@ export default defineBackground(() => {
     }
 
     // Auto-sort on tab load
-    if (config.autoSort && changeInfo.status === "complete") {
+    if (config.autoSort && changeInfo.status === "complete" && !session.bulkOpInProgress) {
       await sortTabsInWindow(tab.windowId);
     }
 

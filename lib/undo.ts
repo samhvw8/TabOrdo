@@ -18,12 +18,29 @@ interface GroupAssignment {
   groupColor?: string;
 }
 
+const UNDO_KEY = "tabOrdo_undoStack";
 const stack: UndoEntry[] = [];
 const MAX_STACK = 20;
+
+function persistStack() {
+  chrome.storage.session?.set({ [UNDO_KEY]: stack }).catch(() => {});
+}
+
+export async function loadUndoStack(): Promise<void> {
+  try {
+    const data = await chrome.storage.session.get(UNDO_KEY);
+    const loaded = data[UNDO_KEY];
+    if (Array.isArray(loaded)) {
+      stack.length = 0;
+      stack.push(...loaded);
+    }
+  } catch {}
+}
 
 export function pushUndo(entry: UndoEntry) {
   stack.push(entry);
   if (stack.length > MAX_STACK) stack.shift();
+  persistStack();
 }
 
 export function peekUndo(): UndoEntry | null {
@@ -31,7 +48,9 @@ export function peekUndo(): UndoEntry | null {
 }
 
 export function popUndo(): UndoEntry | null {
-  return stack.pop() || null;
+  const entry = stack.pop() || null;
+  persistStack();
+  return entry;
 }
 
 export function undoStackSize(): number {

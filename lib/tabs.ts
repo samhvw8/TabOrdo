@@ -86,10 +86,11 @@ export async function sortTabsInWindow(
 export async function sortTabsInGroup(groupId: number): Promise<void> {
   const tabs = await chrome.tabs.query({ groupId });
   tabs.sort((a, b) => (a.title || "").localeCompare(b.title || ""));
-  for (const tab of tabs) {
-    await chrome.tabs.move(tab.id!, { index: -1 });
+  const ids = tabs.map((t) => t.id!);
+  if (ids.length > 0) {
+    await chrome.tabs.move(ids, { index: -1 });
+    await chrome.tabs.group({ tabIds: ids, groupId });
   }
-  await chrome.tabs.group({ tabIds: tabs.map((t) => t.id!), groupId });
 }
 
 async function organizeWindow(
@@ -128,14 +129,17 @@ async function organizeWindow(
   let index = pinnedCount;
 
   for (const entry of sortedGroups) {
-    for (const tab of entry.tabs) {
-      await chrome.tabs.move(tab.id!, { index: index++ });
+    const ids = entry.tabs.map((t) => t.id!);
+    if (ids.length > 0) {
+      await chrome.tabs.move(ids, { index });
+      index += ids.length;
+      await chrome.tabs.group({ tabIds: ids, groupId: entry.group.id });
     }
-    await chrome.tabs.group({ tabIds: entry.tabs.map((t) => t.id!), groupId: entry.group.id });
   }
 
-  for (const tab of ungrouped) {
-    await chrome.tabs.move(tab.id!, { index: index++ });
+  const ungroupedIds = ungrouped.map((t) => t.id!);
+  if (ungroupedIds.length > 0) {
+    await chrome.tabs.move(ungroupedIds, { index });
   }
 }
 
@@ -177,6 +181,7 @@ export async function groupTabsByDomain(
 
   const ruleGroupMap = new Map<string, { rule: typeof rules[0]; tabs: chrome.tabs.Tab[] }>();
   const domainMap = new Map<string, chrome.tabs.Tab[]>();
+  const toUngroup: number[] = [];
 
   const candidates = freshTabs.filter((t) => !t.pinned);
   for (const tab of candidates) {
@@ -188,7 +193,7 @@ export async function groupTabsByDomain(
       const currentGroupTitle = groupTitleMap.get(tab.groupId) || "";
       if (tab.groupId !== -1 && currentGroupTitle === rule.name) continue;
       if (tab.groupId !== -1) {
-        await chrome.tabs.ungroup(tab.id!);
+        toUngroup.push(tab.id!);
       }
       if (!ruleGroupMap.has(rule.id)) ruleGroupMap.set(rule.id, { rule, tabs: [] });
       ruleGroupMap.get(rule.id)!.tabs.push(tab);
@@ -200,6 +205,10 @@ export async function groupTabsByDomain(
     }
   }
 
+  if (toUngroup.length > 0) {
+    await chrome.tabs.ungroup(toUngroup);
+  }
+
   if (mode === "additive") {
     const currentGroups = await chrome.tabGroups.query({});
     for (const group of currentGroups) {
@@ -208,11 +217,8 @@ export async function groupTabsByDomain(
       const ruleEntry = [...ruleGroupMap.entries()].find(([, e]) => e.rule.name === group.title);
       if (ruleEntry) {
         const [ruleId, entry] = ruleEntry;
-        for (const tab of entry.tabs) {
-          if (tab.windowId !== group.windowId) {
-            await chrome.tabs.move(tab.id!, { windowId: group.windowId, index: -1 });
-          }
-        }
+        const moveIds = entry.tabs.filter((t) => t.windowId !== group.windowId).map((t) => t.id!);
+        if (moveIds.length > 0) await chrome.tabs.move(moveIds, { windowId: group.windowId, index: -1 });
         await chrome.tabs.group({ tabIds: entry.tabs.map((t) => t.id!), groupId: group.id });
         ruleGroupMap.delete(ruleId);
         continue;
@@ -220,11 +226,8 @@ export async function groupTabsByDomain(
 
       const matching = domainMap.get(group.title);
       if (matching && matching.length > 0) {
-        for (const tab of matching) {
-          if (tab.windowId !== group.windowId) {
-            await chrome.tabs.move(tab.id!, { windowId: group.windowId, index: -1 });
-          }
-        }
+        const moveIds = matching.filter((t) => t.windowId !== group.windowId).map((t) => t.id!);
+        if (moveIds.length > 0) await chrome.tabs.move(moveIds, { windowId: group.windowId, index: -1 });
         await chrome.tabs.group({ tabIds: matching.map((t) => t.id!), groupId: group.id });
         domainMap.delete(group.title);
       }
@@ -234,9 +237,8 @@ export async function groupTabsByDomain(
   for (const [, entry] of ruleGroupMap) {
     if (entry.tabs.length < 1) continue;
     const targetWindowId = pickMajorityWindow(entry.tabs);
-    for (const tab of entry.tabs.filter((t) => t.windowId !== targetWindowId)) {
-      await chrome.tabs.move(tab.id!, { windowId: targetWindowId, index: -1 });
-    }
+    const moveIds = entry.tabs.filter((t) => t.windowId !== targetWindowId).map((t) => t.id!);
+    if (moveIds.length > 0) await chrome.tabs.move(moveIds, { windowId: targetWindowId, index: -1 });
     const groupId = await chrome.tabs.group({
       tabIds: entry.tabs.map((t) => t.id!),
       createProperties: { windowId: targetWindowId },
@@ -247,9 +249,8 @@ export async function groupTabsByDomain(
   for (const [domain, domainTabs] of domainMap) {
     if (domainTabs.length < 2) continue;
     const targetWindowId = pickMajorityWindow(domainTabs);
-    for (const tab of domainTabs.filter((t) => t.windowId !== targetWindowId)) {
-      await chrome.tabs.move(tab.id!, { windowId: targetWindowId, index: -1 });
-    }
+    const moveIds = domainTabs.filter((t) => t.windowId !== targetWindowId).map((t) => t.id!);
+    if (moveIds.length > 0) await chrome.tabs.move(moveIds, { windowId: targetWindowId, index: -1 });
     const groupId = await chrome.tabs.group({
       tabIds: domainTabs.map((t) => t.id!),
       createProperties: { windowId: targetWindowId },
@@ -342,8 +343,8 @@ export async function mergeAllWindows(): Promise<void> {
     (t) => t.windowId !== currentWindow.id && !t.pinned
   );
 
-  for (const tab of otherTabs) {
-    await chrome.tabs.move(tab.id!, {
+  if (otherTabs.length > 0) {
+    await chrome.tabs.move(otherTabs.map((t) => t.id!), {
       windowId: currentWindow.id!,
       index: -1,
     });
@@ -357,11 +358,18 @@ export async function splitTabToWindow(tabId: number): Promise<void> {
 export async function extractGroupToWindow(groupId: number): Promise<number> {
   const tabs = await chrome.tabs.query({ groupId });
   if (tabs.length === 0) return 0;
+  const groupInfo = (await chrome.tabGroups.query({})).find((g) => g.id === groupId);
   const [first, ...rest] = tabs;
   const newWindow = await chrome.windows.create({ tabId: first.id! });
   if (rest.length > 0) {
     await chrome.tabs.move(rest.map((t) => t.id!), { windowId: newWindow.id!, index: -1 });
-    await chrome.tabs.group({ tabIds: tabs.map((t) => t.id!), groupId });
+  }
+  const newGroupId = await chrome.tabs.group({
+    tabIds: tabs.map((t) => t.id!),
+    createProperties: { windowId: newWindow.id! },
+  });
+  if (groupInfo) {
+    await chrome.tabGroups.update(newGroupId, { title: groupInfo.title, color: groupInfo.color });
   }
   return tabs.length;
 }
