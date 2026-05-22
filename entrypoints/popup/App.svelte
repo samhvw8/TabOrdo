@@ -536,7 +536,7 @@
   }
 </script>
 
-<div class="w-[400px] flex flex-col max-h-[700px] overflow-hidden">
+<div class="w-full h-full flex flex-col overflow-hidden">
   <!-- Search bar — always visible -->
   <div class="flex items-center gap-1.5 px-3 pt-3 pb-2">
     <div class="flex-1 min-w-0">

@@ -20,13 +20,21 @@
   --font-family-sans: "Inter", system-ui, -apple-system, sans-serif;
 }
 
-body {
+html, body {
   margin: 0;
+  width: 400px;
+  height: 600px;
+  overflow: hidden;
   background: var(--color-surface);
   color: var(--color-text);
   font-family: var(--font-family-sans);
   font-size: 13px;
   line-height: 1.4;
+}
+
+#app {
+  height: 100%;
+  overflow: hidden;
 }
 
 ::-webkit-scrollbar {
