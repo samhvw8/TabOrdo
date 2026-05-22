@@ -1,11 +1,12 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { getAllTabs, getCurrentWindowTabs, switchToTab, closeTabs, sortTabsInWindow, sortTabsInGroup, groupTabsByDomain, ungroupAll, removeDuplicates, mergeAllWindows, muteTab, splitTabToWindow, extractGroupToWindow, discardTabs, closeTabsToLeft, closeTabsToRight, closeTabsSameSite, closeOldTabs, type TabInfo } from "../../lib/tabs.ts";
+  import { getAllTabs, getCurrentWindowTabs, switchToTab, closeTabs, sortTabsInWindow, sortTabsInGroup, groupTabsByDomain, ungroupAll, removeDuplicates, mergeAllWindows, muteTab, splitTabToWindow, extractGroupToWindow, discardTabs, closeTabsToLeft, closeTabsToRight, closeTabsSameSite, closeOldTabs, shuffleTabs, uniteDomain, isolateDomain, splitWindow, splitByDomain, stackWindows, type TabInfo } from "../../lib/tabs.ts";
   import { archiveTabs, getArchiveCount } from "../../lib/archive.ts";
   import { search, tabsToSearchItems, searchBookmarks, searchHistory, parseCommand, buildSearchHaystack, SEARCH_MODES, type SearchResult, type SearchMode } from "../../lib/search.ts";
-  import { getAutoGroup, setAutoGroup, getUseRules, setUseRules } from "../../lib/rules.ts";
+  import { getAutoGroup, setAutoGroup, getUseRules, setUseRules, getAutoSort, setAutoSort, getAutoPinFollow, setAutoPinFollow, getAutoDiscard, setAutoDiscard } from "../../lib/rules.ts";
   import { matchCommands, ALL_COMMANDS, ACTION_COMMANDS, CATEGORY_STYLES, type CommandDefinition, type CommandCategory } from "../../lib/commands.ts";
   import { snapshotBeforeClose, snapshotBeforeGroup, executeUndo, peekUndo } from "../../lib/undo.ts";
+  import { focusMode, unfocusMode, hasSavedWorkspace, exportTabsToFile, loadTabsFromText } from "../../lib/workspace.ts";
   import SearchInput from "../../components/SearchInput.svelte";
   import ResultList from "../../components/ResultList.svelte";
   import CommandHints from "../../components/CommandHints.svelte";
@@ -25,6 +26,7 @@
 
   let showHelp = $state(false);
   let showRules = $state(false);
+  let showActions = $state(false);
 
   function cycleSearchMode() {
     searchModeIndex = (searchModeIndex + 1) % SEARCH_MODES.length;
@@ -33,9 +35,14 @@
 
   let autoGroupEnabled = $state(false);
   let useRulesEnabled = $state(false);
+  let autoSortEnabled = $state(false);
+  let autoPinFollowEnabled = $state(false);
+  let autoDiscardEnabled = $state(false);
+  let hasWorkspace = $state(false);
   let inputFocused = $state(true);
   let canUndo = $state(false);
   let archiveCount = $state(0);
+  let fileInputEl = $state<HTMLInputElement>(undefined!);
 
   async function handleUndo() {
     const msg = await executeUndo();
@@ -297,8 +304,8 @@
       case "extract": {
         const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
         if (activeTab?.groupId && activeTab.groupId !== -1) {
-          const n = await extractGroupToWindow(activeTab.groupId);
-          statusMessage = `Extracted ${n} tab(s) to new window`;
+          await chrome.windows.create({ tabId: activeTab.id! });
+          statusMessage = "Extracted tab to new window";
           acted = true;
         } else {
           statusMessage = "Active tab is not in a group";
@@ -306,6 +313,45 @@
         }
         break;
       }
+      case "shuffle":
+        await snapshotBeforeGroup(); await shuffleTabs(); statusMessage = "Shuffled tabs"; acted = true; break;
+      case "unite": {
+        const n = await uniteDomain();
+        statusMessage = n > 0 ? `United ${n} tab(s) from other windows` : "No matching tabs in other windows";
+        acted = true; break;
+      }
+      case "isolate": {
+        const n = await isolateDomain();
+        statusMessage = n > 0 ? `Isolated ${n} tab(s) to new window` : "Not enough tabs to isolate";
+        acted = true; break;
+      }
+      case "splitv":
+        await snapshotBeforeGroup(); await splitWindow("vertical"); statusMessage = "Split vertically"; acted = true; break;
+      case "splith":
+        await snapshotBeforeGroup(); await splitWindow("horizontal"); statusMessage = "Split horizontally"; acted = true; break;
+      case "splitdomain": {
+        await snapshotBeforeGroup();
+        const n = await splitByDomain();
+        statusMessage = n > 0 ? `Split into ${n + 1} window(s)` : "Only one domain"; acted = true; break;
+      }
+      case "stack":
+        await stackWindows(); statusMessage = "Stacked windows"; acted = true; break;
+      case "focus": {
+        const n = await focusMode();
+        hasWorkspace = true;
+        statusMessage = `Saved ${n} tab(s), focus mode on`; acted = true; break;
+      }
+      case "unfocus": {
+        const n = await unfocusMode();
+        hasWorkspace = false;
+        statusMessage = n > 0 ? `Restored ${n} tab(s)` : "No saved workspace"; acted = true; break;
+      }
+      case "save":
+        exportTabsToFile(); statusMessage = "Exporting tabs..."; acted = true; break;
+      case "load":
+        fileInputEl?.click(); acted = false; break;
+      case "feedback":
+        await chrome.tabs.create({ url: "https://github.com/nicepkg/TabOrdo/issues" }); statusMessage = "Opening feedback page"; acted = true; break;
       case "discard":
         if (tabIds.length > 0) { await discardTabs(tabIds); statusMessage = `Discarded ${tabIds.length} tab(s)`; acted = true; }
         break;
@@ -370,10 +416,24 @@
     setTimeout(() => { statusMessage = ""; }, 3000);
   }
 
+  async function handleFileLoad(e: Event) {
+    const file = (e.target as HTMLInputElement).files?.[0];
+    if (!file) return;
+    const text = await file.text();
+    const n = await loadTabsFromText(text);
+    statusMessage = n > 0 ? `Loaded ${n} tab(s) into new window` : "No valid URLs found";
+    setTimeout(() => { statusMessage = ""; }, 3000);
+    (e.target as HTMLInputElement).value = "";
+  }
+
   onMount(async () => {
     loadTabs();
     autoGroupEnabled = await getAutoGroup();
     useRulesEnabled = await getUseRules();
+    autoSortEnabled = await getAutoSort();
+    autoPinFollowEnabled = await getAutoPinFollow();
+    autoDiscardEnabled = await getAutoDiscard();
+    hasWorkspace = await hasSavedWorkspace();
     archiveCount = await getArchiveCount();
     const stored = await chrome.storage.local.get("collapsedGroups");
     if (stored.collapsedGroups) collapsedGroups = new Set(stored.collapsedGroups);
@@ -384,7 +444,7 @@
   }
 </script>
 
-<div class="w-[400px] flex flex-col max-h-[560px] overflow-hidden">
+<div class="w-[400px] flex flex-col max-h-[700px] overflow-hidden">
   <!-- Search bar — always visible -->
   <div class="flex items-center gap-1.5 px-3 pt-3 pb-2">
     <div class="flex-1 min-w-0">
@@ -531,6 +591,28 @@
           tooltip="Close all tabs to the right of active tab in current window." onclick={() => dashAction(async () => { const n = await closeTabsToRight(); return n > 0 ? `Closed ${n} right` : "None to close"; })} />
         <ActionButton label="Discard Sel." icon="💤" disabled={selectedTabs.size === 0}
           tooltip="Suspend selected tabs to free memory." onclick={() => dashAction(async () => { await discardTabs([...selectedTabs]); return `Discarded ${selectedTabs.size}`; })} />
+        <ActionButton label="Shuffle" icon="🎲"
+          tooltip="Randomly reorder tabs in current window." onclick={() => dashAction(async () => { await snapshotBeforeGroup(); await shuffleTabs(); return "Shuffled"; })} />
+        <ActionButton label="Unite" icon="🧲"
+          tooltip="Bring same-domain tabs from other windows here." onclick={() => dashAction(async () => { const n = await uniteDomain(); return n > 0 ? `United ${n}` : "None to unite"; })} />
+        <ActionButton label="Isolate" icon="🔬"
+          tooltip="Move same-domain tabs to new window." onclick={() => dashAction(async () => { const n = await isolateDomain(); return n > 0 ? `Isolated ${n}` : "Not enough tabs"; })} />
+        <ActionButton label="Split V" icon="⬜"
+          tooltip="Split window in half vertically, side by side." onclick={() => dashAction(async () => { await snapshotBeforeGroup(); await splitWindow("vertical"); return "Split V"; })} />
+        <ActionButton label="Split Dom." icon="🌐"
+          tooltip="Each domain gets its own window." onclick={() => dashAction(async () => { await snapshotBeforeGroup(); const n = await splitByDomain(); return n > 0 ? `${n + 1} windows` : "One domain"; })} />
+        <ActionButton label="Stack" icon="📚"
+          tooltip="Stack all windows to left side of screen." onclick={() => dashAction(async () => { await stackWindows(); return "Stacked"; })} />
+        <ActionButton label={hasWorkspace ? "Unfocus" : "Focus"} icon={hasWorkspace ? "🔓" : "🎯"}
+          tooltip={hasWorkspace ? "Restore saved workspace." : "Save tabs & start fresh."}
+          onclick={() => dashAction(async () => {
+            if (hasWorkspace) { const n = await unfocusMode(); hasWorkspace = false; return n > 0 ? `Restored ${n}` : "No workspace"; }
+            else { const n = await focusMode(); hasWorkspace = true; return `Saved ${n}, focused`; }
+          })} />
+        <ActionButton label="Save" icon="💾"
+          tooltip="Export current tabs to text file." onclick={() => { exportTabsToFile(); statusMessage = "Exporting..."; setTimeout(() => { statusMessage = ""; }, 2000); }} />
+        <ActionButton label="Load" icon="📂"
+          tooltip="Load tabs from text file into new window." onclick={() => fileInputEl?.click()} />
       </div>
 
       <!-- Toggles -->
@@ -548,12 +630,42 @@
           class="flex items-center gap-1.5 px-2 py-1 rounded-md text-[10px] transition-colors
             {autoGroupEnabled ? 'bg-primary/15 text-primary border border-primary/30' : 'bg-surface-hover text-text-muted border border-border'}"
           onclick={async () => { autoGroupEnabled = !autoGroupEnabled; await setAutoGroup(autoGroupEnabled); }}
-          title="When ON (and Rules is ON), new tabs are automatically grouped by matching rules as they load."
+          title="When ON, new tabs are automatically grouped by domain as they load. Rules take priority if also enabled."
         >
           <span class="w-2 h-2 rounded-full {autoGroupEnabled ? 'bg-primary' : 'bg-border'}"></span>
           Auto
         </button>
+        <button
+          class="flex items-center gap-1.5 px-2 py-1 rounded-md text-[10px] transition-colors
+            {autoSortEnabled ? 'bg-accent-orange/15 text-accent-orange border border-accent-orange/30' : 'bg-surface-hover text-text-muted border border-border'}"
+          onclick={async () => { autoSortEnabled = !autoSortEnabled; await setAutoSort(autoSortEnabled); }}
+          title="Auto-sort tabs by domain when a tab finishes loading."
+        >
+          <span class="w-2 h-2 rounded-full {autoSortEnabled ? 'bg-accent-orange' : 'bg-border'}"></span>
+          Sort
+        </button>
+        <button
+          class="flex items-center gap-1.5 px-2 py-1 rounded-md text-[10px] transition-colors
+            {autoPinFollowEnabled ? 'bg-accent-cyan/15 text-accent-cyan border border-accent-cyan/30' : 'bg-surface-hover text-text-muted border border-border'}"
+          onclick={async () => { autoPinFollowEnabled = !autoPinFollowEnabled; await setAutoPinFollow(autoPinFollowEnabled); }}
+          title="Sync pinned tabs across all windows."
+        >
+          <span class="w-2 h-2 rounded-full {autoPinFollowEnabled ? 'bg-accent-cyan' : 'bg-border'}"></span>
+          Pin
+        </button>
+        <button
+          class="flex items-center gap-1.5 px-2 py-1 rounded-md text-[10px] transition-colors
+            {autoDiscardEnabled ? 'bg-accent-pink/15 text-accent-pink border border-accent-pink/30' : 'bg-surface-hover text-text-muted border border-border'}"
+          onclick={async () => { autoDiscardEnabled = !autoDiscardEnabled; await setAutoDiscard(autoDiscardEnabled); }}
+          title="Auto-discard tabs inactive for 45+ minutes."
+        >
+          <span class="w-2 h-2 rounded-full {autoDiscardEnabled ? 'bg-accent-pink' : 'bg-border'}"></span>
+          Discard
+        </button>
       </div>
+
+      <!-- Hidden file input for Load -->
+      <input type="file" accept=".txt,.json,.csv" class="hidden" bind:this={fileInputEl} onchange={handleFileLoad} />
 
       <!-- Selection + collapse controls -->
       <div class="flex items-center gap-3 px-3 pb-2 text-xs">

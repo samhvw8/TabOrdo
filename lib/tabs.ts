@@ -19,7 +19,7 @@ export interface TabInfo {
   lastAccessed?: number;
 }
 
-const GROUP_COLORS: chrome.tabGroups.ColorEnum[] = [
+export const GROUP_COLORS: chrome.tabGroups.ColorEnum[] = [
   "blue",
   "cyan",
   "green",
@@ -427,7 +427,7 @@ export async function muteTab(tabId: number, muted: boolean): Promise<void> {
   await chrome.tabs.update(tabId, { muted });
 }
 
-function getDomain(url: string): string {
+export function getDomain(url: string): string {
   try {
     return tldtsDomain(url, { allowPrivateDomains: false }) || new URL(url).hostname;
   } catch {
@@ -453,7 +453,123 @@ function normalizeUrl(url: string): string | null {
   }
 }
 
-function hashCode(str: string): number {
+export async function shuffleTabs(): Promise<void> {
+  const tabs = await chrome.tabs.query({ currentWindow: true });
+  const unpinned = tabs.filter((t) => !t.pinned);
+  for (let i = unpinned.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [unpinned[i], unpinned[j]] = [unpinned[j], unpinned[i]];
+  }
+  for (const tab of unpinned) {
+    await chrome.tabs.move(tab.id!, { index: -1 });
+  }
+}
+
+export async function uniteDomain(): Promise<number> {
+  const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!active?.url) return 0;
+  const domain = getDomain(active.url);
+  if (!domain) return 0;
+  const currentWin = await chrome.windows.getCurrent();
+  const allTabs = await chrome.tabs.query({});
+  const toMove = allTabs.filter(
+    (t) => !t.pinned && t.windowId !== currentWin.id && getDomain(t.url || "") === domain
+  );
+  for (const tab of toMove) {
+    await chrome.tabs.move(tab.id!, { windowId: currentWin.id!, index: -1 });
+  }
+  return toMove.length;
+}
+
+export async function isolateDomain(): Promise<number> {
+  const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!active?.url) return 0;
+  const domain = getDomain(active.url);
+  if (!domain) return 0;
+  const tabs = await chrome.tabs.query({ currentWindow: true });
+  const sameDomain = tabs.filter((t) => !t.pinned && getDomain(t.url || "") === domain);
+  if (sameDomain.length < 1) return 0;
+  const [first, ...rest] = sameDomain;
+  const win = await chrome.windows.create({ tabId: first.id! });
+  if (rest.length > 0) {
+    await chrome.tabs.move(rest.map((t) => t.id!), { windowId: win.id!, index: -1 });
+  }
+  return sameDomain.length;
+}
+
+export async function splitWindow(direction: "vertical" | "horizontal"): Promise<void> {
+  const win = await chrome.windows.getCurrent();
+  const tabs = await chrome.tabs.query({ currentWindow: true });
+  const unpinned = tabs.filter((t) => !t.pinned);
+  const mid = Math.ceil(unpinned.length / 2);
+  const rightHalf = unpinned.slice(mid);
+  if (rightHalf.length === 0) return;
+
+  const [first, ...rest] = rightHalf;
+  const newWin = await chrome.windows.create({ tabId: first.id! });
+  if (rest.length > 0) {
+    await chrome.tabs.move(rest.map((t) => t.id!), { windowId: newWin.id!, index: -1 });
+  }
+
+  const w = win.width || 1280;
+  const h = win.height || 800;
+  const l = win.left || 0;
+  const t = win.top || 0;
+
+  if (direction === "vertical") {
+    await chrome.windows.update(win.id!, { left: l, top: t, width: Math.floor(w / 2), height: h, state: "normal" });
+    await chrome.windows.update(newWin.id!, { left: l + Math.floor(w / 2), top: t, width: Math.floor(w / 2), height: h, state: "normal" });
+  } else {
+    await chrome.windows.update(win.id!, { left: l, top: t, width: w, height: Math.floor(h / 2), state: "normal" });
+    await chrome.windows.update(newWin.id!, { left: l, top: t + Math.floor(h / 2), width: w, height: Math.floor(h / 2), state: "normal" });
+  }
+}
+
+export async function splitByDomain(): Promise<number> {
+  const tabs = await chrome.tabs.query({ currentWindow: true });
+  const domainMap = new Map<string, chrome.tabs.Tab[]>();
+  for (const tab of tabs.filter((t) => !t.pinned)) {
+    const domain = getDomain(tab.url || "") || "__other__";
+    if (!domainMap.has(domain)) domainMap.set(domain, []);
+    domainMap.get(domain)!.push(tab);
+  }
+
+  const singles: chrome.tabs.Tab[] = [];
+  const groups: chrome.tabs.Tab[][] = [];
+  for (const [, domTabs] of domainMap) {
+    if (domTabs.length === 1) singles.push(domTabs[0]);
+    else groups.push(domTabs);
+  }
+  if (singles.length > 0) groups.push(singles);
+
+  let created = 0;
+  for (let i = 1; i < groups.length; i++) {
+    const [first, ...rest] = groups[i];
+    const win = await chrome.windows.create({ tabId: first.id! });
+    if (rest.length > 0) {
+      await chrome.tabs.move(rest.map((t) => t.id!), { windowId: win.id!, index: -1 });
+    }
+    created++;
+  }
+  return created;
+}
+
+export async function stackWindows(): Promise<void> {
+  const current = await chrome.windows.getCurrent();
+  const wins = await chrome.windows.getAll({ windowTypes: ["normal"] });
+  const screenW = (current.left || 0) + (current.width || 1280);
+  const screenH = current.height || 800;
+  const halfW = Math.floor(screenW / 2);
+  const perH = Math.floor(screenH / Math.max(wins.length, 1));
+
+  for (let i = 0; i < wins.length; i++) {
+    await chrome.windows.update(wins[i].id!, {
+      left: 0, top: i * perH, width: halfW, height: perH, state: "normal",
+    });
+  }
+}
+
+export function hashCode(str: string): number {
   let hash = 0;
   for (let i = 0; i < str.length; i++) {
     hash = ((hash << 5) - hash + str.charCodeAt(i)) | 0;

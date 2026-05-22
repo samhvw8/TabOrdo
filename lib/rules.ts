@@ -11,6 +11,9 @@ export interface RulesConfig {
   rules: GroupRule[];
   autoGroup: boolean;
   useRules: boolean;
+  autoSort: boolean;
+  autoPinFollow: boolean;
+  autoDiscard: boolean;
 }
 
 const STORAGE_KEY = "groupRules";
@@ -19,7 +22,7 @@ const CONFIG_KEY = "rulesConfig";
 export async function getConfig(): Promise<RulesConfig> {
   const data = await chrome.storage.local.get(CONFIG_KEY);
   if (data[CONFIG_KEY]) return data[CONFIG_KEY];
-  const config: RulesConfig = { rules: [], autoGroup: false, useRules: false };
+  const config: RulesConfig = { rules: [], autoGroup: false, useRules: false, autoSort: false, autoPinFollow: false, autoDiscard: false };
   await saveConfig(config);
   return config;
 }
@@ -58,6 +61,39 @@ export async function getUseRules(): Promise<boolean> {
 export async function setUseRules(enabled: boolean): Promise<void> {
   const config = await getConfig();
   config.useRules = enabled;
+  await saveConfig(config);
+}
+
+export async function getAutoSort(): Promise<boolean> {
+  const config = await getConfig();
+  return config.autoSort ?? false;
+}
+
+export async function setAutoSort(enabled: boolean): Promise<void> {
+  const config = await getConfig();
+  config.autoSort = enabled;
+  await saveConfig(config);
+}
+
+export async function getAutoPinFollow(): Promise<boolean> {
+  const config = await getConfig();
+  return config.autoPinFollow ?? false;
+}
+
+export async function setAutoPinFollow(enabled: boolean): Promise<void> {
+  const config = await getConfig();
+  config.autoPinFollow = enabled;
+  await saveConfig(config);
+}
+
+export async function getAutoDiscard(): Promise<boolean> {
+  const config = await getConfig();
+  return config.autoDiscard ?? false;
+}
+
+export async function setAutoDiscard(enabled: boolean): Promise<void> {
+  const config = await getConfig();
+  config.autoDiscard = enabled;
   await saveConfig(config);
 }
 
