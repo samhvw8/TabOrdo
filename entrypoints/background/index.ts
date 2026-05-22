@@ -68,7 +68,8 @@ export default defineBackground(() => {
     }
 
     // Auto-sort on tab load
-    if (config.autoSort && changeInfo.status === "complete" && !session.bulkOpInProgress) {
+    const freshSession = await chrome.storage.session.get("bulkOpInProgress").catch(() => ({}));
+    if (config.autoSort && changeInfo.status === "complete" && !freshSession.bulkOpInProgress) {
       await sortTabsInWindow(tab.windowId);
     }
 

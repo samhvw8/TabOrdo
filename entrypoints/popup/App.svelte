@@ -70,11 +70,17 @@
   }
 
   async function handleUndo() {
-    const msg = await executeUndo();
-    statusMessage = msg;
-    canUndo = !!peekUndo();
-    await loadTabs();
-    setTimeout(() => { statusMessage = ""; }, 3000);
+    if (busy) return;
+    busy = true;
+    try {
+      const msg = await withBulkLock(() => executeUndo());
+      statusMessage = msg;
+      canUndo = !!peekUndo();
+      await loadTabs();
+      setTimeout(() => { statusMessage = ""; }, 3000);
+    } finally {
+      busy = false;
+    }
   }
   let collapsedGroups = $state<Set<number>>(new Set());
 
@@ -201,6 +207,7 @@
             ...(bookmarkResults.length > 0 ? [{ type: "divider" as const, id: "div-bookmarks", title: "Bookmarks", url: "" }, ...bookmarkResults] : []),
             ...(historyResults.length > 0 ? [{ type: "divider" as const, id: "div-history", title: "History", url: "" }, ...historyResults] : []),
           ];
+          selectedIndex = 0;
         }, 200);
       }
     }
@@ -337,7 +344,7 @@
     busy = true;
 
     try {
-    await chrome.storage.session.set({ bulkOpInProgress: true }).catch(() => {});
+    await withBulkLock(async () => {
     const matchingIndices = searchQuery ? search(searchHaystack, searchQuery, searchMode) : [];
     const matchingTabs = matchingIndices.map((i) => allTabs[i]).filter((t) => t.tabId);
     const tabIds = matchingTabs.map((t) => t.tabId!);
@@ -493,11 +500,11 @@
       await loadTabs();
       setTimeout(() => { statusMessage = ""; }, 3000);
     }
+    });
     } catch (e) {
       statusMessage = `Error: ${e instanceof Error ? e.message : "Action failed"}`;
       setTimeout(() => { statusMessage = ""; }, 5000);
     } finally {
-      await chrome.storage.session.set({ bulkOpInProgress: false }).catch(() => {});
       busy = false;
     }
   }
@@ -508,16 +515,15 @@
   }
 
   async function handleClose(item: SearchResult) {
-    if (item.tabId) {
-      await snapshotBeforeClose([item.tabId]);
-      await closeTabs([item.tabId]);
-      canUndo = true;
-      results = results.filter((r) => r.id !== item.id);
-      allTabs = allTabs.filter((t) => t.id !== item.id);
-      searchHaystack = buildSearchHaystack(allTabs);
-      dashboardTabs = dashboardTabs.filter((t) => t.id !== item.tabId);
-      await loadTabs();
-    }
+    if (busy || !item.tabId) return;
+    await snapshotBeforeClose([item.tabId]);
+    await closeTabs([item.tabId]);
+    canUndo = true;
+    results = results.filter((r) => r.id !== item.id);
+    allTabs = allTabs.filter((t) => t.id !== item.id);
+    searchHaystack = buildSearchHaystack(allTabs);
+    dashboardTabs = dashboardTabs.filter((t) => t.id !== item.tabId);
+    await loadTabs();
   }
 
   function handleCommandSelect(cmd: CommandDefinition) {
@@ -828,7 +834,7 @@
         {/if}
         <div class="flex-1"></div>
         <button
-          onmousedown={(e) => { e.preventDefault(); const all = new Set<number>(); windows.forEach(w => { w.groups.forEach((_, k) => all.add(k)); all.add(-w.windowId); }); setCollapsed(all); }}
+          onmousedown={(e) => { e.preventDefault(); const all = new Set<number>(); windows.forEach(w => { w.groups.forEach((_, k) => all.add(k)); all.add(-(w.windowId + 100000)); }); setCollapsed(all); }}
           class="text-text-muted hover:text-text transition-colors">Fold</button>
         <button
           onmousedown={(e) => { e.preventDefault(); setCollapsed(new Set()); }}
@@ -887,7 +893,7 @@
                 {#each group.tabs as tab}
                   <TabCard {tab} selected={selectedTabs.has(tab.id)}
                     ontoggle={() => toggleSelect(tab.id)}
-                    onclose={() => dashAction(async () => { await closeTabs([tab.id]); })}
+                    onclose={() => dashAction(async () => { await snapshotBeforeClose([tab.id]); await closeTabs([tab.id]); })}
                     onmute={() => loadTabs()} />
                 {/each}
               </div>
@@ -917,7 +923,7 @@
                 {#each w.ungrouped as tab}
                   <TabCard {tab} selected={selectedTabs.has(tab.id)}
                     ontoggle={() => toggleSelect(tab.id)}
-                    onclose={() => dashAction(async () => { await closeTabs([tab.id]); })}
+                    onclose={() => dashAction(async () => { await snapshotBeforeClose([tab.id]); await closeTabs([tab.id]); })}
                     onmute={() => loadTabs()} />
                 {/each}
               </div>
@@ -940,7 +946,7 @@
         >📦 {archiveCount}</button>
       {/if}
     </span>
-    <span class="text-accent-green" aria-live="polite">{statusMessage}</span>
+    <span class="{statusMessage.startsWith('Error:') ? 'text-accent-red' : 'text-accent-green'}" aria-live="polite">{statusMessage}</span>
     {#if canUndo}
       <button
         class="px-1.5 py-0.5 rounded bg-accent-orange/10 text-accent-orange hover:bg-accent-orange/20 text-[10px] font-medium transition-colors"

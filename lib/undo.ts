@@ -23,7 +23,7 @@ const stack: UndoEntry[] = [];
 const MAX_STACK = 20;
 
 function persistStack() {
-  chrome.storage.session?.set({ [UNDO_KEY]: stack }).catch(() => {});
+  chrome.storage.session?.set({ [UNDO_KEY]: [...stack] }).catch(() => {});
 }
 
 export async function loadUndoStack(): Promise<void> {
@@ -124,11 +124,6 @@ export async function executeUndo(): Promise<string> {
       const currentIds = new Set(currentTabs.map((t) => t.id));
 
       const grouped = assignments.filter((a) => a.groupId !== -1 && currentIds.has(a.tabId));
-      const ungroupedIds = assignments.filter((a) => a.groupId === -1 && currentIds.has(a.tabId)).map((a) => a.tabId);
-
-      if (ungroupedIds.length > 0) {
-        await chrome.tabs.ungroup(ungroupedIds);
-      }
 
       const byGroup = new Map<string, { title: string; color: string; tabIds: number[] }>();
       for (const a of grouped) {
@@ -139,7 +134,7 @@ export async function executeUndo(): Promise<string> {
 
       const allCurrentGrouped = currentTabs.filter((t) => t.groupId !== -1);
       if (allCurrentGrouped.length > 0) {
-        await chrome.tabs.ungroup(allCurrentGrouped.map((t) => t.id!));
+        await chrome.tabs.ungroup(allCurrentGrouped.map((t) => t.id!)).catch(() => {});
       }
 
       for (const [, info] of byGroup) {

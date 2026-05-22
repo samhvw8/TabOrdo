@@ -88,7 +88,7 @@ function prefixSearch(haystack: string[], needle: string, limit: number): number
 }
 
 function regexSearch(haystack: string[], needle: string, limit: number): number[] {
-  if (needle.length > 200) return [];
+  if (needle.length > 100) return [];
   let re: RegExp;
   try {
     re = new RegExp(needle, "i");
@@ -96,10 +96,10 @@ function regexSearch(haystack: string[], needle: string, limit: number): number[
     return [];
   }
   const results: number[] = [];
-  const deadline = Date.now() + 100;
+  const deadline = Date.now() + 50;
   for (let i = 0; i < haystack.length && results.length < limit; i++) {
     if (re.test(haystack[i])) results.push(i);
-    if (i % 10 === 0 && Date.now() > deadline) break;
+    if (Date.now() > deadline) break;
   }
   return results;
 }
