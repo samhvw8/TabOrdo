@@ -579,6 +579,7 @@
   }
 
   onMount(async () => {
+    await chrome.storage.session.set({ bulkOpInProgress: false }).catch(() => {});
     await loadTabs();
     await loadUndoStack();
     canUndo = !!peekUndo();
