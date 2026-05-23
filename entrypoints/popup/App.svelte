@@ -261,10 +261,25 @@
           const suspendedTabs = allTabs.filter((t) => t.discarded);
 
           if (searchQuery) {
-            const all = [...new Map([...audioTabs, ...mutedTabs, ...dupTabs, ...recentTabs, ...suspendedTabs].map((t) => [t.id, t])).values()];
-            const hay = buildSearchHaystack(all);
-            const indices = search(hay, searchQuery, searchMode);
-            results = indices.map((i) => all[i]);
+            const categories: { id: string; title: string; tabs: SearchResult[] }[] = [
+              { id: "div-triage-audio", title: "Playing Audio", tabs: audioTabs },
+              { id: "div-triage-muted", title: "Muted", tabs: mutedTabs },
+              { id: "div-triage-dupes", title: "Duplicates", tabs: dupTabs },
+              { id: "div-triage-recent", title: "Recently Active", tabs: recentTabs },
+              { id: "div-triage-suspended", title: "Suspended", tabs: suspendedTabs },
+            ];
+            for (const cat of categories) {
+              if (cat.tabs.length === 0) continue;
+              const hay = buildSearchHaystack(cat.tabs);
+              const indices = search(hay, searchQuery, searchMode);
+              const matched = indices.map((i) => cat.tabs[i]);
+              if (matched.length > 0) {
+                triageResults.push({ type: "divider", id: cat.id, title: `${cat.title} (${matched.length})`, url: "" });
+                triageResults.push(...matched);
+              }
+            }
+            results = triageResults;
+            if (triageResults.length === 0) statusMessage = "No triage matches";
           } else {
             if (audioTabs.length > 0) { triageResults.push({ type: "divider", id: "div-triage-audio", title: `Playing Audio (${audioTabs.length})`, url: "" }); triageResults.push(...audioTabs); }
             if (mutedTabs.length > 0) { triageResults.push({ type: "divider", id: "div-triage-muted", title: `Muted (${mutedTabs.length})`, url: "" }); triageResults.push(...mutedTabs); }
