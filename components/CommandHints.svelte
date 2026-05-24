@@ -12,6 +12,15 @@
   } = $props();
 
   const categories: CommandCategory[] = ["search", "action", "view"];
+
+  function scrollIntoView(node: HTMLElement, active: boolean) {
+    if (active) node.scrollIntoView({ block: "nearest" });
+    return {
+      update(active: boolean) {
+        if (active) node.scrollIntoView({ block: "nearest" });
+      },
+    };
+  }
 </script>
 
 <div class="flex-1 overflow-y-auto px-1 py-1 min-h-0">
@@ -27,6 +36,7 @@
       {#each catCommands as cmd}
         {@const globalIdx = commands.indexOf(cmd)}
         <button
+          use:scrollIntoView={globalIdx === selectedIndex}
           class="w-full flex items-center gap-3 px-2 py-1.5 rounded-md text-left transition-colors
             {globalIdx === selectedIndex ? 'bg-surface-active' : 'hover:bg-surface-hover'}"
           onclick={() => onselect(cmd)}

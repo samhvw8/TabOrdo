@@ -321,6 +321,13 @@
           else results = suspended;
           break;
         }
+        case "@u": {
+          const ungrouped = allTabs.filter((t) => !t.groupId || t.groupId === -1);
+          if (searchQuery) { const hay = buildSearchHaystack(ungrouped); const indices = search(hay, searchQuery, searchMode); results = indices.map((i) => ungrouped[i]); }
+          else results = ungrouped;
+          if (ungrouped.length === 0) statusMessage = "All tabs are grouped";
+          break;
+        }
         default:
           if (ACTION_PREFIXES.has(prefix)) {
             const indices = searchQuery ? search(searchHaystack, searchQuery, searchMode) : [];
@@ -408,6 +415,15 @@
           const gid = await chrome.tabs.group({ tabIds });
           await chrome.tabGroups.update(gid, { title: searchQuery || "Grouped" });
           statusMessage = `Grouped ${tabIds.length} tab(s)`; await loadTabs(); acted = true;
+        }
+        break;
+      case "ungroup":
+        if (tabIds.length > 0) {
+          await snapshotBeforeGroup();
+          await chrome.tabs.ungroup(tabIds);
+          statusMessage = `Ungrouped ${tabIds.length} tab(s)`; await loadTabs(); acted = true;
+        } else if (!searchQuery) {
+          await snapshotBeforeGroup(); await ungroupAll(); statusMessage = "Ungrouped all tabs"; await loadTabs(); acted = true;
         }
         break;
       case "merge":

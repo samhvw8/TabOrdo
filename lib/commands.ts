@@ -52,6 +52,7 @@ export const ACTION_COMMANDS: CommandDefinition[] = [
   { prefix: "discard", label: "/discard", description: "Discard matching tabs", category: "action", color: "text-accent-pink" },
   { prefix: "reload", label: "/reload", description: "Reload matching tabs", category: "action", color: "text-accent-green" },
   { prefix: "vol", label: "/vol", description: "Set volume (0-100) for matching tabs", category: "action", color: "text-accent-purple" },
+  { prefix: "ungroup", label: "/ungroup", description: "Ungroup matching tabs", category: "action", color: "text-accent-orange" },
 ];
 
 export const VIEW_COMMANDS: CommandDefinition[] = [
@@ -64,6 +65,7 @@ export const TRIAGE_COMMANDS: CommandDefinition[] = [
   { prefix: "@d", label: "@d", description: "Duplicate tabs", category: "view", color: "text-accent-orange" },
   { prefix: "@r", label: "@r", description: "Recently active tabs", category: "view", color: "text-accent-blue" },
   { prefix: "@s", label: "@s", description: "Suspended tabs", category: "view", color: "text-accent-pink" },
+  { prefix: "@u", label: "@u", description: "Ungrouped tabs", category: "view", color: "text-accent-orange" },
 ];
 
 export const ALL_COMMANDS = [...SEARCH_COMMANDS, ...ACTION_COMMANDS, ...VIEW_COMMANDS];
