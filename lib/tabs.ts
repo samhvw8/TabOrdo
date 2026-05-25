@@ -599,6 +599,96 @@ export async function stackWindows(): Promise<void> {
   }
 }
 
+export async function collapseAllGroups(): Promise<number> {
+  const allGroups = await chrome.tabGroups.query({});
+  await Promise.all(allGroups.map((g) => chrome.tabGroups.update(g.id, { collapsed: true })));
+  return allGroups.length;
+}
+
+function parsePosition(pos: string): "first" | "last" | number | null {
+  const trimmed = pos.trim();
+  if (trimmed === "^") return "first";
+  if (trimmed === "$") return "last";
+  const n = parseInt(trimmed, 10);
+  if (!isNaN(n) && n >= 1) return n;
+  return null;
+}
+
+export async function moveCurrentTab(posStr: string): Promise<string> {
+  const position = parsePosition(posStr);
+  if (position === null) return "Usage: /move ^|$|<number>";
+
+  const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!active?.id) return "No active tab";
+
+  const tabs = await chrome.tabs.query({ currentWindow: true });
+  const pinnedCount = tabs.filter((t) => t.pinned).length;
+
+  if (active.groupId !== -1) {
+    const groupTabs = tabs.filter((t) => t.groupId === active.groupId).sort((a, b) => a.index - b.index);
+    if (groupTabs.length === 0) return "No group tabs found";
+    const minIdx = groupTabs[0].index;
+    const maxIdx = groupTabs[groupTabs.length - 1].index;
+    let targetIndex: number;
+    if (position === "first") targetIndex = minIdx;
+    else if (position === "last") targetIndex = maxIdx;
+    else targetIndex = Math.min(minIdx + position - 1, maxIdx);
+    await chrome.tabs.move(active.id, { index: targetIndex });
+    return `Moved to position ${position === "first" ? "first" : position === "last" ? "last" : position} in group`;
+  } else {
+    const ungrouped = tabs.filter((t) => !t.pinned && t.groupId === -1).sort((a, b) => a.index - b.index);
+    if (ungrouped.length === 0) return "No ungrouped tabs";
+    let targetIndex: number;
+    if (position === "first") targetIndex = pinnedCount;
+    else if (position === "last") targetIndex = -1;
+    else targetIndex = Math.min(pinnedCount + position - 1, tabs.length - 1);
+    await chrome.tabs.move(active.id, { index: targetIndex });
+    return `Moved tab to position ${position === "first" ? "first" : position === "last" ? "last" : position}`;
+  }
+}
+
+export async function moveGroup(posStr: string): Promise<string> {
+  const position = parsePosition(posStr);
+  if (position === null) return "Usage: /movegroup ^|$|<number>";
+
+  const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!active || active.groupId === -1) return "Active tab is not in a group";
+
+  const groupId = active.groupId;
+  const tabs = await chrome.tabs.query({ currentWindow: true });
+  const pinnedCount = tabs.filter((t) => t.pinned).length;
+  const groupTabs = tabs.filter((t) => t.groupId === groupId).sort((a, b) => a.index - b.index);
+  const groupTabIds = groupTabs.map((t) => t.id!);
+
+  let targetIndex: number;
+  if (position === "first") targetIndex = pinnedCount;
+  else if (position === "last") targetIndex = -1;
+  else {
+    const groups = await chrome.tabGroups.query({ windowId: active.windowId });
+    const nonPinnedStart = pinnedCount;
+    const maxGroups = groups.length;
+    const groupPos = Math.min(position, maxGroups);
+    const sortedTabs = tabs.filter((t) => !t.pinned).sort((a, b) => a.index - b.index);
+    let currentGroupIdx = 0;
+    targetIndex = nonPinnedStart;
+    let lastGroupId = -1;
+    for (const t of sortedTabs) {
+      if (t.groupId !== -1 && t.groupId !== lastGroupId && t.groupId !== groupId) {
+        currentGroupIdx++;
+        if (currentGroupIdx >= groupPos) break;
+        lastGroupId = t.groupId;
+      } else if (t.groupId === -1 && lastGroupId !== -1) {
+        lastGroupId = -1;
+      }
+      if (t.groupId !== groupId) targetIndex = t.index + 1;
+    }
+  }
+
+  await chrome.tabs.move(groupTabIds, { index: targetIndex });
+  await chrome.tabs.group({ tabIds: groupTabIds, groupId });
+  return `Moved group to position ${position === "first" ? "first" : position === "last" ? "last" : position}`;
+}
+
 export function hashCode(str: string): number {
   let hash = 0;
   for (let i = 0; i < str.length; i++) {

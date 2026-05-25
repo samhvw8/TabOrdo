@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { getAllTabs, getCurrentWindowTabs, switchToTab, closeTabs, sortTabsInWindow, sortTabsInGroup, groupTabsByDomain, ungroupAll, removeDuplicates, mergeAllWindows, muteTab, setTabVolume, splitTabToWindow, extractGroupToWindow, discardTabs, closeTabsToLeft, closeTabsToRight, closeTabsSameSite, closeOldTabs, shuffleTabs, uniteDomain, isolateDomain, splitWindow, splitByDomain, stackWindows, type TabInfo } from "../../lib/tabs.ts";
+  import { getAllTabs, getCurrentWindowTabs, switchToTab, closeTabs, sortTabsInWindow, sortTabsInGroup, groupTabsByDomain, ungroupAll, removeDuplicates, mergeAllWindows, muteTab, setTabVolume, splitTabToWindow, extractGroupToWindow, discardTabs, closeTabsToLeft, closeTabsToRight, closeTabsSameSite, closeOldTabs, shuffleTabs, uniteDomain, isolateDomain, splitWindow, splitByDomain, stackWindows, collapseAllGroups, moveCurrentTab, moveGroup, type TabInfo } from "../../lib/tabs.ts";
   import { archiveTabs, getArchiveCount } from "../../lib/archive.ts";
   import { search, tabsToSearchItems, searchBookmarks, searchHistory, parseCommand, buildSearchHaystack, SEARCH_MODES, type SearchResult, type SearchMode } from "../../lib/search.ts";
   import { getAutoGroup, setAutoGroup, getUseRules, setUseRules, getAutoSort, setAutoSort, getAutoPinFollow, setAutoPinFollow, getAutoDiscard, setAutoDiscard } from "../../lib/rules.ts";
@@ -522,6 +522,24 @@
           statusMessage = "Usage: /vol 50 [search]";
           acted = true;
         }
+        break;
+      }
+      case "collapse": {
+        const n = await collapseAllGroups();
+        statusMessage = n > 0 ? `Collapsed ${n} group(s)` : "No groups to collapse";
+        acted = true;
+        break;
+      }
+      case "move": {
+        const msg = await moveCurrentTab(searchQuery);
+        statusMessage = msg;
+        acted = true;
+        break;
+      }
+      case "movegroup": {
+        const msg = await moveGroup(searchQuery);
+        statusMessage = msg;
+        acted = true;
         break;
       }
     }

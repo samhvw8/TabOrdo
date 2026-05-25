@@ -53,6 +53,9 @@ export const ACTION_COMMANDS: CommandDefinition[] = [
   { prefix: "reload", label: "/reload", description: "Reload matching tabs", category: "action", color: "text-accent-green" },
   { prefix: "vol", label: "/vol", description: "Set volume (0-100) for matching tabs", category: "action", color: "text-accent-purple" },
   { prefix: "ungroup", label: "/ungroup", description: "Ungroup matching tabs", category: "action", color: "text-accent-orange" },
+  { prefix: "collapse", label: "/collapse", description: "Collapse all tab groups", category: "action", color: "text-accent-purple" },
+  { prefix: "move", label: "/move", description: "Move tab to position (^ $ or number)", category: "action", color: "text-accent-cyan" },
+  { prefix: "movegroup", label: "/movegroup", description: "Move group to position (^ $ or number)", category: "action", color: "text-accent-cyan" },
 ];
 
 export const VIEW_COMMANDS: CommandDefinition[] = [
