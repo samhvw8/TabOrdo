@@ -14,6 +14,16 @@ async function tryGroupTab(tabId: number, groupId: number, title: string, color:
 }
 
 export default defineBackground(() => {
+  // Track recently created tabs — give other extensions time to group them
+  const recentTabs = new Map<number, number>();
+  chrome.tabs.onCreated.addListener((tab) => {
+    if (tab.id) {
+      recentTabs.set(tab.id, Date.now());
+      setTimeout(() => recentTabs.delete(tab.id!), 2000);
+    }
+  });
+  chrome.tabs.onRemoved.addListener((tabId) => recentTabs.delete(tabId));
+
   // Auto-group and other tab automations
   chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     if (!tab.url) return;
@@ -25,9 +35,14 @@ export default defineBackground(() => {
 
     // Auto-group by domain (or rules if enabled) — trigger on URL change for responsiveness
     const session = await chrome.storage.session.get("bulkOpInProgress").catch(() => ({}));
-    if (isUrlChange && config.autoGroup && !tab.pinned && tab.groupId === -1 && !session.bulkOpInProgress) {
+    if (isUrlChange && config.autoGroup && !tab.pinned && !session.bulkOpInProgress) {
       try {
-        // Re-fetch tab: Chrome may assign opener's group after the URL change event
+        // For recently created tabs, wait so other extensions can group them first
+        const createdAt = recentTabs.get(tabId);
+        if (createdAt) {
+          const elapsed = Date.now() - createdAt;
+          if (elapsed < 300) await new Promise((r) => setTimeout(r, 300 - elapsed));
+        }
         const freshTab = await chrome.tabs.get(tabId).catch(() => null);
         if (freshTab && freshTab.groupId === -1) {
           const url = freshTab.url || tab.url;
