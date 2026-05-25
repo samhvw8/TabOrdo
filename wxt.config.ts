@@ -10,7 +10,7 @@ export default defineConfig({
       transformer: "postcss",
     },
     build: {
-      sourcemap: "inline",
+      sourcemap: process.env.DEV_BUILD === "1" ? "inline" : false,
       minify: false,
     },
   }),
