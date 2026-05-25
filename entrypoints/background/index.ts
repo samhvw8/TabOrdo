@@ -27,36 +27,41 @@ export default defineBackground(() => {
     const session = await chrome.storage.session.get("bulkOpInProgress").catch(() => ({}));
     if (isUrlChange && config.autoGroup && !tab.pinned && tab.groupId === -1 && !session.bulkOpInProgress) {
       try {
-        const hostname = getFullHostname(tab.url);
-        if (hostname && !tab.url.startsWith("chrome://")) {
-          let grouped = false;
-          if (config.useRules) {
-            const rule = matchDomainToRule(hostname, config.rules);
-            if (rule) {
-              const existingGroups = await chrome.tabGroups.query({ windowId: tab.windowId });
-              const match = existingGroups.find((g) => g.title === rule.name);
-              if (match) {
-                await tryGroupTab(tabId, match.id, rule.name, rule.color);
-              } else {
-                const groupId = await chrome.tabs.group({ tabIds: [tabId] }).catch((e) => { console.error("[TabOrdo] rule group create:", e); return null; });
-                if (groupId) await chrome.tabGroups.update(groupId, { title: rule.name, color: rule.color }).catch((e) => console.error("[TabOrdo] rule group update:", e));
+        // Re-fetch tab: Chrome may assign opener's group after the URL change event
+        const freshTab = await chrome.tabs.get(tabId).catch(() => null);
+        if (freshTab && freshTab.groupId === -1) {
+          const url = freshTab.url || tab.url;
+          const hostname = getFullHostname(url);
+          if (hostname && !url.startsWith("chrome://")) {
+            let grouped = false;
+            if (config.useRules) {
+              const rule = matchDomainToRule(hostname, config.rules);
+              if (rule) {
+                const existingGroups = await chrome.tabGroups.query({ windowId: tab.windowId });
+                const match = existingGroups.find((g) => g.title === rule.name);
+                if (match) {
+                  await tryGroupTab(tabId, match.id, rule.name, rule.color);
+                } else {
+                  const groupId = await chrome.tabs.group({ tabIds: [tabId] }).catch((e) => { console.error("[TabOrdo] rule group create:", e); return null; });
+                  if (groupId) await chrome.tabGroups.update(groupId, { title: rule.name, color: rule.color }).catch((e) => console.error("[TabOrdo] rule group update:", e));
+                }
+                grouped = true;
               }
-              grouped = true;
             }
-          }
-          if (!grouped) {
-            const domain = getDomain(tab.url);
-            if (domain) {
-              const existingGroups = await chrome.tabGroups.query({ windowId: tab.windowId });
-              const match = existingGroups.find((g) => g.title === domain);
-              if (match) {
-                await tryGroupTab(tabId, match.id, domain, GROUP_COLORS[Math.abs(hashCode(domain)) % GROUP_COLORS.length]);
-              } else {
-                const windowTabs = await chrome.tabs.query({ windowId: tab.windowId });
-                const sameDomain = windowTabs.filter((t) => t.id !== tabId && t.groupId === -1 && getDomain(t.url || "") === domain);
-                if (sameDomain.length > 0) {
-                  const groupId = await chrome.tabs.group({ tabIds: [tabId, ...sameDomain.map((t) => t.id!)] }).catch((e) => { console.error("[TabOrdo] domain group create:", e); return null; });
-                  if (groupId) await chrome.tabGroups.update(groupId, { title: domain, color: GROUP_COLORS[Math.abs(hashCode(domain)) % GROUP_COLORS.length] }).catch((e) => console.error("[TabOrdo] domain group update:", e));
+            if (!grouped) {
+              const domain = getDomain(url);
+              if (domain) {
+                const existingGroups = await chrome.tabGroups.query({ windowId: tab.windowId });
+                const match = existingGroups.find((g) => g.title === domain);
+                if (match) {
+                  await tryGroupTab(tabId, match.id, domain, GROUP_COLORS[Math.abs(hashCode(domain)) % GROUP_COLORS.length]);
+                } else {
+                  const windowTabs = await chrome.tabs.query({ windowId: tab.windowId });
+                  const sameDomain = windowTabs.filter((t) => t.id !== tabId && t.groupId === -1 && getDomain(t.url || "") === domain);
+                  if (sameDomain.length > 0) {
+                    const groupId = await chrome.tabs.group({ tabIds: [tabId, ...sameDomain.map((t) => t.id!)] }).catch((e) => { console.error("[TabOrdo] domain group create:", e); return null; });
+                    if (groupId) await chrome.tabGroups.update(groupId, { title: domain, color: GROUP_COLORS[Math.abs(hashCode(domain)) % GROUP_COLORS.length] }).catch((e) => console.error("[TabOrdo] domain group update:", e));
+                  }
                 }
               }
             }
