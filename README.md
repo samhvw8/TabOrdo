@@ -1,0 +1,64 @@
+# TabOrdo
+
+A keyboard-first tab manager for Chrome. Press `Cmd+E` to open a command palette that lets you search, sort, group, deduplicate, and manage your tabs.
+
+## Install
+
+[Chrome Web Store](https://chromewebstore.google.com) (pending review)
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `/b` | Search bookmarks |
+| `/h` | Search history |
+| `/w` | Current window tabs |
+| `/p` | Pinned tabs only |
+| `/g` | Current group tabs |
+| `/sort` | Sort tabs by domain |
+| `/group` | Group matching tabs |
+| `/ungroup` | Ungroup matching tabs |
+| `/dedup` | Remove duplicate tabs |
+| `/merge` | Merge all windows |
+| `/close` | Close matching tabs |
+| `/closeold` | Close tabs older than 7 days |
+| `/archive` | Archive matching tabs |
+| `/focus` | Save tabs and start fresh |
+| `/unfocus` | Restore saved workspace |
+| `/mute` `/unmute` | Control tab audio |
+| `/split` `/splitv` `/splith` | Split tabs to new windows |
+| `/save` `/load` | Export/import tabs as text |
+
+## Triage Views
+
+| Command | Shows |
+|---------|-------|
+| `@a` | Tabs playing audio |
+| `@d` | Duplicate tabs |
+| `@m` | Muted tabs |
+| `@r` | Recently active tabs |
+| `@s` | Suspended tabs |
+| `@u` | Ungrouped tabs |
+
+## Development
+
+```bash
+npm install
+npm run dev          # dev mode with hot reload
+npm run build        # production build
+npm run zip          # build + zip for CWS
+npm run check        # svelte type checking
+```
+
+## Tech Stack
+
+| Layer | Tech |
+|-------|------|
+| Framework | WXT (WebExtension Tooling) |
+| UI | Svelte 5, Tailwind CSS 4 |
+| Search | uFuzzy |
+| Build | Vite |
+
+## Privacy
+
+All data stays in your browser. No analytics, no tracking, no external requests. See [PRIVACY.md](PRIVACY.md).
