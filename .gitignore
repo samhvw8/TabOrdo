@@ -5,3 +5,6 @@ dist/
 *.zip
 .DS_Store
 .env.submit
+ss-*.png
+promo-*.png
+cws-*.png
