@@ -24,6 +24,9 @@ export async function pinTab(url: string, groupName: string, position: number): 
     await savePinnedTabs(pins);
     return existing;
   }
+  for (const p of pins) {
+    if (p.groupName === groupName && p.position >= position) p.position++;
+  }
   const entry: PinnedTabEntry = { id: crypto.randomUUID(), url, groupName, position };
   pins.push(entry);
   await savePinnedTabs(pins);
@@ -118,6 +121,9 @@ export async function pinGroup(groupTitle: string, position: number): Promise<Pi
     existing.position = position;
     await savePinnedGroups(pins);
     return existing;
+  }
+  for (const p of pins) {
+    if (p.position >= position) p.position++;
   }
   const entry: PinnedGroupEntry = { id: crypto.randomUUID(), groupTitle, position };
   pins.push(entry);
