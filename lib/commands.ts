@@ -56,6 +56,8 @@ export const ACTION_COMMANDS: CommandDefinition[] = [
   { prefix: "collapse", label: "/collapse", description: "Collapse all tab groups", category: "action", color: "text-accent-purple" },
   { prefix: "move", label: "/move", description: "Move tab to position (^ $ or number)", category: "action", color: "text-accent-cyan" },
   { prefix: "movegroup", label: "/movegroup", description: "Move group to position (^ $ or number)", category: "action", color: "text-accent-cyan" },
+  { prefix: "pin", label: "/pin", description: "Pin tab at position in group (^ $ or number)", category: "action", color: "text-accent-yellow" },
+  { prefix: "unpin", label: "/unpin", description: "Unpin tab from fixed position in group", category: "action", color: "text-accent-yellow" },
 ];
 
 export const VIEW_COMMANDS: CommandDefinition[] = [

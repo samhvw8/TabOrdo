@@ -5,12 +5,14 @@
   let {
     tab,
     selected = false,
+    positionPinned = false,
     ontoggle,
     onclose,
     onmute,
   }: {
     tab: TabInfo;
     selected: boolean;
+    positionPinned?: boolean;
     ontoggle: () => void;
     onclose: () => void;
     onmute?: () => void;
@@ -62,6 +64,9 @@
     <div class="flex items-center gap-1 min-w-0">
       {#if tab.pinned}
         <span class="text-[10px]">📌</span>
+      {/if}
+      {#if positionPinned}
+        <span class="text-[10px] text-accent-yellow" title="Pinned to position in group">⊙</span>
       {/if}
       {#if tab.audible && !tab.mutedInfo?.muted}
         <span class="text-[10px]">🔊</span>

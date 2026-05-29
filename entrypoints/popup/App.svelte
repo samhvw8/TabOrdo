@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { getAllTabs, getCurrentWindowTabs, switchToTab, closeTabs, sortTabsInWindow, sortTabsInGroup, groupTabsByDomain, ungroupAll, removeDuplicates, mergeAllWindows, muteTab, setTabVolume, splitTabToWindow, extractGroupToWindow, discardTabs, closeTabsToLeft, closeTabsToRight, closeTabsSameSite, closeOldTabs, shuffleTabs, uniteDomain, isolateDomain, splitWindow, splitByDomain, stackWindows, collapseAllGroups, moveCurrentTab, moveGroup, type TabInfo } from "../../lib/tabs.ts";
+  import { getAllTabs, getCurrentWindowTabs, switchToTab, closeTabs, sortTabsInWindow, sortTabsInGroup, groupTabsByDomain, ungroupAll, removeDuplicates, mergeAllWindows, muteTab, setTabVolume, splitTabToWindow, extractGroupToWindow, discardTabs, closeTabsToLeft, closeTabsToRight, closeTabsSameSite, closeOldTabs, shuffleTabs, uniteDomain, isolateDomain, splitWindow, splitByDomain, stackWindows, collapseAllGroups, moveCurrentTab, moveGroup, pinCurrentTab, unpinCurrentTab, type TabInfo } from "../../lib/tabs.ts";
+  import { getPinnedTabs, getPinForTab, type PinnedTabEntry } from "../../lib/pin.ts";
   import { archiveTabs, getArchiveCount } from "../../lib/archive.ts";
   import { search, tabsToSearchItems, searchBookmarks, searchHistory, parseCommand, buildSearchHaystack, SEARCH_MODES, type SearchResult, type SearchMode } from "../../lib/search.ts";
   import { getAutoGroup, setAutoGroup, getUseRules, setUseRules, getAutoSort, setAutoSort, getAutoPinFollow, setAutoPinFollow, getAutoDiscard, setAutoDiscard } from "../../lib/rules.ts";
@@ -42,6 +43,7 @@
   let inputFocused = $state(true);
   let canUndo = $state(false);
   let archiveCount = $state(0);
+  let pinnedTabs = $state<PinnedTabEntry[]>([]);
   let fileInputEl = $state<HTMLInputElement | undefined>(undefined);
   let busy = $state(false);
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
@@ -133,6 +135,7 @@
     const tabs = await getAllTabs();
     const win = await chrome.windows.getCurrent();
     currentWindowId = win.id!;
+    pinnedTabs = await getPinnedTabs();
 
     allTabs = tabsToSearchItems(tabs);
     searchHaystack = buildSearchHaystack(allTabs);
@@ -542,6 +545,18 @@
         acted = true;
         break;
       }
+      case "pin": {
+        const msg = await pinCurrentTab(searchQuery);
+        statusMessage = msg;
+        acted = true;
+        break;
+      }
+      case "unpin": {
+        const msg = await unpinCurrentTab();
+        statusMessage = msg;
+        acted = true;
+        break;
+      }
     }
     if (acted) {
       query = "";
@@ -942,6 +957,7 @@
               <div class="p-1 grid gap-0.5">
                 {#each group.tabs as tab}
                   <TabCard {tab} selected={selectedTabs.has(tab.id)}
+                    positionPinned={!!getPinForTab(tab.url, group.title, pinnedTabs)}
                     ontoggle={() => toggleSelect(tab.id)}
                     onclose={() => dashAction(async () => { await snapshotBeforeClose([tab.id]); await closeTabs([tab.id]); })}
                     onmute={() => loadTabs()} />
