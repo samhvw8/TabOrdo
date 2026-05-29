@@ -1,7 +1,7 @@
 import { getDomain as tldtsDomain } from "tldts";
 import { getRules, getUseRules, matchDomainToRule } from "./rules.ts";
 import { snapshotClosedTabs } from "./undo.ts";
-import { pinTab, unpinTab, applyPinsToGroup, applyAllPins, pinGroup, unpinGroup, applyGroupPinsToWindow } from "./pin.ts";
+import { pinTab, unpinTab, applyPinsToGroup, applyAllPins, pinGroup, unpinGroup, applyGroupPinsToWindow, applyAllGroupPins } from "./pin.ts";
 
 export interface TabInfo {
   id: number;
@@ -82,6 +82,7 @@ export async function sortTabsInWindow(
   by: "title" | "url" | "domain" = "domain"
 ): Promise<void> {
   await organizeWindow(windowId, by);
+  await applyGroupPinsToWindow(windowId);
 }
 
 export async function sortTabsInGroup(groupId: number): Promise<void> {
@@ -273,6 +274,7 @@ export async function groupTabsByDomain(
     await organizeWindow(win.id!);
   }
   await collapseAllExceptActive();
+  await applyAllGroupPins();
 }
 
 function pickMajorityWindow(tabs: chrome.tabs.Tab[]): number {

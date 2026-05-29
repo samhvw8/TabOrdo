@@ -918,6 +918,19 @@
           class="text-text-muted hover:text-text transition-colors">Unfold</button>
       </div>
 
+      {#if dashboardTabs.some((t) => t.audible && !t.mutedInfo?.muted)}
+        {@const audioTabs = dashboardTabs.filter((t) => t.audible && !t.mutedInfo?.muted)}
+        <button
+          class="mx-3 mb-2 flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-accent-red/30 bg-accent-red/5 hover:bg-accent-red/10 transition-colors w-[calc(100%-1.5rem)] text-left"
+          onclick={() => { query = "@a "; paletteMode = "search"; updateResults(); }}
+          title="Click to view all tabs playing audio"
+        >
+          <span class="text-accent-red text-xs">🔊</span>
+          <span class="text-xs font-medium text-accent-red">{audioTabs.length} playing audio</span>
+          <span class="text-[10px] text-text-muted truncate ml-1">{audioTabs.map((t) => t.title || t.url).join(", ")}</span>
+        </button>
+      {/if}
+
       {#each windows as w, wi}
         {@const winCollapseKey = -(w.windowId + 100000)}
         {@const winCollapsed = collapsedGroups.has(winCollapseKey)}
