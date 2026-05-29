@@ -134,18 +134,30 @@ export async function unpinGroup(groupTitle: string): Promise<boolean> {
   return true;
 }
 
+export function buildGroupOrder(tabs: chrome.tabs.Tab[]): number[] {
+  const seen = new Set<number>();
+  const order: number[] = [];
+  for (const t of [...tabs].filter((t) => !t.pinned).sort((a, b) => a.index - b.index)) {
+    if (t.groupId !== -1 && !seen.has(t.groupId)) {
+      seen.add(t.groupId);
+      order.push(t.groupId);
+    }
+  }
+  return order;
+}
+
 export async function applyGroupPinsToWindow(windowId: number): Promise<number> {
   const pins = await getPinnedGroups();
   if (pins.length === 0) return 0;
 
   let tabs = await chrome.tabs.query({ windowId });
+  const allGroups = await chrome.tabGroups.query({ windowId });
   const pinnedCount = tabs.filter((t) => t.pinned).length;
   let moved = 0;
 
   const sortedPins = [...pins].sort((a, b) => a.position - b.position);
 
   for (const pin of sortedPins) {
-    const allGroups = await chrome.tabGroups.query({ windowId });
     const group = allGroups.find((g) => g.title === pin.groupTitle);
     if (!group) continue;
 
@@ -153,14 +165,7 @@ export async function applyGroupPinsToWindow(windowId: number): Promise<number> 
     if (groupTabIds.length === 0) continue;
 
     const nonPinnedTabs = tabs.filter((t) => !t.pinned).sort((a, b) => a.index - b.index);
-    const seenGroupIds = new Set<number>();
-    const groupOrder: number[] = [];
-    for (const t of nonPinnedTabs) {
-      if (t.groupId !== -1 && !seenGroupIds.has(t.groupId)) {
-        seenGroupIds.add(t.groupId);
-        groupOrder.push(t.groupId);
-      }
-    }
+    const groupOrder = buildGroupOrder(tabs);
 
     const currentPos = groupOrder.indexOf(group.id);
     const targetPos = Math.min(pin.position, groupOrder.length - 1);

@@ -1,7 +1,7 @@
 import { getDomain as tldtsDomain } from "tldts";
 import { getRules, getUseRules, matchDomainToRule } from "./rules.ts";
 import { snapshotClosedTabs } from "./undo.ts";
-import { pinTab, unpinTab, applyPinsToGroup, applyAllPins, pinGroup, unpinGroup, applyGroupPinsToWindow, applyAllGroupPins } from "./pin.ts";
+import { pinTab, unpinTab, applyPinsToGroup, applyAllPins, pinGroup, unpinGroup, applyGroupPinsToWindow, applyAllGroupPins, buildGroupOrder } from "./pin.ts";
 
 export interface TabInfo {
   id: number;
@@ -756,16 +756,7 @@ export async function pinCurrentGroup(posStr: string): Promise<string> {
   if (!group?.title) return "Group has no title";
 
   const tabs = await chrome.tabs.query({ windowId: active.windowId });
-  const nonPinnedTabs = tabs.filter((t) => !t.pinned).sort((a, b) => a.index - b.index);
-
-  const seenGroupIds = new Set<number>();
-  const groupOrder: number[] = [];
-  for (const t of nonPinnedTabs) {
-    if (t.groupId !== -1 && !seenGroupIds.has(t.groupId)) {
-      seenGroupIds.add(t.groupId);
-      groupOrder.push(t.groupId);
-    }
-  }
+  const groupOrder = buildGroupOrder(tabs);
 
   let position: number;
   const trimmed = posStr.trim();
