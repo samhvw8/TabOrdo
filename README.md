@@ -18,8 +18,15 @@ A keyboard-first tab manager for Chrome. Press `Cmd+E` to open a command palette
 | `/sort` | Sort tabs by domain |
 | `/group` | Group matching tabs |
 | `/ungroup` | Ungroup matching tabs |
+| `/collapse` | Collapse all tab groups |
 | `/dedup` | Remove duplicate tabs |
 | `/merge` | Merge all windows |
+| `/move` | Move tab to position (`^` `$` or number) |
+| `/movegroup` | Move group to position (`^` `$` or number) |
+| `/pin` | Pin tab at fixed position in its group (`^` `$` or number) |
+| `/unpin` | Remove tab position pin |
+| `/pingroup` | Pin group at fixed position in window (`^` `$` or number) |
+| `/unpingroup` | Remove group position pin |
 | `/close` | Close matching tabs |
 | `/closeold` | Close tabs older than 7 days |
 | `/archive` | Archive matching tabs |
@@ -28,6 +35,10 @@ A keyboard-first tab manager for Chrome. Press `Cmd+E` to open a command palette
 | `/mute` `/unmute` | Control tab audio |
 | `/split` `/splitv` `/splith` | Split tabs to new windows |
 | `/save` `/load` | Export/import tabs as text |
+
+## Dashboard
+
+The dashboard shows a live 🔊 banner when any tabs are playing audio — click it to jump to `@a` triage. `/pin` and `/pingroup` positions persist across Group+ and Sort operations.
 
 ## Triage Views
 
