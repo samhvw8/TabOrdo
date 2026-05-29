@@ -58,6 +58,8 @@ export const ACTION_COMMANDS: CommandDefinition[] = [
   { prefix: "movegroup", label: "/movegroup", description: "Move group to position (^ $ or number)", category: "action", color: "text-accent-cyan" },
   { prefix: "pin", label: "/pin", description: "Pin tab at position in group (^ $ or number)", category: "action", color: "text-accent-yellow" },
   { prefix: "unpin", label: "/unpin", description: "Unpin tab from fixed position in group", category: "action", color: "text-accent-yellow" },
+  { prefix: "pingroup", label: "/pingroup", description: "Pin group at position in window (^ $ or number)", category: "action", color: "text-accent-yellow" },
+  { prefix: "unpingroup", label: "/unpingroup", description: "Unpin group from fixed position in window", category: "action", color: "text-accent-yellow" },
 ];
 
 export const VIEW_COMMANDS: CommandDefinition[] = [

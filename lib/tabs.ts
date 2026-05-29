@@ -1,7 +1,7 @@
 import { getDomain as tldtsDomain } from "tldts";
 import { getRules, getUseRules, matchDomainToRule } from "./rules.ts";
 import { snapshotClosedTabs } from "./undo.ts";
-import { pinTab, unpinTab, applyPinsToGroup, applyAllPins } from "./pin.ts";
+import { pinTab, unpinTab, applyPinsToGroup, applyAllPins, pinGroup, unpinGroup, applyGroupPinsToWindow } from "./pin.ts";
 
 export interface TabInfo {
   id: number;
@@ -744,4 +744,54 @@ export async function unpinCurrentTab(): Promise<string> {
 
   const removed = await unpinTab(active.url, group.title);
   return removed ? `Unpinned from "${group.title}"` : "Tab was not pinned";
+}
+
+export async function pinCurrentGroup(posStr: string): Promise<string> {
+  const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!active || active.groupId === -1) return "Active tab is not in a group";
+
+  const group = (await chrome.tabGroups.query({})).find((g) => g.id === active.groupId);
+  if (!group?.title) return "Group has no title";
+
+  const tabs = await chrome.tabs.query({ windowId: active.windowId });
+  const nonPinnedTabs = tabs.filter((t) => !t.pinned).sort((a, b) => a.index - b.index);
+
+  const seenGroupIds = new Set<number>();
+  const groupOrder: number[] = [];
+  for (const t of nonPinnedTabs) {
+    if (t.groupId !== -1 && !seenGroupIds.has(t.groupId)) {
+      seenGroupIds.add(t.groupId);
+      groupOrder.push(t.groupId);
+    }
+  }
+
+  let position: number;
+  const trimmed = posStr.trim();
+  if (!trimmed) {
+    const idx = groupOrder.indexOf(active.groupId);
+    position = idx === -1 ? 0 : idx;
+  } else if (trimmed === "^") {
+    position = 0;
+  } else if (trimmed === "$") {
+    position = Math.max(0, groupOrder.length - 1);
+  } else {
+    const n = parseInt(trimmed, 10);
+    if (isNaN(n) || n < 1) return "Usage: /pingroup [^|$|number]";
+    position = Math.min(n - 1, groupOrder.length - 1);
+  }
+
+  await pinGroup(group.title, position);
+  await applyGroupPinsToWindow(active.windowId);
+  return `Pinned group "${group.title}" at position ${position + 1}`;
+}
+
+export async function unpinCurrentGroup(): Promise<string> {
+  const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!active || active.groupId === -1) return "Active tab is not in a group";
+
+  const group = (await chrome.tabGroups.query({})).find((g) => g.id === active.groupId);
+  if (!group?.title) return "Group has no title";
+
+  const removed = await unpinGroup(group.title);
+  return removed ? `Unpinned group "${group.title}"` : "Group was not pinned";
 }
