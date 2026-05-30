@@ -27,7 +27,7 @@ export default defineConfig({
     commands: {
       _execute_action: {
         suggested_key: {
-          default: "Ctrl+E",
+          default: "Ctrl+Shift+E",
           mac: "Command+E",
         },
         description: "Open TabOrdo command palette",
