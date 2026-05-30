@@ -13,34 +13,17 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - run: npm ci
 
       - run: npm run zip
 
-      - name: Upload to Chrome Web Store
-        run: |
-          # Get access token
-          TOKEN=$(curl -s -X POST "https://oauth2.googleapis.com/token" \
-            -d "client_id=${{ secrets.CWS_CLIENT_ID }}" \
-            -d "client_secret=${{ secrets.CWS_CLIENT_SECRET }}" \
-            -d "refresh_token=${{ secrets.CWS_REFRESH_TOKEN }}" \
-            -d "grant_type=refresh_token" | jq -r '.access_token')
-
-          ZIP_FILE=$(ls .output/*.zip | head -1)
-
-          # Upload new version
-          curl -s -X PUT \
-            "https://www.googleapis.com/upload/chromewebstore/v1.1/items/${{ secrets.CWS_EXTENSION_ID }}" \
-            -H "Authorization: Bearer $TOKEN" \
-            -H "x-goog-api-version: 2" \
-            -T "$ZIP_FILE" | jq .
-
-          # Publish
-          curl -s -X POST \
-            "https://www.googleapis.com/chromewebstore/v1.1/items/${{ secrets.CWS_EXTENSION_ID }}/publish" \
-            -H "Authorization: Bearer $TOKEN" \
-            -H "x-goog-api-version: 2" \
-            -H "Content-Length: 0" | jq .
+      - name: Submit to Chrome Web Store
+        run: npx wxt submit --chrome-zip .output/*-chrome.zip
+        env:
+          CHROME_EXTENSION_ID: ${{ secrets.CHROME_EXTENSION_ID }}
+          CHROME_CLIENT_ID: ${{ secrets.CHROME_CLIENT_ID }}
+          CHROME_CLIENT_SECRET: ${{ secrets.CHROME_CLIENT_SECRET }}
+          CHROME_REFRESH_TOKEN: ${{ secrets.CHROME_REFRESH_TOKEN }}
