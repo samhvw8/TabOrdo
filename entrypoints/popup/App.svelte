@@ -426,7 +426,10 @@
           await chrome.tabs.ungroup(tabIds);
           statusMessage = `Ungrouped ${tabIds.length} tab(s)`; await loadTabs(); acted = true;
         } else if (!searchQuery) {
-          await snapshotBeforeGroup(); await ungroupAll(); statusMessage = "Ungrouped all tabs"; await loadTabs(); acted = true;
+          const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+          if (activeTab?.id && activeTab.groupId !== -1) {
+            await snapshotBeforeGroup(); await chrome.tabs.ungroup(activeTab.id); statusMessage = "Ungrouped current tab"; await loadTabs(); acted = true;
+          }
         }
         break;
       case "merge":
@@ -1029,13 +1032,11 @@
   <div class="shrink-0 flex items-center justify-between px-3 py-1.5 border-t border-border text-[11px] text-text-muted">
     <span class="flex items-center gap-2">
       {allTabs.length} tab{allTabs.length !== 1 ? "s" : ""}
-      {#if archiveCount > 0}
-        <button
-          class="text-accent-yellow hover:text-accent-yellow/80 transition-colors"
-          onclick={() => { chrome.tabs.create({ url: chrome.runtime.getURL("/archive.html") }); }}
-          title="Open archive ({archiveCount} saved)"
-        >📦 {archiveCount}</button>
-      {/if}
+      <button
+        class="text-accent-yellow hover:text-accent-yellow/80 transition-colors"
+        onclick={() => { chrome.tabs.create({ url: chrome.runtime.getURL("/archive.html") }); }}
+        title="Open archive ({archiveCount} saved)"
+      >📦{archiveCount > 0 ? ` ${archiveCount}` : ""}</button>
     </span>
     <span class="{statusMessage.startsWith('Error:') ? 'text-accent-red' : 'text-accent-green'}" aria-live="polite">{statusMessage}</span>
     {#if canUndo}
