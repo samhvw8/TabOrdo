@@ -3,7 +3,7 @@
 ## CI/CD
 
 - [x] Publish workflow using `wxt submit` for Chrome Web Store
-- [ ] Set GitHub secrets: `CHROME_EXTENSION_ID`, `CHROME_CLIENT_ID`, `CHROME_CLIENT_SECRET`, `CHROME_REFRESH_TOKEN`
+- [x] Set GitHub secrets: `CWS_EXTENSION_ID`, `CWS_CLIENT_ID`, `CWS_CLIENT_SECRET`, `CWS_REFRESH_TOKEN`
 - [ ] Move GCP OAuth app from testing to production for long-lived refresh tokens
 - [ ] Test `workflow_dispatch` trigger with `--dry-run` first
 
