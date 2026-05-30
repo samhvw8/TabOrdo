@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.1 — 2026-05-30
+
+### New Features
+
+- **Group-name search matching** — search and commands now match tab group titles (e.g. `/archive Work` archives all tabs in the "Work" group)
+- **Archive button in dashboard** — quick access to the archive page from the action grid
+- **Redesigned archive page** — polished full-page layout with sticky header, collapsible date groups, search with group name support, stats bar, and improved empty state
+
 ## 0.2.0 — 2026-05-26
 
 ### New Features

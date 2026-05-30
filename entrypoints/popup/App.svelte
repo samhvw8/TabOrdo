@@ -851,6 +851,8 @@
           tooltip="Export current tabs to text file." onclick={() => { exportTabsToFile(); statusMessage = "Exporting..."; setTimeout(() => { statusMessage = ""; }, 2000); }} />
         <ActionButton label="Load" icon="📂"
           tooltip="Load tabs from text file into new window." onclick={() => fileInputEl?.click()} />
+        <ActionButton label="Archive" icon="📦"
+          tooltip="Open archive page ({archiveCount} saved tabs)." onclick={() => { chrome.tabs.create({ url: chrome.runtime.getURL("/archive.html") }); }} />
       </div>
 
       <!-- Toggles -->

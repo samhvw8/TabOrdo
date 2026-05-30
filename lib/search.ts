@@ -155,9 +155,9 @@ export async function searchHistory(
   }));
 }
 
-export function buildSearchHaystack(items: { title: string; url: string }[]): string[] {
+export function buildSearchHaystack(items: { title: string; url: string; groupTitle?: string }[]): string[] {
   return items.map((t) => {
-    const original = `${t.title} ${t.url}`;
+    const original = `${t.title} ${t.url}${t.groupTitle ? ` ${t.groupTitle}` : ""}`;
     const stripped = stripDiacritics(original);
     return original === stripped ? original : `${original} ${stripped}`;
   });

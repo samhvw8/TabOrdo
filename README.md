@@ -29,7 +29,7 @@ A keyboard-first tab manager for Chrome. Press `Cmd+E` to open a command palette
 | `/unpingroup` | Remove group position pin |
 | `/close` | Close matching tabs |
 | `/closeold` | Close tabs older than 7 days |
-| `/archive` | Archive matching tabs |
+| `/archive` | Archive matching tabs (supports group names) |
 | `/focus` | Save tabs and start fresh |
 | `/unfocus` | Restore saved workspace |
 | `/mute` `/unmute` | Control tab audio |
@@ -38,7 +38,7 @@ A keyboard-first tab manager for Chrome. Press `Cmd+E` to open a command palette
 
 ## Dashboard
 
-The dashboard shows a live 🔊 banner when any tabs are playing audio — click it to jump to `@a` triage. `/pin` and `/pingroup` positions persist across Group+ and Sort operations.
+The dashboard shows a live 🔊 banner when any tabs are playing audio — click it to jump to `@a` triage. `/pin` and `/pingroup` positions persist across Group+ and Sort operations. The **Archive** button opens a full-page archive view with search, date grouping, bulk restore/delete, and group name filtering.
 
 ## Triage Views
 
