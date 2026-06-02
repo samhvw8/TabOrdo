@@ -10,6 +10,7 @@ export interface GroupRule {
 export interface RulesConfig {
   rules: GroupRule[];
   autoGroup: boolean;
+  autoUngroup: boolean;
   useRules: boolean;
   autoSort: boolean;
   autoPinFollow: boolean;
@@ -30,13 +31,14 @@ export async function getConfig(): Promise<RulesConfig> {
         patterns: Array.isArray(r.patterns) ? r.patterns : [],
       })),
       autoGroup: stored.autoGroup ?? false,
+      autoUngroup: stored.autoUngroup ?? false,
       useRules: stored.useRules ?? false,
       autoSort: stored.autoSort ?? false,
       autoPinFollow: stored.autoPinFollow ?? false,
       autoDiscard: stored.autoDiscard ?? false,
     };
   }
-  const config: RulesConfig = { rules: [], autoGroup: false, useRules: false, autoSort: false, autoPinFollow: false, autoDiscard: false };
+  const config: RulesConfig = { rules: [], autoGroup: false, autoUngroup: false, useRules: false, autoSort: false, autoPinFollow: false, autoDiscard: false };
   await saveConfig(config);
   return config;
 }
@@ -65,6 +67,17 @@ export async function getAutoGroup(): Promise<boolean> {
 export async function setAutoGroup(enabled: boolean): Promise<void> {
   const config = await getConfig();
   config.autoGroup = enabled;
+  await saveConfig(config);
+}
+
+export async function getAutoUngroup(): Promise<boolean> {
+  const config = await getConfig();
+  return config.autoUngroup ?? false;
+}
+
+export async function setAutoUngroup(enabled: boolean): Promise<void> {
+  const config = await getConfig();
+  config.autoUngroup = enabled;
   await saveConfig(config);
 }
 

@@ -4,7 +4,7 @@
   import { getPinnedTabs, getPinForTab, type PinnedTabEntry } from "../../lib/pin.ts";
   import { archiveTabs, getArchiveCount } from "../../lib/archive.ts";
   import { search, tabsToSearchItems, searchBookmarks, searchHistory, parseCommand, buildSearchHaystack, SEARCH_MODES, type SearchResult, type SearchMode } from "../../lib/search.ts";
-  import { getAutoGroup, setAutoGroup, getUseRules, setUseRules, getAutoSort, setAutoSort, getAutoPinFollow, setAutoPinFollow, getAutoDiscard, setAutoDiscard } from "../../lib/rules.ts";
+  import { getAutoGroup, setAutoGroup, getAutoUngroup, setAutoUngroup, getUseRules, setUseRules, getAutoSort, setAutoSort, getAutoPinFollow, setAutoPinFollow, getAutoDiscard, setAutoDiscard } from "../../lib/rules.ts";
   import { matchCommands, ALL_COMMANDS, ACTION_COMMANDS, TRIAGE_COMMANDS, CATEGORY_STYLES, type CommandDefinition, type CommandCategory } from "../../lib/commands.ts";
   import { snapshotBeforeClose, snapshotBeforeGroup, executeUndo, peekUndo, loadUndoStack } from "../../lib/undo.ts";
   import { focusMode, unfocusMode, hasSavedWorkspace, exportTabsToFile, loadTabsFromText } from "../../lib/workspace.ts";
@@ -35,6 +35,7 @@
   }
 
   let autoGroupEnabled = $state(false);
+  let autoUngroupEnabled = $state(false);
   let useRulesEnabled = $state(false);
   let autoSortEnabled = $state(false);
   let autoPinFollowEnabled = $state(false);
@@ -666,6 +667,7 @@
     const rc = config.rulesConfig;
     if (rc) {
       autoGroupEnabled = rc.autoGroup ?? false;
+      autoUngroupEnabled = rc.autoUngroup ?? false;
       useRulesEnabled = rc.useRules ?? false;
       autoSortEnabled = rc.autoSort ?? false;
       autoPinFollowEnabled = rc.autoPinFollow ?? false;
@@ -874,6 +876,15 @@
         >
           <span class="w-2 h-2 rounded-full {autoGroupEnabled ? 'bg-primary' : 'bg-border'}"></span>
           Auto
+        </button>
+        <button
+          class="flex items-center gap-1.5 px-2 py-1 rounded-md text-[10px] transition-colors
+            {autoUngroupEnabled ? 'bg-accent-purple/15 text-accent-purple border border-accent-purple/30' : 'bg-surface-hover text-text-muted border border-border'}"
+          onclick={async () => { autoUngroupEnabled = !autoUngroupEnabled; await setAutoUngroup(autoUngroupEnabled); }}
+          title="When ON, groups with only 1 tab are automatically ungrouped."
+        >
+          <span class="w-2 h-2 rounded-full {autoUngroupEnabled ? 'bg-accent-purple' : 'bg-border'}"></span>
+          Ungroup
         </button>
         <button
           class="flex items-center gap-1.5 px-2 py-1 rounded-md text-[10px] transition-colors

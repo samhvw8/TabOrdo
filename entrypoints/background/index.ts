@@ -2,6 +2,47 @@ import { getConfig, matchDomainToRule } from "../../lib/rules.ts";
 import { getFullHostname, getDomain, sortTabsInWindow, GROUP_COLORS, hashCode } from "../../lib/tabs.ts";
 
 let pinSyncInProgress = false;
+const ungroupTimers = new Map<number, ReturnType<typeof setTimeout>>();
+
+function scheduleAutoUngroup(windowId: number): void {
+  const existing = ungroupTimers.get(windowId);
+  if (existing) clearTimeout(existing);
+  ungroupTimers.set(windowId, setTimeout(() => {
+    ungroupTimers.delete(windowId);
+    autoUngroupSingleTabGroups(windowId);
+  }, 150));
+}
+
+async function autoUngroupSingleTabGroups(windowId: number): Promise<void> {
+  try {
+    const session = await chrome.storage.session.get("bulkOpInProgress").catch(() => ({}));
+    if (session.bulkOpInProgress) return;
+    const config = await getConfig();
+    const ruleNames = config.useRules ? new Set(config.rules.map((r) => r.name)) : null;
+    const [allTabs, allGroups] = await Promise.all([
+      chrome.tabs.query({ windowId }),
+      chrome.tabGroups.query({ windowId }),
+    ]);
+    const groupTitleMap = new Map(allGroups.map((g) => [g.id, g.title || ""]));
+    const groupCounts = new Map<number, chrome.tabs.Tab[]>();
+    for (const tab of allTabs) {
+      if (tab.groupId !== -1) {
+        if (!groupCounts.has(tab.groupId)) groupCounts.set(tab.groupId, []);
+        groupCounts.get(tab.groupId)!.push(tab);
+      }
+    }
+    for (const [groupId, tabs] of groupCounts) {
+      if (tabs.length !== 1 || !tabs[0].id) continue;
+      if (ruleNames) {
+        const title = groupTitleMap.get(groupId);
+        if (title && ruleNames.has(title)) continue;
+      }
+      await chrome.tabs.ungroup(tabs[0].id);
+    }
+  } catch (e) {
+    console.error("[TabOrdo] auto-ungroup error:", e);
+  }
+}
 
 async function tryGroupTab(tabId: number, groupId: number, title: string, color: chrome.tabGroups.ColorEnum): Promise<void> {
   try {
@@ -22,7 +63,17 @@ export default defineBackground(() => {
       setTimeout(() => recentTabs.delete(tab.id!), 2000);
     }
   });
-  chrome.tabs.onRemoved.addListener((tabId) => recentTabs.delete(tabId));
+  chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
+    recentTabs.delete(tabId);
+    if (removeInfo.isWindowClosing) return;
+    try {
+      const config = await getConfig();
+      if (!config.autoUngroup) return;
+      scheduleAutoUngroup(removeInfo.windowId);
+    } catch (e) {
+      console.error("[TabOrdo] onRemoved config read:", e);
+    }
+  });
 
   // Auto-group and other tab automations
   chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
@@ -81,6 +132,9 @@ export default defineBackground(() => {
               }
             }
           }
+        }
+        if (config.autoUngroup) {
+          scheduleAutoUngroup(tab.windowId);
         }
       } catch (e) {
         console.error("[TabOrdo] auto-group error:", e);
