@@ -2,7 +2,18 @@
   import { onMount } from "svelte";
   import { getRules, saveRules, getAutoGroup, setAutoGroup, populateFromCurrentGroups, mergeRules, getUseAI, type GroupRule } from "../lib/rules.ts";
   import { getFullHostname } from "../lib/tabs.ts";
-  import { getAIStatus, suggestRulesStreaming, previewMatchingTabs, approveRule, type AIStatus, type TabMatch } from "../lib/ai.ts";
+  import {
+    getAIStatus,
+    suggestRulesStreaming,
+    previewMatchingTabs,
+    approveRule,
+    classifyUngrouped,
+    tuneRule,
+    suggestNameForPatterns,
+    type AIStatus,
+    type TabMatch,
+    type RuleTuneSuggestion,
+  } from "../lib/ai.ts";
 
   let {
     onclose,
@@ -52,6 +63,27 @@
     unsupported: "Not supported",
   };
   const aiReady = $derived(aiStatus === "available" || aiStatus === "downloadable" || aiStatus === "downloading");
+
+  // Classify-ungrouped state
+  interface ClassifyAssignment {
+    tabId: number;
+    ruleId: string;
+    host: string;
+    title: string;
+    favIconUrl?: string;
+  }
+  let classifyLoading = $state(false);
+  let classifyAssignments = $state<ClassifyAssignment[]>([]);
+  let classifyError = $state<string | undefined>(undefined);
+
+  // Tune-rule state
+  let tuningRuleId = $state<string | null>(null);
+  let tuneLoading = $state(false);
+  let tuneResult = $state<RuleTuneSuggestion | null>(null);
+  let tuneError = $state<string | undefined>(undefined);
+
+  // Suggest-name (Add new rule) state
+  let nameLoading = $state(false);
 
   const COLORS: chrome.tabGroups.ColorEnum[] = [
     "blue", "cyan", "green", "yellow", "orange", "pink", "purple", "red", "grey",
@@ -172,6 +204,176 @@
       flash(`Grouped ${tabIds.length} tab${tabIds.length !== 1 ? "s" : ""} into "${d.name}"`);
     } catch (e) {
       flash(`Group failed: ${(e as Error).message}`);
+    }
+  }
+
+  async function aiClassify() {
+    classifyLoading = true;
+    classifyError = undefined;
+    classifyAssignments = [];
+    try {
+      const tabs = await chrome.tabs.query({
+        groupId: chrome.tabGroups.TAB_GROUP_ID_NONE,
+        currentWindow: true,
+      });
+      const ungrouped: { tabId: number; host: string; title: string; favIconUrl?: string }[] = [];
+      for (const t of tabs) {
+        if (!t.id || !t.url) continue;
+        if (t.url.startsWith("chrome://") || t.url.startsWith("chrome-extension://")) continue;
+        const host = getFullHostname(t.url);
+        if (!host) continue;
+        ungrouped.push({ tabId: t.id, host, title: t.title || "", favIconUrl: t.favIconUrl });
+      }
+
+      if (ungrouped.length === 0) {
+        classifyError = "No ungrouped tabs in this window.";
+        return;
+      }
+      const tabMap = new Map(ungrouped.map((t) => [t.tabId, t]));
+      const assignments = await classifyUngrouped(
+        ungrouped.map(({ tabId, host, title }) => ({ tabId, host, title })),
+        rules.map((r) => ({ id: r.id, name: r.name, patterns: r.patterns })),
+      );
+      const out: ClassifyAssignment[] = [];
+      for (const a of assignments) {
+        const t = tabMap.get(a.tabId);
+        if (!t) continue;
+        out.push({ tabId: a.tabId, ruleId: a.ruleId, host: t.host, title: t.title, favIconUrl: t.favIconUrl });
+      }
+      classifyAssignments = out;
+      if (classifyAssignments.length === 0) {
+        classifyError = "AI didn't find confident matches.";
+      }
+    } catch (e) {
+      classifyError = (e as Error).message || "Classify failed.";
+    } finally {
+      classifyLoading = false;
+    }
+  }
+
+  async function aiApplyAssignment(tabId: number): Promise<boolean> {
+    const a = classifyAssignments.find((x) => x.tabId === tabId);
+    if (!a) return false;
+    const rule = rules.find((r) => r.id === a.ruleId);
+    if (!rule) return false;
+    try {
+      const groups = await chrome.tabGroups.query({});
+      const existing = groups.find((g) => g.title === rule.name && g.color === rule.color);
+      if (existing) {
+        await chrome.tabs.group({ tabIds: [tabId], groupId: existing.id });
+      } else {
+        const gid = await chrome.tabs.group({ tabIds: [tabId] });
+        await chrome.tabGroups.update(gid, { title: rule.name, color: rule.color });
+      }
+      if (a.host && !rule.patterns.includes(a.host)) {
+        rules = rules.map((r) =>
+          r.id === rule.id ? { ...r, patterns: [...r.patterns, a.host] } : r,
+        );
+        await save();
+      }
+      classifyAssignments = classifyAssignments.filter((x) => x.tabId !== tabId);
+      return true;
+    } catch (e) {
+      flash(`Apply failed: ${(e as Error).message}`);
+      return false;
+    }
+  }
+
+  async function aiApplyAllAssignments() {
+    const batch = [...classifyAssignments];
+    let ok = 0;
+    for (const a of batch) {
+      if (await aiApplyAssignment(a.tabId)) ok++;
+    }
+    if (ok > 0) flash(`Classified ${ok} tab${ok !== 1 ? "s" : ""}`);
+  }
+
+  function aiSkipAssignment(tabId: number) {
+    classifyAssignments = classifyAssignments.filter((a) => a.tabId !== tabId);
+  }
+
+  async function aiTune(ruleId: string) {
+    const rule = rules.find((r) => r.id === ruleId);
+    if (!rule) return;
+    tuningRuleId = ruleId;
+    tuneLoading = true;
+    tuneResult = null;
+    tuneError = undefined;
+    try {
+      const matches = await previewMatchingTabs(rule.patterns);
+      tuneResult = await tuneRule(
+        { name: rule.name, patterns: rule.patterns },
+        matches.map((m) => ({ host: m.host, title: m.title })),
+      );
+      const empty =
+        !tuneResult.suggestedName &&
+        tuneResult.addPatterns.length === 0 &&
+        tuneResult.removePatterns.length === 0;
+      if (empty) tuneError = "No improvements suggested — rule looks good.";
+    } catch (e) {
+      tuneError = (e as Error).message || "Tune failed.";
+    } finally {
+      tuneLoading = false;
+    }
+  }
+
+  function aiTuneClose() {
+    tuningRuleId = null;
+    tuneResult = null;
+    tuneError = undefined;
+  }
+
+  async function aiTuneApplyName() {
+    if (!tuningRuleId || !tuneResult?.suggestedName) return;
+    await updateName(tuningRuleId, tuneResult.suggestedName);
+    tuneResult = { ...tuneResult, suggestedName: undefined };
+  }
+
+  async function aiTuneAddPattern(pattern: string) {
+    if (!tuningRuleId) return;
+    const rule = rules.find((r) => r.id === tuningRuleId);
+    if (!rule || rule.patterns.includes(pattern)) return;
+    rules = rules.map((r) =>
+      r.id === tuningRuleId ? { ...r, patterns: [...r.patterns, pattern] } : r,
+    );
+    await save();
+    if (tuneResult) {
+      tuneResult = {
+        ...tuneResult,
+        addPatterns: tuneResult.addPatterns.filter((p) => p !== pattern),
+      };
+    }
+  }
+
+  async function aiTuneRemovePattern(pattern: string) {
+    if (!tuningRuleId) return;
+    rules = rules.map((r) =>
+      r.id === tuningRuleId ? { ...r, patterns: r.patterns.filter((p) => p !== pattern) } : r,
+    );
+    await save();
+    if (tuneResult) {
+      tuneResult = {
+        ...tuneResult,
+        removePatterns: tuneResult.removePatterns.filter((p) => p !== pattern),
+      };
+    }
+  }
+
+  async function aiSuggestName() {
+    if (!newPatterns.trim()) return;
+    nameLoading = true;
+    try {
+      const result = await suggestNameForPatterns(parsePatterns(newPatterns));
+      if (result) {
+        newName = result.name;
+        newColor = result.color;
+      } else {
+        flash("Couldn't suggest a name.");
+      }
+    } catch (e) {
+      flash(`Name suggestion failed: ${(e as Error).message}`);
+    } finally {
+      nameLoading = false;
     }
   }
 
@@ -432,6 +634,58 @@
     </div>
   {/if}
 
+  {#if useAI && aiReady && rules.length > 0}
+    <!-- AI: classify ungrouped tabs into existing rules -->
+    <div class="mb-2 p-2 rounded-md bg-surface-hover border border-border">
+      <div class="flex items-center gap-2 mb-1">
+        <span class="text-[11px] font-medium text-text flex-1 truncate">Classify ungrouped tabs</span>
+        <button
+          class="text-[10px] px-2 py-0.5 rounded bg-primary text-white hover:bg-primary-hover transition-colors disabled:opacity-50"
+          onclick={aiClassify}
+          disabled={classifyLoading}
+        >{classifyLoading ? "Thinking…" : (classifyAssignments.length ? "Re-classify" : "Classify")}</button>
+      </div>
+
+      {#if classifyError}
+        <div class="text-[10px] text-accent-red mt-1">{classifyError}</div>
+      {/if}
+
+      {#if classifyAssignments.length > 0}
+        <div class="flex items-center justify-between mt-1.5 mb-1">
+          <span class="text-[10px] text-text-muted">
+            {classifyAssignments.length} suggestion{classifyAssignments.length !== 1 ? "s" : ""}
+          </span>
+          <button class="text-[10px] text-accent-green hover:underline" onclick={aiApplyAllAssignments}>Apply all</button>
+        </div>
+        {#each classifyAssignments as a (a.tabId)}
+          {@const rule = rules.find((r) => r.id === a.ruleId)}
+          {#if rule}
+            <div class="flex items-center gap-1.5 mt-1 px-1.5 py-1 rounded bg-surface text-[10px]">
+              {#if a.favIconUrl}
+                <img src={a.favIconUrl} alt="" class="w-3 h-3 shrink-0" />
+              {:else}
+                <span class="w-3 h-3 shrink-0 rounded-sm bg-border"></span>
+              {/if}
+              <span class="truncate flex-1 text-text">{a.title || a.host}</span>
+              <span class="text-text-muted shrink-0">→</span>
+              <span class="shrink-0 px-1 py-0.5 rounded {colorClasses[rule.color]} text-white text-[9px] font-medium">{rule.name}</span>
+              <button
+                class="text-accent-green hover:underline px-0.5 shrink-0"
+                onclick={() => aiApplyAssignment(a.tabId)}
+                title="Group this tab and add its host to the rule"
+              >Apply</button>
+              <button
+                class="text-accent-red hover:underline px-0.5 shrink-0"
+                onclick={() => aiSkipAssignment(a.tabId)}
+                title="Skip"
+              >Skip</button>
+            </div>
+          {/if}
+        {/each}
+      {/if}
+    </div>
+  {/if}
+
   <!-- Action buttons -->
   <div class="flex gap-1.5 mb-2">
     <button
@@ -491,6 +745,14 @@
           onclick={(e) => { e.stopPropagation(); mergeSource = mergeSource === rule.id ? null : rule.id; }}
           title="Select to merge with another rule"
         >{mergeSource === rule.id ? "Merging..." : "Merge"}</button>
+        {#if useAI && aiReady}
+          <button
+            class="text-[10px] text-accent-purple hover:text-accent-purple/80 transition-colors"
+            onclick={(e) => { e.stopPropagation(); aiTune(rule.id); }}
+            title="AI: suggest name/pattern improvements"
+            disabled={tuneLoading && tuningRuleId === rule.id}
+          >{tuningRuleId === rule.id && tuneLoading ? "…" : "Tune"}</button>
+        {/if}
         <button
           class="text-[10px] text-accent-red hover:text-accent-red/80 transition-colors"
           onclick={(e) => { e.stopPropagation(); removeRule(rule.id); }}
@@ -505,6 +767,57 @@
       />
       {#if mergeSource && mergeSource !== rule.id}
         <div class="text-[9px] text-accent-green mt-1">Click to merge into this rule</div>
+      {/if}
+      {#if tuningRuleId === rule.id}
+        <div class="mt-1.5 p-1.5 rounded border border-accent-purple/30 bg-accent-purple/5" onclick={(e) => e.stopPropagation()} role="presentation">
+          <div class="flex items-center justify-between mb-1">
+            <span class="text-[10px] font-medium text-accent-purple">AI tune</span>
+            <button
+              class="text-[10px] text-text-muted hover:text-text px-0.5"
+              onclick={(e) => { e.stopPropagation(); aiTuneClose(); }}
+              aria-label="Close"
+            >✕</button>
+          </div>
+          {#if tuneLoading}
+            <div class="text-[10px] text-text-muted">Thinking…</div>
+          {:else if tuneError}
+            <div class="text-[10px] text-text-muted">{tuneError}</div>
+          {:else if tuneResult}
+            {#if tuneResult.suggestedName}
+              <div class="flex items-center gap-1.5 text-[10px] mb-1">
+                <span class="text-text-muted">Rename to:</span>
+                <span class="text-text font-medium truncate">{tuneResult.suggestedName}</span>
+                <button class="ml-auto text-accent-green hover:underline shrink-0" onclick={aiTuneApplyName}>Apply</button>
+              </div>
+            {/if}
+            {#if tuneResult.addPatterns.length > 0}
+              <div class="text-[10px] mb-1">
+                <span class="text-text-muted">Add:</span>
+                <span class="inline-flex flex-wrap gap-1 ml-1 align-middle">
+                  {#each tuneResult.addPatterns as p (p)}
+                    <button
+                      class="px-1.5 py-0.5 rounded bg-accent-green/15 text-accent-green hover:bg-accent-green/25 transition-colors"
+                      onclick={() => aiTuneAddPattern(p)}
+                    >+ {p}</button>
+                  {/each}
+                </span>
+              </div>
+            {/if}
+            {#if tuneResult.removePatterns.length > 0}
+              <div class="text-[10px]">
+                <span class="text-text-muted">Remove:</span>
+                <span class="inline-flex flex-wrap gap-1 ml-1 align-middle">
+                  {#each tuneResult.removePatterns as p (p)}
+                    <button
+                      class="px-1.5 py-0.5 rounded bg-accent-red/15 text-accent-red hover:bg-accent-red/25 transition-colors"
+                      onclick={() => aiTuneRemovePattern(p)}
+                    >− {p}</button>
+                  {/each}
+                </span>
+              </div>
+            {/if}
+          {/if}
+        </div>
       {/if}
     </div>
   {/each}
@@ -530,6 +843,15 @@
         placeholder="Group name"
         class="flex-1 bg-transparent border-b border-border text-xs text-text outline-none focus:border-primary px-0.5"
       />
+      {#if useAI && aiReady}
+        <button
+          class="text-[12px] text-accent-purple hover:text-accent-purple/80 transition-colors disabled:opacity-30 shrink-0 px-0.5"
+          onclick={aiSuggestName}
+          disabled={!newPatterns.trim() || nameLoading}
+          title="Suggest name from patterns (AI)"
+          aria-label="Suggest name with AI"
+        >{nameLoading ? "…" : "✨"}</button>
+      {/if}
     </div>
     <div class="flex items-center gap-1.5">
       <input

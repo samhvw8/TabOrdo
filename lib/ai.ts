@@ -268,3 +268,207 @@ export async function approveRule(suggestion: AISuggestedRule): Promise<void> {
     patterns: Array.from(new Set(suggestion.patterns)),
   });
 }
+
+// === Classify ungrouped tabs into existing rules ===
+
+const CLASSIFY_SYSTEM =
+  "You assign browser tabs to existing rule groups. " +
+  "Given a list of rules (id|name|patterns) and a list of tabs (id|host|title), " +
+  "return assignments mapping each tab to the rule it best belongs to. " +
+  "Only assign tabs you are CONFIDENT belong to a rule — skip ambiguous tabs. " +
+  "A tab's host doesn't need to literally match a pattern; what matters is topical fit. " +
+  "Output JSON only.";
+
+const CLASSIFY_SCHEMA = {
+  type: "object",
+  properties: {
+    assignments: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          tabId: { type: "number" },
+          ruleId: { type: "string" },
+        },
+        required: ["tabId", "ruleId"],
+      },
+    },
+  },
+  required: ["assignments"],
+};
+
+export interface RuleAssignment {
+  tabId: number;
+  ruleId: string;
+}
+
+export async function classifyUngrouped(
+  ungrouped: { tabId: number; host: string; title: string }[],
+  rules: { id: string; name: string; patterns: string[] }[],
+  signal?: AbortSignal,
+): Promise<RuleAssignment[]> {
+  if (ungrouped.length === 0 || rules.length === 0) return [];
+
+  const ruleLines = rules
+    .map((r) => `${r.id}|${r.name}|${r.patterns.join(",")}`)
+    .join("\n");
+  const tabLines = ungrouped
+    .slice(0, 80)
+    .map((t) => `${t.tabId}|${t.host}|${(t.title || "").slice(0, 80)}`)
+    .join("\n");
+
+  const session = await LanguageModel.create({
+    initialPrompts: [{ role: "system", content: CLASSIFY_SYSTEM }],
+    temperature: 0.1,
+    topK: 3,
+  });
+
+  try {
+    const raw = await session.prompt(
+      `Rules (id|name|patterns):\n${ruleLines}\n\nUngrouped tabs (id|host|title):\n${tabLines}\n\nReturn assignments JSON.`,
+      { responseConstraint: CLASSIFY_SCHEMA, signal },
+    );
+    const parsed = JSON.parse(raw) as { assignments?: unknown };
+    const list = Array.isArray(parsed.assignments) ? parsed.assignments : [];
+    const validRules = new Set(rules.map((r) => r.id));
+    const validTabs = new Set(ungrouped.map((t) => t.tabId));
+    const seen = new Set<number>();
+    const out: RuleAssignment[] = [];
+    for (const a of list) {
+      if (!a || typeof a !== "object") continue;
+      const tabId = (a as RuleAssignment).tabId;
+      const ruleId = (a as RuleAssignment).ruleId;
+      if (typeof tabId !== "number" || typeof ruleId !== "string") continue;
+      if (!validTabs.has(tabId) || !validRules.has(ruleId)) continue;
+      if (seen.has(tabId)) continue;
+      seen.add(tabId);
+      out.push({ tabId, ruleId });
+    }
+    return out;
+  } finally {
+    session.destroy?.();
+  }
+}
+
+// === Tune an existing rule (suggest renames + pattern add/remove) ===
+
+const TUNE_SYSTEM =
+  "You refine browser tab grouping rules. " +
+  "Given a rule (name + patterns) and the tabs currently matching it, suggest: " +
+  "(a) a better name only if the current one is vague or misleading; " +
+  "(b) patterns to add only if there's an obvious gap (e.g. a related domain that should be included); " +
+  "(c) patterns to remove only if they're clearly stale (no matching tabs and unrelated to the theme). " +
+  "Be conservative — return empty arrays / omit suggestedName when no change is warranted. " +
+  "Output JSON only.";
+
+const TUNE_SCHEMA = {
+  type: "object",
+  properties: {
+    suggestedName: { type: "string" },
+    addPatterns: { type: "array", items: { type: "string" } },
+    removePatterns: { type: "array", items: { type: "string" } },
+  },
+};
+
+export interface RuleTuneSuggestion {
+  suggestedName?: string;
+  addPatterns: string[];
+  removePatterns: string[];
+}
+
+export async function tuneRule(
+  rule: { name: string; patterns: string[] },
+  matchingTabs: { host: string; title: string }[],
+  signal?: AbortSignal,
+): Promise<RuleTuneSuggestion> {
+  const sample = matchingTabs
+    .slice(0, 30)
+    .map((t) => `${t.host}: ${(t.title || "(no title)").slice(0, 80)}`)
+    .join("\n");
+  const userPrompt =
+    `Rule name: ${rule.name}\n` +
+    `Current patterns: ${rule.patterns.join(", ") || "(none)"}\n\n` +
+    `Currently matching tabs:\n${sample || "(none currently match)"}\n\n` +
+    `Return JSON. Omit fields you don't want to change; use empty arrays for no add/remove.`;
+
+  const session = await LanguageModel.create({
+    initialPrompts: [{ role: "system", content: TUNE_SYSTEM }],
+    temperature: 0.2,
+    topK: 3,
+  });
+
+  try {
+    const raw = await session.prompt(userPrompt, { responseConstraint: TUNE_SCHEMA, signal });
+    const parsed = JSON.parse(raw) as Partial<RuleTuneSuggestion>;
+    const trimmedName = typeof parsed.suggestedName === "string"
+      ? parsed.suggestedName.trim().slice(0, 40)
+      : "";
+    return {
+      suggestedName: trimmedName && trimmedName !== rule.name ? trimmedName : undefined,
+      addPatterns: Array.isArray(parsed.addPatterns)
+        ? parsed.addPatterns
+            .map((p) => (p || "").trim())
+            .filter((p) => p && !rule.patterns.includes(p))
+        : [],
+      removePatterns: Array.isArray(parsed.removePatterns)
+        ? parsed.removePatterns
+            .map((p) => (p || "").trim())
+            .filter((p) => rule.patterns.includes(p))
+        : [],
+    };
+  } finally {
+    session.destroy?.();
+  }
+}
+
+// === Suggest a short name + color for a draft rule given its patterns ===
+
+const NAME_SYSTEM =
+  "You name browser tab group rules. " +
+  "Given domain patterns and (optionally) example matching tab titles, propose a SHORT topic name " +
+  "(1-2 words like \"Work\", \"AI Research\", \"Shopping\") and a tab group color. " +
+  "Output JSON only.";
+
+const NAME_SCHEMA = {
+  type: "object",
+  properties: {
+    name: { type: "string" },
+    color: { type: "string", enum: [...TAB_GROUP_COLORS] },
+  },
+  required: ["name", "color"],
+};
+
+export async function suggestNameForPatterns(
+  patterns: string[],
+  signal?: AbortSignal,
+): Promise<{ name: string; color: chrome.tabGroups.ColorEnum } | null> {
+  if (patterns.length === 0) return null;
+  const matches = await previewMatchingTabs(patterns);
+  const sampleTitles = matches
+    .slice(0, 8)
+    .map((m) => `${m.host}: ${(m.title || "").slice(0, 80)}`)
+    .join("\n");
+
+  const session = await LanguageModel.create({
+    initialPrompts: [{ role: "system", content: NAME_SYSTEM }],
+    temperature: 0.3,
+    topK: 3,
+  });
+
+  try {
+    const userPrompt =
+      `Patterns: ${patterns.join(", ")}\n` +
+      (sampleTitles ? `\nExample matching tabs:\n${sampleTitles}\n` : "") +
+      `\nReturn JSON {name, color}.`;
+    const raw = await session.prompt(userPrompt, { responseConstraint: NAME_SCHEMA, signal });
+    const parsed = JSON.parse(raw) as { name?: string; color?: string };
+    const name = (parsed.name || "").trim().slice(0, 40);
+    if (!name) return null;
+    const color = (TAB_GROUP_COLORS as readonly string[]).includes(parsed.color || "")
+      ? (parsed.color as chrome.tabGroups.ColorEnum)
+      : "blue";
+    return { name, color };
+  } finally {
+    session.destroy?.();
+  }
+}
