@@ -75,6 +75,39 @@ export default defineBackground(() => {
     }
   });
 
+  // Tab moved between groups / in or out of a group — fires changeInfo.groupId
+  chrome.tabs.onUpdated.addListener(async (_tabId, changeInfo, tab) => {
+    if (changeInfo.groupId === undefined) return;
+    try {
+      const config = await getConfig();
+      if (config.autoUngroup) scheduleAutoUngroup(tab.windowId);
+    } catch (e) {
+      console.error("[TabOrdo] onUpdated groupId:", e);
+    }
+  });
+
+  // Tab moved to another window — old window's group may have shrunk to 1
+  chrome.tabs.onDetached.addListener(async (_tabId, detachInfo) => {
+    try {
+      const config = await getConfig();
+      if (config.autoUngroup) scheduleAutoUngroup(detachInfo.oldWindowId);
+    } catch (e) {
+      console.error("[TabOrdo] onDetached:", e);
+    }
+  });
+
+  // Sweep all windows when autoUngroup toggles ON, so existing 1-tab groups get dissolved
+  chrome.storage.onChanged.addListener(async (changes, area) => {
+    if (area !== "local" || !changes.rulesConfig) return;
+    const oldOn = changes.rulesConfig.oldValue?.autoUngroup === true;
+    const newOn = changes.rulesConfig.newValue?.autoUngroup === true;
+    if (oldOn || !newOn) return;
+    const wins = await chrome.windows.getAll().catch(() => []);
+    for (const w of wins) {
+      if (w.id !== undefined) scheduleAutoUngroup(w.id);
+    }
+  });
+
   // Auto-group and other tab automations
   chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     if (!tab.url) return;
