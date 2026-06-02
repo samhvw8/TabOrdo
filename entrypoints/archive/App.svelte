@@ -233,8 +233,9 @@
       <div class="groups">
         {#each grouped as group}
           <div class="date-group">
-            <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-            <div class="date-header" onclick={() => toggleGroup(group.dateKey)}>
+            <div class="date-header" role="button" tabindex="0"
+              onclick={() => toggleGroup(group.dateKey)}
+              onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleGroup(group.dateKey); } }}>
               <span class="date-chevron" class:collapsed={!isGroupExpanded(group.dateKey)}>▾</span>
               <span class="date-label">{group.label}</span>
               <span class="date-count">{group.items.length} tab{group.items.length !== 1 ? "s" : ""}</span>

@@ -80,8 +80,7 @@
       <span class="truncate text-sm text-text">{tab.title || "Untitled"}</span>
     </div>
     {#if showVolume}
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="flex items-center gap-1.5 mt-0.5" onclick={(e) => e.stopPropagation()}>
+      <div class="flex items-center gap-1.5 mt-0.5">
         <input
           type="range"
           min="0"
