@@ -15,6 +15,7 @@ export interface RulesConfig {
   autoSort: boolean;
   autoPinFollow: boolean;
   autoDiscard: boolean;
+  useAI: boolean;
 }
 
 const STORAGE_KEY = "groupRules";
@@ -36,9 +37,10 @@ export async function getConfig(): Promise<RulesConfig> {
       autoSort: stored.autoSort ?? false,
       autoPinFollow: stored.autoPinFollow ?? false,
       autoDiscard: stored.autoDiscard ?? false,
+      useAI: stored.useAI ?? false,
     };
   }
-  const config: RulesConfig = { rules: [], autoGroup: false, autoUngroup: false, useRules: false, autoSort: false, autoPinFollow: false, autoDiscard: false };
+  const config: RulesConfig = { rules: [], autoGroup: false, autoUngroup: false, useRules: false, autoSort: false, autoPinFollow: false, autoDiscard: false, useAI: false };
   await saveConfig(config);
   return config;
 }
@@ -125,6 +127,17 @@ export async function setAutoDiscard(enabled: boolean): Promise<void> {
   await saveConfig(config);
 }
 
+export async function getUseAI(): Promise<boolean> {
+  const config = await getConfig();
+  return config.useAI ?? false;
+}
+
+export async function setUseAI(enabled: boolean): Promise<void> {
+  const config = await getConfig();
+  config.useAI = enabled;
+  await saveConfig(config);
+}
+
 export async function addRule(rule: Omit<GroupRule, "id">): Promise<GroupRule> {
   const rules = await getRules();
   const newRule: GroupRule = { ...rule, id: crypto.randomUUID() };
@@ -193,7 +206,7 @@ export function matchDomainToRule(
 
 const regexCache = new Map<string, RegExp>();
 
-function domainMatches(domain: string, pattern: string): boolean {
+export function domainMatches(domain: string, pattern: string): boolean {
   if (pattern.includes("*")) {
     let re = regexCache.get(pattern);
     if (!re) {

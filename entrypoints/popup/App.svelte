@@ -14,6 +14,8 @@
   import ActionButton from "../../components/ActionButton.svelte";
   import TabCard from "../../components/TabCard.svelte";
   import RulesEditor from "../../components/RulesEditor.svelte";
+  import Sidebar, { type SidebarSection } from "../../components/Sidebar.svelte";
+  import SettingsPanel from "../../components/SettingsPanel.svelte";
 
   let query = $state("");
   let results = $state<SearchResult[]>([]);
@@ -26,7 +28,7 @@
   let searchMode = $derived<SearchMode>(SEARCH_MODES[searchModeIndex].mode);
 
   let showHelp = $state(false);
-  let showRules = $state(false);
+  let activeSection = $state<SidebarSection>("dashboard");
   let showActions = $state(false);
 
   function cycleSearchMode() {
@@ -734,19 +736,9 @@
     />
     </div>
     <button
-      class="shrink-0 w-7 h-7 rounded-md flex items-center justify-center transition-colors
-        {showRules ? 'bg-primary text-white' : 'bg-surface-hover text-text-muted hover:text-text'}"
-      onclick={() => { showRules = !showRules; showHelp = false; }}
-      title="Group rules"
-    >
-      <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>
-      </svg>
-    </button>
-    <button
       class="shrink-0 w-7 h-7 rounded-md flex items-center justify-center text-xs font-bold transition-colors
         {showHelp ? 'bg-primary text-white' : 'bg-surface-hover text-text-muted hover:text-text'}"
-      onclick={() => { showHelp = !showHelp; showRules = false; }}
+      onclick={() => { showHelp = !showHelp; activeSection = "dashboard"; }}
       title="Command guide"
     >?</button>
   </div>
@@ -763,8 +755,12 @@
     </div>
   {/if}
 
-  {#if showRules}
-    <RulesEditor onclose={() => { showRules = false; }} />
+  <div class="flex flex-1 min-h-0">
+    <Sidebar bind:active={activeSection} />
+  {#if activeSection === "rules"}
+    <RulesEditor onclose={() => { activeSection = "dashboard"; }} />
+  {:else if activeSection === "settings"}
+    <SettingsPanel />
   {:else if showHelp}
     <!-- Help guide -->
     <div class="flex-1 overflow-y-auto px-3 py-2 min-h-0">
@@ -1041,6 +1037,7 @@
       {/each}
     </div>
   {/if}
+  </div>
 
   <div class="shrink-0 flex items-center justify-between px-3 py-1.5 border-t border-border text-[11px] text-text-muted">
     <span class="flex items-center gap-2">

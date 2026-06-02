@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { getRules, saveRules, getAutoGroup, setAutoGroup, populateFromCurrentGroups, mergeRules, type GroupRule } from "../lib/rules.ts";
+  import { getRules, saveRules, getAutoGroup, setAutoGroup, populateFromCurrentGroups, mergeRules, getUseAI, type GroupRule } from "../lib/rules.ts";
   import { getFullHostname } from "../lib/tabs.ts";
+  import { getAIStatus, suggestRulesStreaming, previewMatchingTabs, approveRule, type AIStatus, type TabMatch } from "../lib/ai.ts";
 
   let {
     onclose,
@@ -17,6 +18,41 @@
   let newPatterns = $state("");
   let newColor = $state<chrome.tabGroups.ColorEnum>("blue");
 
+  // AI suggestion state — gated on useAI Settings toggle
+  interface AIDraft {
+    id: string;
+    name: string;
+    color: chrome.tabGroups.ColorEnum;
+    patterns: string[];
+    expanded: boolean;
+    preview?: TabMatch[];
+  }
+
+  let useAI = $state(false);
+  let aiStatus = $state<AIStatus>("unsupported");
+  let aiStatusReason = $state<string | undefined>(undefined);
+  let aiLoading = $state(false);
+  let aiDrafts = $state<AIDraft[]>([]);
+  let aiHint = $state("");
+  let aiError = $state<string | undefined>(undefined);
+  let aiAbortController: AbortController | undefined = undefined;
+
+  const aiStatusDot: Record<AIStatus, string> = {
+    available: "bg-accent-green",
+    downloadable: "bg-accent-yellow",
+    downloading: "bg-accent-yellow animate-pulse",
+    unavailable: "bg-accent-red",
+    unsupported: "bg-accent-red",
+  };
+  const aiStatusLabel: Record<AIStatus, string> = {
+    available: "Gemini Nano ready",
+    downloadable: "Model not downloaded",
+    downloading: "Downloading…",
+    unavailable: "Unavailable",
+    unsupported: "Not supported",
+  };
+  const aiReady = $derived(aiStatus === "available" || aiStatus === "downloadable" || aiStatus === "downloading");
+
   const COLORS: chrome.tabGroups.ColorEnum[] = [
     "blue", "cyan", "green", "yellow", "orange", "pink", "purple", "red", "grey",
   ];
@@ -30,7 +66,114 @@
   onMount(async () => {
     rules = await getRules();
     autoGroup = await getAutoGroup();
+    useAI = await getUseAI();
+    if (useAI) {
+      const r = await getAIStatus();
+      aiStatus = r.status;
+      aiStatusReason = r.reason;
+    }
   });
+
+  async function aiGenerate() {
+    aiAbortController?.abort();
+    aiAbortController = new AbortController();
+    aiLoading = true;
+    aiError = undefined;
+    aiDrafts = [];
+    try {
+      for await (const rule of suggestRulesStreaming(aiHint, aiAbortController.signal)) {
+        aiDrafts = [...aiDrafts, {
+          id: crypto.randomUUID(),
+          name: rule.name,
+          color: rule.color,
+          patterns: rule.patterns,
+          expanded: false,
+        }];
+      }
+      if (aiDrafts.length === 0) {
+        aiError = "No suggestions returned. Try a different hint or open more tabs.";
+      }
+    } catch (e) {
+      if ((e as Error).name !== "AbortError") {
+        aiError = (e as Error).message || "AI request failed.";
+      }
+    } finally {
+      aiLoading = false;
+      aiAbortController = undefined;
+    }
+  }
+
+  function aiAbort() {
+    aiAbortController?.abort();
+  }
+
+  function aiUpdateDraft(id: string, patch: Partial<AIDraft>) {
+    aiDrafts = aiDrafts.map((d) =>
+      d.id === id
+        // Clear cached preview if patterns change; user expectation: preview reflects current patterns.
+        ? { ...d, ...patch, preview: patch.patterns ? undefined : d.preview }
+        : d,
+    );
+  }
+
+  async function aiToggleExpand(id: string) {
+    const d = aiDrafts.find((x) => x.id === id);
+    if (!d) return;
+    const next = !d.expanded;
+    aiUpdateDraft(id, { expanded: next });
+    if (next && !d.preview) {
+      const queried = d.patterns;
+      const preview = await previewMatchingTabs(queried);
+      // Only apply if patterns weren't edited mid-await — aiUpdateDraft creates
+      // a new array reference whenever patterns change.
+      const current = aiDrafts.find((x) => x.id === id);
+      if (current && current.patterns === queried) {
+        aiUpdateDraft(id, { preview });
+      }
+    }
+  }
+
+  function aiRemoveDraft(id: string) {
+    aiDrafts = aiDrafts.filter((d) => d.id !== id);
+  }
+
+  async function aiApproveDraft(id: string) {
+    const d = aiDrafts.find((x) => x.id === id);
+    if (!d) return;
+    await approveRule({ name: d.name, color: d.color, patterns: d.patterns });
+    aiDrafts = aiDrafts.filter((x) => x.id !== id);
+    rules = await getRules();
+    flash(`Added "${d.name}"`);
+  }
+
+  async function aiApproveAll() {
+    const drafts = [...aiDrafts];
+    if (drafts.length === 0) return;
+    for (const d of drafts) {
+      await approveRule({ name: d.name, color: d.color, patterns: d.patterns });
+    }
+    aiDrafts = [];
+    rules = await getRules();
+    flash(`Added ${drafts.length} rule${drafts.length !== 1 ? "s" : ""}`);
+  }
+
+  async function aiGroupNow(id: string) {
+    const d = aiDrafts.find((x) => x.id === id);
+    if (!d || !d.preview || d.preview.length === 0) return;
+    try {
+      const tabIds = d.preview.map((m) => m.tabId);
+      const groupId = await chrome.tabs.group({ tabIds });
+      await chrome.tabGroups.update(groupId, { title: d.name, color: d.color });
+      // Persist the rule only after the group exists, so a retry after failure
+      // doesn't leave a duplicate rule behind.
+      await approveRule({ name: d.name, color: d.color, patterns: d.patterns });
+      aiDrafts = aiDrafts.filter((x) => x.id !== id);
+      rules = await getRules();
+      flash(`Grouped ${tabIds.length} tab${tabIds.length !== 1 ? "s" : ""} into "${d.name}"`);
+    } catch (e) {
+      flash(`Group failed: ${(e as Error).message}`);
+    }
+  }
 
   async function save() {
     await saveRules(rules);
@@ -159,6 +302,135 @@
       <span class="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform {autoGroup ? 'left-[18px]' : 'left-0.5'}"></span>
     </button>
   </div>
+
+  {#if useAI}
+    <!-- AI suggestion subsection -->
+    <div class="mb-2 p-2 rounded-md bg-surface-hover border border-border">
+      <div class="flex items-center gap-2 mb-1.5">
+        <span class="w-2 h-2 rounded-full {aiStatusDot[aiStatus]}"></span>
+        <span class="text-[11px] font-medium text-text flex-1 truncate">AI · {aiStatusLabel[aiStatus]}</span>
+        {#if aiReady}
+          {#if aiLoading}
+            <button
+              class="text-[10px] px-2 py-0.5 rounded bg-accent-red/15 text-accent-red hover:bg-accent-red/25 transition-colors"
+              onclick={aiAbort}
+            >Stop</button>
+          {:else}
+            <button
+              class="text-[10px] px-2 py-0.5 rounded bg-primary text-white hover:bg-primary-hover transition-colors"
+              onclick={aiGenerate}
+            >{aiDrafts.length ? "Regenerate" : "Suggest"}</button>
+          {/if}
+        {/if}
+      </div>
+
+      {#if !aiReady && aiStatusReason}
+        <div class="text-[10px] text-text-muted">{aiStatusReason}</div>
+      {/if}
+
+      {#if aiReady}
+        <input
+          bind:value={aiHint}
+          placeholder="Optional hint: 'more granular', 'merge dev tools'…"
+          class="w-full bg-surface border border-border rounded px-1.5 py-1 text-[11px] text-text outline-none focus:border-primary disabled:opacity-50"
+          disabled={aiLoading}
+          onkeydown={(e) => { if (e.key === "Enter" && !aiLoading) aiGenerate(); }}
+        />
+      {/if}
+
+      {#if aiError}
+        <div class="text-[10px] text-accent-red mt-1">{aiError}</div>
+      {/if}
+
+      {#if aiDrafts.length || aiLoading}
+        <div class="flex items-center justify-between mt-2 mb-1">
+          <span class="text-[10px] text-text-muted">
+            {aiDrafts.length} suggestion{aiDrafts.length !== 1 ? "s" : ""}{aiLoading ? " · streaming…" : ""}
+          </span>
+          {#if aiDrafts.length > 1}
+            <button
+              class="text-[10px] text-accent-green hover:underline"
+              onclick={aiApproveAll}
+            >Add all</button>
+          {/if}
+        </div>
+
+        {#each aiDrafts as d (d.id)}
+          <div class="mt-1 p-1.5 rounded border border-border bg-surface">
+            <div class="flex items-center gap-1 mb-1">
+              <div class="flex gap-0.5">
+                {#each COLORS as c}
+                  <button
+                    class="w-2.5 h-2.5 rounded-full transition-all {colorClasses[c]} {d.color === c ? 'ring-1 ring-white ring-offset-1 ring-offset-surface' : 'opacity-40 hover:opacity-70'}"
+                    onclick={() => aiUpdateDraft(d.id, { color: c })}
+                    title={c}
+                    aria-label={c}
+                  ></button>
+                {/each}
+              </div>
+              <input
+                value={d.name}
+                onchange={(e) => aiUpdateDraft(d.id, { name: (e.target as HTMLInputElement).value })}
+                class="flex-1 min-w-0 bg-transparent border-b border-border text-[11px] text-text font-medium outline-none focus:border-primary px-0.5"
+              />
+              <button
+                class="text-[10px] text-text-muted hover:text-text transition-colors px-1"
+                onclick={() => aiToggleExpand(d.id)}
+                title="Preview matching tabs"
+                aria-label="Preview matching tabs"
+                aria-expanded={d.expanded}
+              >{d.expanded ? "▾" : "▸"}{d.preview ? ` ${d.preview.length}` : ""}</button>
+              <button
+                class="text-[10px] text-accent-red hover:text-accent-red/80 transition-colors px-0.5"
+                onclick={() => aiRemoveDraft(d.id)}
+                title="Skip this suggestion"
+                aria-label="Skip"
+              >✕</button>
+              <button
+                class="text-[10px] px-1.5 py-0.5 rounded bg-primary text-white hover:bg-primary-hover transition-colors"
+                onclick={() => aiApproveDraft(d.id)}
+              >Add</button>
+            </div>
+            <input
+              value={d.patterns.join(", ")}
+              onchange={(e) => aiUpdateDraft(d.id, { patterns: parsePatterns((e.target as HTMLInputElement).value) })}
+              placeholder="domain.com, *.io"
+              class="w-full bg-surface-hover border border-border rounded px-1.5 py-1 text-[11px] text-text-muted outline-none focus:border-primary"
+            />
+
+            {#if d.expanded}
+              {#if d.preview === undefined}
+                <div class="text-[10px] text-text-muted mt-1 px-1">Looking up matching tabs…</div>
+              {:else if d.preview.length === 0}
+                <div class="text-[10px] text-text-muted mt-1 px-1">No open tabs match these patterns yet.</div>
+              {:else}
+                <div class="mt-1.5 space-y-0.5">
+                  {#each d.preview.slice(0, 6) as m (m.tabId)}
+                    <div class="flex items-center gap-1.5 px-1">
+                      {#if m.favIconUrl}
+                        <img src={m.favIconUrl} alt="" class="w-3 h-3 shrink-0" />
+                      {:else}
+                        <span class="w-3 h-3 shrink-0 rounded-sm bg-border"></span>
+                      {/if}
+                      <span class="text-[10px] text-text truncate flex-1">{m.title}</span>
+                      <span class="text-[9px] text-text-muted shrink-0 max-w-[80px] truncate">{m.host}</span>
+                    </div>
+                  {/each}
+                  {#if d.preview.length > 6}
+                    <div class="text-[10px] text-text-muted px-1">+{d.preview.length - 6} more</div>
+                  {/if}
+                  <button
+                    class="w-full mt-1 px-2 py-1 rounded bg-accent-green/15 text-accent-green text-[10px] font-medium hover:bg-accent-green/25 transition-colors"
+                    onclick={() => aiGroupNow(d.id)}
+                  >Group these {d.preview.length} tab{d.preview.length !== 1 ? "s" : ""} now</button>
+                </div>
+              {/if}
+            {/if}
+          </div>
+        {/each}
+      {/if}
+    </div>
+  {/if}
 
   <!-- Action buttons -->
   <div class="flex gap-1.5 mb-2">
