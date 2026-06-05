@@ -12,7 +12,7 @@
   interface MenuItem { action: string; label: string; }
   interface MenuSection { title: string; items: MenuItem[]; }
 
-  const sections: MenuSection[] = [
+  const sections: MenuSection[] = $derived([
     { title: "Organize", items: [
       { action: "regroup", label: "Regroup All" },
       { action: "ungroup", label: "Ungroup All" },
@@ -40,7 +40,7 @@
     { title: "Other", items: [
       { action: "feedback", label: "Feedback" },
     ]},
-  ];
+  ]);
 
   function handleClick(action: string) {
     onaction(action);

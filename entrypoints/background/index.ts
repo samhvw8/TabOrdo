@@ -1,4 +1,4 @@
-import { getConfig, matchDomainToRule } from "../../lib/rules.ts";
+import { getConfig, matchDomainToRule, isIgnoredUrl, isIgnoredGroupName } from "../../lib/rules.ts";
 import { getFullHostname, getDomain, sortTabsInWindow, GROUP_COLORS, hashCode } from "../../lib/tabs.ts";
 
 let pinSyncInProgress = false;
@@ -15,7 +15,7 @@ function scheduleAutoUngroup(windowId: number): void {
 
 async function autoUngroupSingleTabGroups(windowId: number): Promise<void> {
   try {
-    const session = await chrome.storage.session.get("bulkOpInProgress").catch(() => ({}));
+    const session = await chrome.storage.session.get("bulkOpInProgress").catch((): Record<string, unknown> => ({}));
     if (session.bulkOpInProgress) return;
     const config = await getConfig();
     const ruleNames = config.useRules ? new Set(config.rules.map((r) => r.name)) : null;
@@ -33,10 +33,9 @@ async function autoUngroupSingleTabGroups(windowId: number): Promise<void> {
     }
     for (const [groupId, tabs] of groupCounts) {
       if (tabs.length !== 1 || !tabs[0].id) continue;
-      if (ruleNames) {
-        const title = groupTitleMap.get(groupId);
-        if (title && ruleNames.has(title)) continue;
-      }
+      const title = groupTitleMap.get(groupId);
+      if (ruleNames && title && ruleNames.has(title)) continue;
+      if (title && isIgnoredGroupName(title, config.ignoreGroupNames)) continue;
       await chrome.tabs.ungroup(tabs[0].id);
     }
   } catch (e) {
@@ -118,7 +117,7 @@ export default defineBackground(() => {
     const config = await getConfig();
 
     // Auto-group by domain (or rules if enabled) — trigger on URL change for responsiveness
-    const session = await chrome.storage.session.get("bulkOpInProgress").catch(() => ({}));
+    const session = await chrome.storage.session.get("bulkOpInProgress").catch((): Record<string, unknown> => ({}));
     if (isUrlChange && config.autoGroup && !tab.pinned && !session.bulkOpInProgress) {
       try {
         // For recently created tabs, wait so other extensions can group them first
@@ -130,6 +129,7 @@ export default defineBackground(() => {
         const freshTab = await chrome.tabs.get(tabId).catch(() => null);
         if (freshTab && freshTab.groupId === -1) {
           const url = freshTab.url || tab.url;
+          if (isIgnoredUrl(url, config.ignorePatterns)) return;
           const hostname = getFullHostname(url);
           if (hostname && !url.startsWith("chrome://")) {
             let grouped = false;
@@ -175,7 +175,7 @@ export default defineBackground(() => {
     }
 
     // Auto-sort on tab load
-    const freshSession = await chrome.storage.session.get("bulkOpInProgress").catch(() => ({}));
+    const freshSession = await chrome.storage.session.get("bulkOpInProgress").catch((): Record<string, unknown> => ({}));
     if (config.autoSort && changeInfo.status === "complete" && !freshSession.bulkOpInProgress) {
       await sortTabsInWindow(tab.windowId);
     }

@@ -70,7 +70,7 @@ export async function getAllGroups(): Promise<chrome.tabGroups.TabGroup[]> {
 
 export async function switchToTab(tabId: number): Promise<void> {
   const tab = await chrome.tabs.update(tabId, { active: true });
-  await chrome.windows.update(tab.windowId!, { focused: true });
+  if (tab?.windowId != null) await chrome.windows.update(tab.windowId, { focused: true });
 }
 
 export async function closeTabs(tabIds: number[]): Promise<void> {

@@ -7,6 +7,11 @@ export interface GroupRule {
   patterns: string[];
 }
 
+export interface IgnoreRule {
+  pattern: string;
+  enabled: boolean;
+}
+
 export interface RulesConfig {
   rules: GroupRule[];
   autoGroup: boolean;
@@ -16,10 +21,21 @@ export interface RulesConfig {
   autoPinFollow: boolean;
   autoDiscard: boolean;
   useAI: boolean;
+  ignorePatterns: IgnoreRule[];
+  ignoreGroupNames: IgnoreRule[];
 }
 
 const STORAGE_KEY = "groupRules";
 const CONFIG_KEY = "rulesConfig";
+
+function normalizeIgnoreRules(raw: unknown): IgnoreRule[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((item: unknown) => {
+    if (typeof item === "string") return { pattern: item, enabled: true };
+    if (item && typeof item === "object" && "pattern" in item) return { pattern: String((item as IgnoreRule).pattern), enabled: (item as IgnoreRule).enabled !== false };
+    return null;
+  }).filter((x): x is IgnoreRule => x !== null);
+}
 
 export async function getConfig(): Promise<RulesConfig> {
   const data = await chrome.storage.local.get(CONFIG_KEY);
@@ -38,9 +54,11 @@ export async function getConfig(): Promise<RulesConfig> {
       autoPinFollow: stored.autoPinFollow ?? false,
       autoDiscard: stored.autoDiscard ?? false,
       useAI: stored.useAI ?? false,
+      ignorePatterns: normalizeIgnoreRules(stored.ignorePatterns),
+      ignoreGroupNames: normalizeIgnoreRules(stored.ignoreGroupNames),
     };
   }
-  const config: RulesConfig = { rules: [], autoGroup: false, autoUngroup: false, useRules: false, autoSort: false, autoPinFollow: false, autoDiscard: false, useAI: false };
+  const config: RulesConfig = { rules: [], autoGroup: false, autoUngroup: false, useRules: false, autoSort: false, autoPinFollow: false, autoDiscard: false, useAI: false, ignorePatterns: [], ignoreGroupNames: [] };
   await saveConfig(config);
   return config;
 }
@@ -136,6 +154,55 @@ export async function setUseAI(enabled: boolean): Promise<void> {
   const config = await getConfig();
   config.useAI = enabled;
   await saveConfig(config);
+}
+
+export async function getIgnorePatterns(): Promise<IgnoreRule[]> {
+  const config = await getConfig();
+  return config.ignorePatterns ?? [];
+}
+
+export async function setIgnorePatterns(patterns: IgnoreRule[]): Promise<void> {
+  const config = await getConfig();
+  config.ignorePatterns = patterns;
+  await saveConfig(config);
+}
+
+export async function getIgnoreGroupNames(): Promise<IgnoreRule[]> {
+  const config = await getConfig();
+  return config.ignoreGroupNames ?? [];
+}
+
+export async function setIgnoreGroupNames(names: IgnoreRule[]): Promise<void> {
+  const config = await getConfig();
+  config.ignoreGroupNames = names;
+  await saveConfig(config);
+}
+
+export function isIgnoredUrl(url: string, ignorePatterns: IgnoreRule[]): boolean {
+  if (ignorePatterns.length === 0) return false;
+  const hostname = getFullHostname(url);
+  if (!hostname) return false;
+  for (const rule of ignorePatterns) {
+    if (!rule.enabled) continue;
+    if (domainMatches(hostname, rule.pattern)) return true;
+  }
+  return false;
+}
+
+export function isIgnoredGroupName(title: string, ignoreGroupNames: IgnoreRule[]): boolean {
+  if (ignoreGroupNames.length === 0) return false;
+  const lower = title.toLowerCase();
+  for (const rule of ignoreGroupNames) {
+    if (!rule.enabled) continue;
+    const p = rule.pattern;
+    if (p.includes("*")) {
+      const escaped = p.toLowerCase().replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+      if (new RegExp(`^${escaped}$`, "i").test(title)) return true;
+    } else {
+      if (p.toLowerCase() === lower) return true;
+    }
+  }
+  return false;
 }
 
 export async function addRule(rule: Omit<GroupRule, "id">): Promise<GroupRule> {
