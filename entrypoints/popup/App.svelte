@@ -437,8 +437,10 @@
         break;
       case "merge":
         await snapshotBeforeGroup(); await mergeAllWindows(); statusMessage = "Merged all windows"; await loadTabs(); acted = true; break;
-      case "sort":
-        await snapshotBeforeGroup(); await sortTabsInWindow(currentWindowId); statusMessage = "Sorted tabs by domain"; await loadTabs(); acted = true; break;
+      case "sort": {
+        const sortBy = (["title", "url", "domain"] as const).includes(searchQuery as any) ? searchQuery as "title" | "url" | "domain" : "domain";
+        await snapshotBeforeGroup(); await sortTabsInWindow(currentWindowId, sortBy); statusMessage = `Sorted tabs by ${sortBy}`; await loadTabs(); acted = true; break;
+      }
       case "dedup": {
         await snapshotBeforeGroup();
         const count = await removeDuplicates();

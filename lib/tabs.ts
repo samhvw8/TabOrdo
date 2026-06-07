@@ -85,9 +85,12 @@ export async function sortTabsInWindow(
   await applyGroupPinsToWindow(windowId);
 }
 
-export async function sortTabsInGroup(groupId: number): Promise<void> {
+export async function sortTabsInGroup(
+  groupId: number,
+  by: "title" | "url" | "domain" = "title"
+): Promise<void> {
   const tabs = await chrome.tabs.query({ groupId });
-  tabs.sort((a, b) => (a.title || "").localeCompare(b.title || ""));
+  tabs.sort((a, b) => compareTabs(a, b, by));
   const ids = tabs.map((t) => t.id!);
   if (ids.length > 0) {
     await chrome.tabs.move(ids, { index: -1 });
@@ -126,7 +129,7 @@ async function organizeWindow(
   );
 
   for (const entry of sortedGroups) {
-    entry.tabs.sort((a, b) => (a.title || "").localeCompare(b.title || ""));
+    entry.tabs.sort((a, b) => compareTabs(a, b, by));
   }
   ungrouped.sort((a, b) => compareTabs(a, b, by));
 

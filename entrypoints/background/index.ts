@@ -1,6 +1,5 @@
 import { getConfig, matchDomainToRule, isIgnoredUrl, isIgnoredGroupName } from "../../lib/rules.ts";
 import { getFullHostname, getDomain, sortTabsInWindow, GROUP_COLORS, hashCode } from "../../lib/tabs.ts";
-
 let pinSyncInProgress = false;
 const ungroupTimers = new Map<number, ReturnType<typeof setTimeout>>();
 
@@ -224,4 +223,6 @@ export default defineBackground(() => {
       }
     }
   });
+
 });
+

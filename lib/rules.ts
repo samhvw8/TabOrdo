@@ -145,17 +145,6 @@ export async function setAutoDiscard(enabled: boolean): Promise<void> {
   await saveConfig(config);
 }
 
-export async function getUseAI(): Promise<boolean> {
-  const config = await getConfig();
-  return config.useAI ?? false;
-}
-
-export async function setUseAI(enabled: boolean): Promise<void> {
-  const config = await getConfig();
-  config.useAI = enabled;
-  await saveConfig(config);
-}
-
 export async function getIgnorePatterns(): Promise<IgnoreRule[]> {
   const config = await getConfig();
   return config.ignorePatterns ?? [];

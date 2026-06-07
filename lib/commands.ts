@@ -31,7 +31,7 @@ export const ACTION_COMMANDS: CommandDefinition[] = [
   { prefix: "archive", label: "/archive", description: "Archive matching tabs", category: "action", color: "text-accent-yellow" },
   { prefix: "group", label: "/group", description: "Group matching tabs", category: "action", color: "text-accent-orange" },
   { prefix: "merge", label: "/merge", description: "Merge all windows", category: "action", color: "text-accent-orange" },
-  { prefix: "sort", label: "/sort", description: "Sort tabs by domain", category: "action", color: "text-accent-orange" },
+  { prefix: "sort", label: "/sort", description: "Sort tabs (domain|title|url)", category: "action", color: "text-accent-orange" },
   { prefix: "dedup", label: "/dedup", description: "Remove duplicate tabs", category: "action", color: "text-accent-orange" },
   { prefix: "mute", label: "/mute", description: "Mute matching tabs", category: "action", color: "text-accent-purple" },
   { prefix: "unmute", label: "/unmute", description: "Unmute matching tabs", category: "action", color: "text-accent-purple" },
