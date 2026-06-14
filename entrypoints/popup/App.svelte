@@ -16,6 +16,7 @@
   import RulesEditor from "../../components/RulesEditor.svelte";
   import Sidebar, { type SidebarSection } from "../../components/Sidebar.svelte";
   import SettingsPanel from "../../components/SettingsPanel.svelte";
+  import PinsPanel from "../../components/PinsPanel.svelte";
 
   let query = $state("");
   let results = $state<SearchResult[]>([]);
@@ -761,6 +762,8 @@
     <Sidebar bind:active={activeSection} />
   {#if activeSection === "rules"}
     <RulesEditor onclose={() => { activeSection = "dashboard"; }} />
+  {:else if activeSection === "pins"}
+    <PinsPanel />
   {:else if activeSection === "settings"}
     <SettingsPanel />
   {:else if showHelp}

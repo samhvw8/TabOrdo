@@ -1,7 +1,7 @@
 import { getDomain as tldtsDomain } from "tldts";
 import { getRules, getUseRules, matchDomainToRule } from "./rules.ts";
 import { snapshotClosedTabs } from "./undo.ts";
-import { pinTab, unpinTab, applyPinsToGroup, applyAllPins, pinGroup, unpinGroup, applyGroupPinsToWindow, applyAllGroupPins, buildGroupOrder } from "./pin.ts";
+import { pinTab, unpinTab, getPinnedTabs, applyPinsToGroup, applyAllPins, pinGroup, unpinGroup, applyGroupPinsToWindow, applyAllGroupPins, buildGroupOrder } from "./pin.ts";
 
 export interface TabInfo {
   id: number;
@@ -90,13 +90,12 @@ export async function sortTabsInGroup(
   by: "title" | "url" | "domain" = "title"
 ): Promise<void> {
   const tabs = await chrome.tabs.query({ groupId });
-  tabs.sort((a, b) => compareTabs(a, b, by));
-  const ids = tabs.map((t) => t.id!);
+  const group = (await chrome.tabGroups.query({})).find((g) => g.id === groupId);
+  const ordered = group?.title ? pinAwareSortTabs(tabs, group.title, await getPinnedTabs(), by) : tabs.sort((a, b) => compareTabs(a, b, by));
+  const ids = ordered.map((t) => t.id!);
   if (ids.length > 0) {
     await chrome.tabs.move(ids, { index: -1 });
     await chrome.tabs.group({ tabIds: ids, groupId });
-    const group = (await chrome.tabGroups.query({})).find((g) => g.id === groupId);
-    if (group?.title) await applyPinsToGroup(groupId, group.title);
   }
 }
 
@@ -106,6 +105,7 @@ async function organizeWindow(
 ): Promise<void> {
   const tabs = await chrome.tabs.query({ windowId });
   const groups = await chrome.tabGroups.query({ windowId });
+  const allPins = await getPinnedTabs();
   const pinnedCount = tabs.filter((t) => t.pinned).length;
 
   const groupMap = new Map<number, { group: chrome.tabGroups.TabGroup; tabs: chrome.tabs.Tab[] }>();
@@ -129,7 +129,9 @@ async function organizeWindow(
   );
 
   for (const entry of sortedGroups) {
-    entry.tabs.sort((a, b) => compareTabs(a, b, by));
+    entry.tabs = entry.group.title
+      ? pinAwareSortTabs(entry.tabs, entry.group.title, allPins, by)
+      : entry.tabs.sort((a, b) => compareTabs(a, b, by));
   }
   ungrouped.sort((a, b) => compareTabs(a, b, by));
 
@@ -148,10 +150,52 @@ async function organizeWindow(
   if (ungroupedIds.length > 0) {
     await chrome.tabs.move(ungroupedIds, { index });
   }
+}
 
-  for (const entry of sortedGroups) {
-    if (entry.group.title) await applyPinsToGroup(entry.group.id, entry.group.title);
+function pinAwareSortTabs(
+  tabs: chrome.tabs.Tab[],
+  groupTitle: string,
+  allPins: import("./pin.ts").PinnedTabEntry[],
+  by: "title" | "url" | "domain"
+): chrome.tabs.Tab[] {
+  const groupPins = allPins.filter((p) => p.groupName === groupTitle);
+  if (groupPins.length === 0) return tabs.sort((a, b) => compareTabs(a, b, by));
+
+  const tabIdMap = new Map(groupPins.filter((p) => p.tabId).map((p) => [p.tabId!, p.position]));
+  const urlMap = new Map(groupPins.map((p) => [p.url, p.position]));
+  const pinned: { tab: chrome.tabs.Tab; pos: number }[] = [];
+  const unpinned: chrome.tabs.Tab[] = [];
+
+  for (const tab of tabs) {
+    const pos = tabIdMap.get(tab.id!) ?? urlMap.get(tab.url ?? "");
+    if (pos !== undefined) {
+      pinned.push({ tab, pos });
+    } else {
+      unpinned.push(tab);
+    }
   }
+
+  pinned.sort((a, b) => a.pos - b.pos);
+  unpinned.sort((a, b) => compareTabs(a, b, by));
+
+  const result: chrome.tabs.Tab[] = [];
+  let ui = 0;
+  const pinnedByPos = new Map(pinned.map((p) => [p.pos, p.tab]));
+  const totalLen = tabs.length;
+
+  for (let i = 0; i < totalLen; i++) {
+    if (pinnedByPos.has(i)) {
+      result.push(pinnedByPos.get(i)!);
+    } else if (ui < unpinned.length) {
+      result.push(unpinned[ui++]);
+    }
+  }
+  while (ui < unpinned.length) result.push(unpinned[ui++]);
+  for (const p of pinned) {
+    if (!result.includes(p.tab)) result.push(p.tab);
+  }
+
+  return result;
 }
 
 function compareTabs(
@@ -720,10 +764,12 @@ export async function pinCurrentTab(posStr: string): Promise<string> {
   const groupTabs = (await chrome.tabs.query({ groupId: active.groupId })).sort((a, b) => a.index - b.index);
   const baseIndex = groupTabs[0]?.index ?? 0;
 
+  const existingPins = (await getPinnedTabs()).filter((p) => p.groupName === group.title);
+
   let position: number;
   const trimmed = posStr.trim();
   if (!trimmed) {
-    position = active.index - baseIndex;
+    position = existingPins.length;
   } else if (trimmed === "^") {
     position = 0;
   } else if (trimmed === "$") {
@@ -734,7 +780,7 @@ export async function pinCurrentTab(posStr: string): Promise<string> {
     position = Math.min(n - 1, groupTabs.length - 1);
   }
 
-  await pinTab(active.url, group.title, position);
+  await pinTab(active.url, group.title, position, active.title, active.id);
   await applyPinsToGroup(active.groupId, group.title);
   return `Pinned at position ${position + 1} in "${group.title}"`;
 }

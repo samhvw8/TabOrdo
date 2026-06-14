@@ -1,5 +1,5 @@
 <script lang="ts" module>
-  export type SidebarSection = "dashboard" | "rules" | "settings";
+  export type SidebarSection = "dashboard" | "pins" | "rules" | "settings";
 </script>
 
 <script lang="ts">
@@ -7,6 +7,7 @@
 
   const items: { id: SidebarSection; label: string }[] = [
     { id: "dashboard", label: "Dashboard" },
+    { id: "pins", label: "Pinned Tabs" },
     { id: "rules", label: "Group Rules" },
     { id: "settings", label: "Settings" },
   ];
@@ -28,6 +29,11 @@
           <rect x="14" y="3" width="7" height="5" rx="1"/>
           <rect x="14" y="12" width="7" height="9" rx="1"/>
           <rect x="3" y="16" width="7" height="5" rx="1"/>
+        </svg>
+      {:else if item.id === "pins"}
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 17v5"/>
+          <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 2-2H6a2 2 0 0 0 2 2 1 1 0 0 1 1 1z"/>
         </svg>
       {:else if item.id === "rules"}
         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">

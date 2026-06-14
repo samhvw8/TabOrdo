@@ -1,6 +1,8 @@
 export interface PinnedTabEntry {
   id: string;
   url: string;
+  title?: string;
+  tabId?: number;
   groupName: string;
   position: number;
 }
@@ -16,18 +18,23 @@ export async function savePinnedTabs(pins: PinnedTabEntry[]): Promise<void> {
   await chrome.storage.local.set({ [STORAGE_KEY]: JSON.parse(JSON.stringify(pins)) });
 }
 
-export async function pinTab(url: string, groupName: string, position: number): Promise<PinnedTabEntry> {
+export async function pinTab(url: string, groupName: string, position: number, title?: string, tabId?: number): Promise<PinnedTabEntry> {
   const pins = await getPinnedTabs();
-  const existing = pins.find((p) => p.url === url && p.groupName === groupName);
+  const existing = pins.find((p) =>
+    p.groupName === groupName && (p.url === url || (tabId && p.tabId === tabId))
+  );
   if (existing) {
     existing.position = position;
+    existing.url = url;
+    if (title) existing.title = title;
+    if (tabId) existing.tabId = tabId;
     await savePinnedTabs(pins);
     return existing;
   }
   for (const p of pins) {
     if (p.groupName === groupName && p.position >= position) p.position++;
   }
-  const entry: PinnedTabEntry = { id: crypto.randomUUID(), url, groupName, position };
+  const entry: PinnedTabEntry = { id: crypto.randomUUID(), url, title, tabId, groupName, position };
   pins.push(entry);
   await savePinnedTabs(pins);
   return entry;
@@ -42,8 +49,32 @@ export async function unpinTab(url: string, groupName: string): Promise<boolean>
   return true;
 }
 
-export function getPinForTab(url: string, groupName: string, pins: PinnedTabEntry[]): PinnedTabEntry | undefined {
+export async function reorderPins(groupName: string, orderedUrls: string[]): Promise<void> {
+  const pins = await getPinnedTabs();
+  for (let i = 0; i < orderedUrls.length; i++) {
+    const pin = pins.find((p) => p.url === orderedUrls[i] && p.groupName === groupName);
+    if (pin) pin.position = i;
+  }
+  await savePinnedTabs(pins);
+}
+
+export function getPinForTab(url: string, groupName: string, pins: PinnedTabEntry[], tabId?: number): PinnedTabEntry | undefined {
+  if (tabId) {
+    const byTabId = pins.find((p) => p.tabId === tabId && p.groupName === groupName);
+    if (byTabId) return byTabId;
+  }
   return pins.find((p) => p.url === url && p.groupName === groupName);
+}
+
+export async function syncPinUrl(tabId: number, newUrl: string, newTitle?: string): Promise<boolean> {
+  const pins = await getPinnedTabs();
+  const pin = pins.find((p) => p.tabId === tabId);
+  if (!pin) return false;
+  let changed = false;
+  if (newUrl && pin.url !== newUrl) { pin.url = newUrl; changed = true; }
+  if (newTitle && pin.title !== newTitle) { pin.title = newTitle; changed = true; }
+  if (changed) await savePinnedTabs(pins);
+  return changed;
 }
 
 export async function applyPinsToGroup(
@@ -63,7 +94,7 @@ export async function applyPinsToGroup(
 
   const sorted = [...groupPins].sort((a, b) => a.position - b.position);
   for (const pin of sorted) {
-    const tab = tabs.find((t) => t.url === pin.url);
+    const tab = (pin.tabId && tabs.find((t) => t.id === pin.tabId)) || tabs.find((t) => t.url === pin.url);
     if (!tab) continue;
     const targetIndex = Math.min(baseIndex + pin.position, baseIndex + tabs.length - 1);
     if (tab.index !== targetIndex) {

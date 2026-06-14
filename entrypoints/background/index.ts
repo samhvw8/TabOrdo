@@ -1,5 +1,6 @@
 import { getConfig, matchDomainToRule, isIgnoredUrl, isIgnoredGroupName } from "../../lib/rules.ts";
 import { getFullHostname, getDomain, sortTabsInWindow, GROUP_COLORS, hashCode } from "../../lib/tabs.ts";
+import { syncPinUrl } from "../../lib/pin.ts";
 let pinSyncInProgress = false;
 const ungroupTimers = new Map<number, ReturnType<typeof setTimeout>>();
 
@@ -81,6 +82,16 @@ export default defineBackground(() => {
       if (config.autoUngroup) scheduleAutoUngroup(tab.windowId);
     } catch (e) {
       console.error("[TabOrdo] onUpdated groupId:", e);
+    }
+  });
+
+  // Sync pinned tab URL and title when a tab navigates or finishes loading
+  chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+    if (!changeInfo.url && !changeInfo.title) return;
+    try {
+      await syncPinUrl(tabId, tab.url || "", tab.title);
+    } catch (e) {
+      console.error("[TabOrdo] pin URL sync error:", e);
     }
   });
 
