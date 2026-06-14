@@ -47,6 +47,17 @@
     ignoreGroupNames = ignoreGroupNames.map((r) => r.pattern === p ? { ...r, enabled: !r.enabled } : r);
     await setIgnoreGroupNames(ignoreGroupNames);
   }
+
+  async function addCurrentGroupToIgnore() {
+    const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!active || active.groupId === -1) return;
+    const group = (await chrome.tabGroups.query({})).find((g) => g.id === active.groupId);
+    if (!group?.title) return;
+    if (!ignoreGroupNames.some((r) => r.pattern === group.title)) {
+      ignoreGroupNames = [...ignoreGroupNames, { pattern: group.title!, enabled: true }];
+      await setIgnoreGroupNames(ignoreGroupNames);
+    }
+  }
 </script>
 
 <div class="flex-1 overflow-y-auto px-3 py-2 min-h-0">
@@ -109,6 +120,11 @@
           onclick={addIgnoreGroupName}
           disabled={!newIgnoreGroupName.trim()}
         >Add</button>
+        <button
+          class="shrink-0 px-2 py-1 rounded text-[10px] font-medium bg-accent-cyan/15 text-accent-cyan border border-accent-cyan/30 hover:bg-accent-cyan/25 transition-colors"
+          onclick={addCurrentGroupToIgnore}
+          title="Add the active tab's group name to ignore list"
+        >+ Current</button>
       </div>
       {#if ignoreGroupNames.length > 0}
         <div class="flex flex-wrap gap-1">
