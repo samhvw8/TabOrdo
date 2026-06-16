@@ -753,6 +753,45 @@ export function hashCode(str: string): number {
   return hash;
 }
 
+const PIN_BADGE = "📌 ";
+
+// Injected into the page. Prepends a pin badge to document.title and keeps it
+// applied across SPA title changes via a MutationObserver stored on window.
+function applyTitleBadgeInPage(badge: string): void {
+  const w = window as unknown as { __tabordoPinObserver?: MutationObserver };
+  if (!document.title.startsWith(badge)) document.title = badge + document.title;
+  if (w.__tabordoPinObserver) return;
+  const titleEl = document.querySelector("title");
+  if (!titleEl) return;
+  const obs = new MutationObserver(() => {
+    if (!document.title.startsWith(badge)) document.title = badge + document.title;
+  });
+  obs.observe(titleEl, { childList: true });
+  w.__tabordoPinObserver = obs;
+}
+
+// Injected into the page. Removes the badge and disconnects the observer.
+function removeTitleBadgeInPage(badge: string): void {
+  const w = window as unknown as { __tabordoPinObserver?: MutationObserver };
+  if (w.__tabordoPinObserver) {
+    w.__tabordoPinObserver.disconnect();
+    delete w.__tabordoPinObserver;
+  }
+  if (document.title.startsWith(badge)) document.title = document.title.slice(badge.length);
+}
+
+async function setTitleBadge(tabId: number, on: boolean): Promise<void> {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      func: on ? applyTitleBadgeInPage : removeTitleBadgeInPage,
+      args: [PIN_BADGE],
+    });
+  } catch (e) {
+    console.warn("[TabOrdo] title badge inject failed:", e);
+  }
+}
+
 export async function pinCurrentTab(posStr: string): Promise<string> {
   const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!active?.id || !active.url) return "No active tab";
@@ -782,6 +821,7 @@ export async function pinCurrentTab(posStr: string): Promise<string> {
 
   await pinTab(active.url, group.title, position, active.title, active.id);
   await applyPinsToGroup(active.groupId, group.title);
+  await setTitleBadge(active.id, true);
   return `Pinned at position ${position + 1} in "${group.title}"`;
 }
 
@@ -794,6 +834,7 @@ export async function unpinCurrentTab(): Promise<string> {
   if (!group?.title) return "Group has no title";
 
   const removed = await unpinTab(active.url, group.title);
+  if (removed) await setTitleBadge(active.id, false);
   return removed ? `Unpinned from "${group.title}"` : "Tab was not pinned";
 }
 

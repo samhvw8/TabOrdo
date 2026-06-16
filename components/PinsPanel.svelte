@@ -79,10 +79,14 @@
     return openTabs.find((t) => t.url === url);
   }
 
-  async function handleSwitchTo(url: string, tabId?: number) {
+  async function handleSwitchTo(url: string, tabId: number | undefined, shiftKey: boolean) {
     const tab = findOpenTab(url, tabId);
     if (tab?.id) {
       await switchToTab(tab.id);
+    } else if (shiftKey) {
+      // Reopen a closed pinned tab at its URL
+      await chrome.tabs.create({ url, active: true });
+      await load();
     }
   }
 
@@ -272,12 +276,11 @@
                   onerror={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
                 />
 
-                <!-- Clickable area → switch to tab -->
+                <!-- Clickable area → switch to tab (shift-click reopens if closed) -->
                 <button
-                  class="flex-1 min-w-0 text-left py-1.5 pr-1 {openTab ? 'cursor-pointer hover:bg-surface-hover' : 'cursor-default opacity-60'}"
-                  onclick={() => handleSwitchTo(pin.url, pin.tabId)}
-                  title={openTab ? `Switch to: ${displayTitle}` : `Not open: ${pin.url}`}
-                  disabled={!openTab}
+                  class="flex-1 min-w-0 text-left py-1.5 pr-1 cursor-pointer hover:bg-surface-hover {openTab ? '' : 'opacity-60'}"
+                  onclick={(e) => handleSwitchTo(pin.url, pin.tabId, e.shiftKey)}
+                  title={openTab ? `Switch to: ${displayTitle}` : `Closed — shift-click to reopen: ${pin.url}`}
                 >
                   <div class="text-[10px] text-text truncate">{displayTitle}</div>
                   <div class="text-[9px] text-text-muted truncate">{pin.url}</div>
