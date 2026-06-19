@@ -653,6 +653,11 @@
     }
   }
 
+  async function handlePinCurrent(e: MouseEvent) {
+    const toStart = e.altKey || e.ctrlKey;
+    await dashAction(() => pinCurrentTab(toStart ? "^" : ""));
+  }
+
   async function handleFileLoad(e: Event) {
     const file = (e.target as HTMLInputElement).files?.[0];
     if (!file) return;
@@ -814,6 +819,7 @@
         <ActionButton label="Group+" icon="📁" tooltip="Group ungrouped tabs by domain. Keeps existing groups." onclick={() => dashAction(async () => { await snapshotBeforeGroup(); await groupTabsByDomain("additive"); return "Grouped"; })} />
         <ActionButton label={pendingConfirm === "regroup" ? "Sure?" : "Regroup"} icon="🔀" tooltip="Ungroup everything, then regroup all from scratch." onclick={() => confirmAction("regroup", () => dashAction(async () => { await snapshotBeforeGroup(); await groupTabsByDomain("rebuild"); return "Regrouped"; }))} />
         <ActionButton label="Dedup" icon="🔄" tooltip="Close duplicate tabs. Keeps most recently accessed." onclick={() => dashAction(async () => { await snapshotBeforeGroup(); const n = await removeDuplicates(); return n > 0 ? `${n} removed` : "No dupes"; })} />
+        <ActionButton label="Pin Tab" icon="📌" tooltip="Pin current tab to the end of its group's pin list. ⌥/Ctrl-click pins to the start." onclick={(e) => handlePinCurrent(e)} />
         <ActionButton label={pendingConfirm === "ungroup" ? "Sure?" : "Ungroup"} icon="📤" tooltip="Remove all tab groups. Tabs stay in place." onclick={() => confirmAction("ungroup", () => dashAction(async () => { await snapshotBeforeGroup(); await ungroupAll(); return "Ungrouped all"; }))} />
         <ActionButton label={pendingConfirm === "merge" ? "Sure?" : "Merge"} icon="🔗" tooltip="Move all tabs from other windows here." onclick={() => confirmAction("merge", () => dashAction(async () => { await snapshotBeforeGroup(); await mergeAllWindows(); return "Merged"; }))} />
         <ActionButton label={pendingConfirm === "closeSel" ? "Sure?" : "Close Sel."} icon="✕" variant="danger" disabled={selectedTabs.size === 0}
