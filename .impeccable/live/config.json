@@ -1,0 +1,6 @@
+{
+  "files": ["entrypoints/popup/index.html", "entrypoints/archive/index.html"],
+  "insertBefore": "</head>",
+  "commentSyntax": "html",
+  "cspChecked": true
+}

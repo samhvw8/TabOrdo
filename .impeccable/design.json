@@ -1,0 +1,133 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-07-03T00:00:00Z",
+  "title": "Design System: TabOrdo",
+  "extensions": {
+    "colorMeta": {
+      "primary": { "role": "primary", "displayName": "Station Indigo", "canonical": "oklch(55% 0.23 270)", "tonalRamp": ["#1a1a3e", "#2d2d6b", "#4040a0", "#5353c7", "#6366f1", "#8486f5", "#a5a6f8", "#c6c7fb"] },
+      "primary-hover": { "role": "primary", "displayName": "Station Indigo Deep", "canonical": "oklch(48% 0.24 270)", "tonalRamp": ["#161636", "#272760", "#3a3a8e", "#4f46e5", "#6a62f0", "#8b85f5", "#aba7f8", "#cccafb"] },
+      "surface": { "role": "neutral", "displayName": "Deep Panel", "canonical": "oklch(20% 0.02 280)", "tonalRamp": ["#0a0a12", "#121220", "#1e1e2e", "#2a2a3e", "#35354d", "#48485e", "#5e5e72", "#767688"] },
+      "surface-hover": { "role": "neutral", "displayName": "Raised Panel", "canonical": "oklch(24% 0.02 280)", "tonalRamp": ["#0e0e1a", "#191928", "#2a2a3e", "#353550", "#414162", "#4e4e74", "#5d5d86", "#6e6e98"] },
+      "surface-active": { "role": "neutral", "displayName": "Active Panel", "canonical": "oklch(28% 0.02 280)", "tonalRamp": ["#121222", "#1e1e32", "#2c2c44", "#35354d", "#42425e", "#505070", "#606082", "#727296"] },
+      "border": { "role": "neutral", "displayName": "Panel Edge", "canonical": "oklch(32% 0.02 280)", "tonalRamp": ["#16162a", "#24243c", "#32324e", "#3b3b52", "#4a4a64", "#5a5a76", "#6c6c8a", "#7e7e9e"] },
+      "text": { "role": "neutral", "displayName": "High Text", "canonical": "oklch(92% 0.01 280)", "tonalRamp": ["#8a8a9e", "#9e9eb2", "#b0b0c4", "#c2c2d6", "#d4d4e6", "#e4e4ef", "#eeeeF5", "#f6f6fa"] },
+      "text-muted": { "role": "neutral", "displayName": "Low Text", "canonical": "oklch(68% 0.02 280)", "tonalRamp": ["#555568", "#666680", "#777798", "#8888a0", "#9999b0", "#aaaac0", "#bbbbd0", "#cccce0"] },
+      "accent-red": { "role": "tertiary", "displayName": "Signal Red", "canonical": "oklch(70% 0.18 25)", "tonalRamp": ["#5c1a1a", "#8b2525", "#b83838", "#d85050", "#f87171", "#fa9090", "#fcb0b0", "#fdd0d0"] },
+      "accent-green": { "role": "tertiary", "displayName": "Signal Green", "canonical": "oklch(78% 0.18 145)", "tonalRamp": ["#0d3d1f", "#1a6b36", "#2a994f", "#3cc068", "#4ade80", "#70e89a", "#96f0b4", "#bcf8d0"] },
+      "accent-blue": { "role": "tertiary", "displayName": "Signal Blue", "canonical": "oklch(72% 0.14 250)", "tonalRamp": ["#1a3050", "#2a4a78", "#3a68a0", "#4a86c8", "#60a5fa", "#80b8fb", "#a0cbfc", "#c0defd"] },
+      "accent-yellow": { "role": "tertiary", "displayName": "Signal Yellow", "canonical": "oklch(88% 0.16 95)", "tonalRamp": ["#5c4a00", "#8b7000", "#b89800", "#d8b200", "#facc15", "#fbd644", "#fce072", "#fdeba0"] },
+      "accent-purple": { "role": "tertiary", "displayName": "Signal Purple", "canonical": "oklch(68% 0.18 295)", "tonalRamp": ["#2a1a50", "#3e2d78", "#5540a0", "#7060c8", "#a78bfa", "#b8a2fb", "#c9b9fc", "#dad0fd"] },
+      "accent-cyan": { "role": "tertiary", "displayName": "Signal Cyan", "canonical": "oklch(82% 0.14 200)", "tonalRamp": ["#004040", "#006868", "#009090", "#00b0b8", "#22d3ee", "#50ddf2", "#80e7f5", "#b0f1f8"] },
+      "accent-orange": { "role": "tertiary", "displayName": "Signal Orange", "canonical": "oklch(76% 0.16 60)", "tonalRamp": ["#5c2a00", "#8b4000", "#b85800", "#d87200", "#fb923c", "#fca864", "#fcc08c", "#fdd8b4"] },
+      "accent-pink": { "role": "tertiary", "displayName": "Signal Pink", "canonical": "oklch(72% 0.18 340)", "tonalRamp": ["#5c1a3a", "#8b2858", "#b83878", "#d85098", "#f472b6", "#f790c6", "#fab0d6", "#fdd0e6"] }
+    },
+    "typographyMeta": {
+      "body": { "displayName": "Body", "purpose": "Tab titles, result items, primary readable text. The default size." },
+      "label": { "displayName": "Label", "purpose": "Category headers, toggle labels, metadata. Always uppercase with tracking." },
+      "title": { "displayName": "Title", "purpose": "Section headers, group titles, panel headings." }
+    },
+    "shadows": [
+      { "name": "tooltip", "value": "0 10px 15px -3px rgba(0,0,0,0.4), 0 4px 6px -4px rgba(0,0,0,0.3)", "purpose": "Tooltip floating above all surfaces. The only shadow in the system." }
+    ],
+    "motion": [
+      { "name": "color-transition", "value": "color 150ms ease, background-color 150ms ease, border-color 150ms ease", "purpose": "Default state transition for interactive elements. Applied via Tailwind transition-colors." },
+      { "name": "opacity-reveal", "value": "opacity 150ms ease", "purpose": "Close buttons and destructive actions revealed on group hover." },
+      { "name": "chevron-rotate", "value": "transform 150ms ease", "purpose": "Collapse/expand chevron rotation on group headers." }
+    ],
+    "breakpoints": []
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Used for primary submit actions (Add pattern, Add rule). Compact inline size.",
+      "html": "<button class=\"ds-btn-primary\">Add</button>",
+      "css": ".ds-btn-primary { background: #6366f1; color: #fff; padding: 4px 8px; font-size: 10px; font-weight: 500; font-family: Inter, system-ui, sans-serif; border: none; border-radius: 6px; cursor: pointer; transition: background-color 150ms ease; } .ds-btn-primary:hover { background: #4f46e5; } .ds-btn-primary:focus-visible { outline: 2px solid #6366f1; outline-offset: 2px; } .ds-btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }"
+    },
+    {
+      "name": "Action Button",
+      "kind": "button",
+      "refersTo": "button-default",
+      "description": "Dashboard grid button with emoji icon above text label. 4-column grid layout.",
+      "html": "<button class=\"ds-btn-action\"><span class=\"ds-btn-action-icon\">↕️</span><span class=\"ds-btn-action-label\">Sort All</span></button>",
+      "css": ".ds-btn-action { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 100%; padding: 10px 12px; background: #2a2a3e; border: 1px solid #3b3b52; border-radius: 8px; color: #e4e4ef; font-family: Inter, system-ui, sans-serif; cursor: pointer; transition: background-color 150ms ease, border-color 150ms ease; } .ds-btn-action:hover { background: #35354d; border-color: rgba(153, 153, 176, 0.3); } .ds-btn-action-icon { font-size: 16px; } .ds-btn-action-label { font-size: 12px; } .ds-btn-action:focus-visible { outline: 2px solid #6366f1; outline-offset: 2px; }"
+    },
+    {
+      "name": "Danger Action Button",
+      "kind": "button",
+      "refersTo": "button-danger",
+      "description": "Destructive actions (Close Selected). Red accent at low opacity.",
+      "html": "<button class=\"ds-btn-danger\"><span class=\"ds-btn-danger-icon\">✕</span><span class=\"ds-btn-danger-label\">Close Sel.</span></button>",
+      "css": ".ds-btn-danger { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 100%; padding: 10px 12px; background: rgba(248, 113, 113, 0.05); border: 1px solid rgba(248, 113, 113, 0.3); border-radius: 8px; color: #f87171; font-family: Inter, system-ui, sans-serif; cursor: pointer; transition: background-color 150ms ease, border-color 150ms ease; } .ds-btn-danger:hover { background: rgba(248, 113, 113, 0.1); border-color: rgba(248, 113, 113, 0.5); } .ds-btn-danger-icon { font-size: 16px; } .ds-btn-danger-label { font-size: 12px; } .ds-btn-danger:focus-visible { outline: 2px solid #f87171; outline-offset: 2px; }"
+    },
+    {
+      "name": "Toggle Chip",
+      "kind": "chip",
+      "refersTo": "chip-toggle-on",
+      "description": "Feature toggle with colored status dot. Each toggle maps to its own accent color.",
+      "html": "<button class=\"ds-chip-on\"><span class=\"ds-chip-dot\"></span>Rules</button>",
+      "css": ".ds-chip-on { display: flex; align-items: center; gap: 6px; padding: 4px 8px; background: rgba(74, 222, 128, 0.15); border: 1px solid rgba(74, 222, 128, 0.3); border-radius: 6px; color: #4ade80; font-size: 10px; font-family: Inter, system-ui, sans-serif; cursor: pointer; transition: background-color 150ms ease; } .ds-chip-dot { width: 8px; height: 8px; border-radius: 50%; background: #4ade80; } .ds-chip-on:hover { background: rgba(74, 222, 128, 0.25); } .ds-chip-on:focus-visible { outline: 2px solid #4ade80; outline-offset: 2px; }"
+    },
+    {
+      "name": "Search Input",
+      "kind": "input",
+      "refersTo": "input-default",
+      "description": "Primary search field doubling as command palette. Magnifying glass icon left, command syntax highlighting overlay.",
+      "html": "<div class=\"ds-search-wrap\"><svg class=\"ds-search-icon\" xmlns=\"http://www.w3.org/2000/svg\" width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"11\" cy=\"11\" r=\"8\"/><path d=\"m21 21-4.3-4.3\"/></svg><input class=\"ds-search-input\" placeholder=\"Search tabs... (/ commands, @ triage)\" /></div>",
+      "css": ".ds-search-wrap { position: relative; } .ds-search-icon { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: #9999b0; } .ds-search-input { width: 100%; padding: 8px 12px 8px 32px; background: #2a2a3e; border: 1px solid #3b3b52; border-radius: 8px; color: #e4e4ef; font-size: 14px; font-family: Inter, system-ui, sans-serif; outline: none; transition: border-color 150ms ease; } .ds-search-input::placeholder { color: #9999b0; } .ds-search-input:focus { border-color: #6366f1; }"
+    },
+    {
+      "name": "Tab Card",
+      "kind": "card",
+      "refersTo": "tab-card-default",
+      "description": "Individual tab row in dashboard or search results. Favicon, title, URL hostname, hover-reveal close button.",
+      "html": "<div class=\"ds-tab-card\"><img class=\"ds-tab-favicon\" src=\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16'%3E%3Crect width='16' height='16' rx='2' fill='%2335354d'/%3E%3C/svg%3E\" alt=\"\" /><div class=\"ds-tab-info\"><div class=\"ds-tab-title\">Example Tab Title</div><div class=\"ds-tab-url\">example.com</div></div><button class=\"ds-tab-close\"><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"12\" height=\"12\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M18 6 6 18\"/><path d=\"m6 6 12 12\"/></svg></button></div>",
+      "css": ".ds-tab-card { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; border: 1px solid transparent; transition: background-color 150ms ease; cursor: pointer; } .ds-tab-card:hover { background: #2a2a3e; } .ds-tab-favicon { width: 16px; height: 16px; border-radius: 2px; flex-shrink: 0; } .ds-tab-info { flex: 1; min-width: 0; } .ds-tab-title { font-size: 14px; color: #e4e4ef; font-family: Inter, system-ui, sans-serif; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .ds-tab-url { font-size: 12px; color: #9999b0; font-family: Inter, system-ui, sans-serif; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .ds-tab-close { flex-shrink: 0; padding: 4px; border-radius: 4px; border: none; background: none; color: #9999b0; opacity: 0; cursor: pointer; transition: opacity 150ms ease, color 150ms ease, background-color 150ms ease; } .ds-tab-card:hover .ds-tab-close { opacity: 1; } .ds-tab-close:hover { background: rgba(248, 113, 113, 0.2); color: #f87171; }"
+    },
+    {
+      "name": "Sidebar Nav",
+      "kind": "nav",
+      "refersTo": null,
+      "description": "48px vertical sidebar with icon-only navigation. Active item gets solid primary background.",
+      "html": "<aside class=\"ds-sidebar\"><button class=\"ds-sidebar-btn ds-sidebar-active\"><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect x=\"3\" y=\"3\" width=\"7\" height=\"9\" rx=\"1\"/><rect x=\"14\" y=\"3\" width=\"7\" height=\"5\" rx=\"1\"/><rect x=\"14\" y=\"12\" width=\"7\" height=\"9\" rx=\"1\"/><rect x=\"3\" y=\"16\" width=\"7\" height=\"5\" rx=\"1\"/></svg></button><button class=\"ds-sidebar-btn\"><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z\"/><circle cx=\"12\" cy=\"12\" r=\"3\"/></svg></button></aside>",
+      "css": ".ds-sidebar { width: 48px; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 0; border-right: 1px solid #3b3b52; background: #1e1e2e; } .ds-sidebar-btn { width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; border-radius: 6px; border: none; background: #2a2a3e; color: #9999b0; cursor: pointer; transition: background-color 150ms ease, color 150ms ease; } .ds-sidebar-btn:hover { color: #e4e4ef; } .ds-sidebar-active { background: #6366f1 !important; color: #fff !important; } .ds-sidebar-btn:focus-visible { outline: 2px solid #6366f1; outline-offset: 2px; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Command Station",
+    "overview": "TabOrdo's interface is a cockpit: every control in reach, nothing wasted, focused calm under complexity. The 400×600px popup is a dense control surface where information glows against dark panels. Density is a feature, not a compromise — the user has 150 tabs and needs to act on them in seconds, not browse a spacious layout.\n\nThe system is built on restrained color strategy: a deep indigo-tinted dark surface with a single indigo primary accent used sparingly for active states and primary actions. Eight semantic accent colors exist for tab group identification (mapped to Chrome's native group color API), but they never compete with the primary — they appear at low opacity as background tints and small dots.\n\nThis system explicitly rejects: corporate SaaS heaviness (Salesforce, Jira), dated browser extension aesthetics (OneTab, Tab Wrangler), and flashy decoration (neon, glassmorphism). If a control doesn't help the user act on tabs faster, it doesn't exist.",
+    "keyCharacteristics": [
+      "Dense, information-rich panels within a fixed 400×600px viewport",
+      "Single font family (Inter) at compact sizes (10–14px range)",
+      "Dark-only theme with indigo-tinted neutrals",
+      "Accent colors reserved for semantic meaning (group identity, state, severity)",
+      "Keyboard-first interaction model with mouse as secondary"
+    ],
+    "rules": [
+      { "name": "The 10% Rule", "body": "Station Indigo appears on at most 10% of any given screen. A selected sidebar icon, a focused input border, a primary button. Its rarity makes it the signal in the noise.", "section": "colors" },
+      { "name": "The Low-Opacity Rule", "body": "Accent colors never appear at full saturation on surfaces. Group backgrounds use 5% opacity, borders use 30-40% opacity. Full saturation is reserved for the 2px group dot and status text only.", "section": "colors" },
+      { "name": "The No-Display Rule", "body": "There are no headings above 14px. Every screen fits in a 400×600px popup. Display typography is structurally impossible and would waste the user's scarce viewport.", "section": "typography" },
+      { "name": "The Flat-By-Default Rule", "body": "Surfaces are flat. The three-step tonal ramp (Deep → Raised → Active) handles all depth needs. Shadows are reserved for floating overlays (tooltips only).", "section": "elevation" }
+    ],
+    "dos": [
+      "Do use the three-step tonal ramp (Deep → Raised → Active) for all surface hierarchy. Never reach for shadows except on tooltips.",
+      "Do keep accent colors at low opacity on surfaces (5% bg, 30-40% borders). Full saturation only on dots, status text, and icons.",
+      "Do use Inter at 13px as the default text size. The 10-14px range covers every need.",
+      "Do use emoji for action button icons — they're compact, recognizable, and render without a sprite sheet or icon library. Inline SVG for structural icons (sidebar, close, chevrons).",
+      "Do show close buttons only on hover (opacity-0 group-hover:opacity-100). Density means hiding destructive actions until the user signals intent.",
+      "Do use Chrome's native 9-color group palette for tab groups. Never invent custom group colors.",
+      "Do use transition-colors on interactive elements. Keep transitions under 200ms."
+    ],
+    "donts": [
+      "Don't add shadows to cards, panels, or buttons. TabOrdo is tonally layered, not elevated.",
+      "Don't introduce display-sized text (above 14px). The popup viewport is 400×600px.",
+      "Don't make the interface look like corporate SaaS (Salesforce, Jira) — no heavy chrome, no deep nesting, no three-click workflows.",
+      "Don't apply dated browser extension aesthetics (OneTab, Tab Wrangler) — no icon-heavy rows, no blocky layouts.",
+      "Don't use flashy decoration — no neon, no glassmorphism, no gradients, no animated backgrounds.",
+      "Don't use accent colors at full saturation on backgrounds.",
+      "Don't add new top-level colors. The 8 semantic accents map to Chrome's API.",
+      "Don't put borders thicker than 1px on any element."
+    ]
+  }
+}

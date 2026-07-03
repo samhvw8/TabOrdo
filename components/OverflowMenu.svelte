@@ -49,7 +49,7 @@
 
   function handleClickOutside(e: MouseEvent) {
     const target = e.target as HTMLElement;
-    if (!target.closest(".overflow-menu")) {
+    if (!target.closest(".overflow-menu") && !target.closest(".overflow-menu-trigger")) {
       open = false;
     }
   }
@@ -58,7 +58,7 @@
 <svelte:document onclick={handleClickOutside} />
 
 {#if open}
-<div class="overflow-menu absolute right-0 top-full mt-1 w-48 rounded-lg border border-border bg-surface shadow-lg z-50 py-1 text-xs max-h-[400px] overflow-y-auto">
+<div class="overflow-menu absolute right-0 top-full mt-1 w-48 rounded-lg border border-border bg-surface shadow-lg z-50 py-1 text-xs max-h-[300px] overflow-y-auto">
   {#each sections as section, si}
     {#if si > 0}
       <div class="mx-2 my-1 h-px bg-border/50"></div>

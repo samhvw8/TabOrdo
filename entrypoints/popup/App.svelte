@@ -17,6 +17,7 @@
   import Sidebar, { type SidebarSection } from "../../components/Sidebar.svelte";
   import SettingsPanel from "../../components/SettingsPanel.svelte";
   import PinsPanel from "../../components/PinsPanel.svelte";
+  import OverflowMenu from "../../components/OverflowMenu.svelte";
 
   let query = $state("");
   let results = $state<SearchResult[]>([]);
@@ -53,6 +54,8 @@
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
   let pendingConfirm = $state<string | null>(null);
   let confirmTimer: ReturnType<typeof setTimeout> | undefined;
+  let onboardingDismissed = $state(true);
+  let helpFilter = $state("");
 
   function confirmAction(id: string, action: () => void) {
     if (pendingConfirm === id) {
@@ -365,6 +368,37 @@
       if (group.length > 1) dupes.push(...group);
     }
     return dupes;
+  }
+
+  let groupCount = $derived(windows.reduce((n, w) => n + w.groups.size, 0));
+  let audioCount = $derived(dashboardTabs.filter((t) => t.audible && !t.mutedInfo?.muted).length);
+  let dupeCount = $derived(findDuplicateTabs(allTabs).length);
+
+  async function handleOverflowAction(action: string) {
+    switch (action) {
+      case "regroup": confirmAction("regroup", () => dashAction(async () => { await snapshotBeforeGroup(); await groupTabsByDomain("rebuild"); return "Regrouped"; })); break;
+      case "ungroup": confirmAction("ungroup", () => dashAction(async () => { await snapshotBeforeGroup(); await ungroupAll(); return "Ungrouped all"; })); break;
+      case "shuffle": dashAction(async () => { await snapshotBeforeGroup(); await shuffleTabs(); return "Shuffled"; }); break;
+      case "unite": dashAction(async () => { const n = await uniteDomain(); return n > 0 ? `United ${n}` : "None to unite"; }); break;
+      case "isolate": dashAction(async () => { const n = await isolateDomain(); return n > 0 ? `Isolated ${n}` : "Not enough tabs"; }); break;
+      case "splitv": dashAction(async () => { await snapshotBeforeGroup(); await splitWindow("vertical"); return "Split V"; }); break;
+      case "splith": dashAction(async () => { await snapshotBeforeGroup(); await splitWindow("horizontal"); return "Split H"; }); break;
+      case "splitdomain": dashAction(async () => { await snapshotBeforeGroup(); const n = await splitByDomain(); return n > 0 ? `${n + 1} windows` : "One domain"; }); break;
+      case "stack": dashAction(async () => { await stackWindows(); return "Stacked"; }); break;
+      case "closeleft": dashAction(async () => { const n = await closeTabsToLeft(); return n > 0 ? `Closed ${n} left` : "None to close"; }); break;
+      case "closeright": dashAction(async () => { const n = await closeTabsToRight(); return n > 0 ? `Closed ${n} right` : "None to close"; }); break;
+      case "closeold": dashAction(async () => { const n = await closeOldTabs(); return n > 0 ? `Closed ${n} old` : "No old tabs"; }); break;
+      case "closesite": dashAction(async () => { const n = await closeTabsSameSite(); return n > 0 ? `Closed ${n} same-site` : "No other tabs"; }); break;
+      case "focus":
+        dashAction(async () => {
+          if (hasWorkspace) { const n = await unfocusMode(); hasWorkspace = false; return n > 0 ? `Restored ${n}` : "No workspace"; }
+          else { const n = await focusMode(); hasWorkspace = true; return `Saved ${n}, focused`; }
+        }); break;
+      case "save": exportTabsToFile(); statusMessage = "Exporting..."; setTimeout(() => { statusMessage = ""; }, 2000); break;
+      case "load": fileInputEl?.click(); break;
+      case "archive": chrome.tabs.create({ url: chrome.runtime.getURL("/archive.html") }); break;
+      case "feedback": chrome.tabs.create({ url: "https://github.com/nicepkg/TabOrdo/issues" }); break;
+    }
   }
 
   async function handleActionCommand(prefix: string, searchQuery: string) {
@@ -686,6 +720,15 @@
     hasWorkspace = await hasSavedWorkspace();
     archiveCount = await getArchiveCount();
     if (config.collapsedGroups) collapsedGroups = new Set(config.collapsedGroups);
+    const ob = await chrome.storage.local.get("onboardingDismissed");
+    onboardingDismissed = !!ob.onboardingDismissed;
+  });
+
+  $effect(() => {
+    if (activeSection === "archive") {
+      chrome.tabs.create({ url: chrome.runtime.getURL("/archive.html") });
+      activeSection = "dashboard";
+    }
   });
 
   function onQueryChange() {
@@ -693,7 +736,7 @@
   }
 </script>
 
-<div class="w-full h-full flex flex-col overflow-hidden">
+<div class="w-[450px] h-[600px] flex flex-col overflow-hidden">
   <!-- Search bar — always visible -->
   <div class="flex items-center gap-1.5 px-3 pt-3 pb-2">
     <div class="flex-1 min-w-0">
@@ -763,44 +806,98 @@
     </div>
   {/if}
 
-  <div class="flex flex-1 min-h-0">
-    <Sidebar bind:active={activeSection} />
+  <div class="flex flex-1 min-h-0 overflow-hidden">
+    <Sidebar bind:active={activeSection} {archiveCount} />
   {#if activeSection === "rules"}
     <RulesEditor onclose={() => { activeSection = "dashboard"; }} />
   {:else if activeSection === "pins"}
     <PinsPanel />
   {:else if activeSection === "settings"}
     <SettingsPanel />
-  {:else if showHelp}
-    <!-- Help guide -->
+  {:else if activeSection === "more"}
     <div class="flex-1 overflow-y-auto px-3 py-2 min-h-0">
-      <div class="text-xs font-semibold text-text mb-2">Command Guide</div>
+      <div class="flex items-center gap-2 mb-2">
+        <div class="text-xs font-semibold text-text">More Actions</div>
+        <div class="flex-1"></div>
+      </div>
+      {#each [
+        { title: "Organize", items: [
+          { action: "regroup", label: "Regroup All", tip: "Ungroup everything, then regroup from scratch" },
+          { action: "ungroup", label: "Ungroup All", tip: "Remove all tab groups" },
+          { action: "shuffle", label: "Shuffle", tip: "Randomly reorder tabs" },
+        ]},
+        { title: "Windows", items: [
+          { action: "unite", label: "Unite Domain", tip: "Bring same-domain tabs from other windows" },
+          { action: "isolate", label: "Isolate Domain", tip: "Move same-domain tabs to new window" },
+          { action: "splitv", label: "Split Vertical", tip: "Split window in half, side by side" },
+          { action: "splith", label: "Split Horizontal", tip: "Split window top/bottom" },
+          { action: "splitdomain", label: "Split by Domain", tip: "Each domain gets its own window" },
+          { action: "stack", label: "Stack Windows", tip: "Stack all windows to left side" },
+        ]},
+        { title: "Close", items: [
+          { action: "closeleft", label: "Close Left", tip: "Close tabs to the left of active tab" },
+          { action: "closeright", label: "Close Right", tip: "Close tabs to the right of active tab" },
+          { action: "closeold", label: "Close Old (7d)", tip: "Close tabs older than 7 days" },
+          { action: "closesite", label: "Close Same Site", tip: "Close other tabs from this site" },
+        ]},
+        { title: "Workspace", items: [
+          { action: "focus", label: hasWorkspace ? "Unfocus (Restore)" : "Focus (Save & Clear)", tip: hasWorkspace ? "Restore saved workspace" : "Save tabs & start fresh" },
+          { action: "save", label: "Save to File", tip: "Export current tabs to text file" },
+          { action: "load", label: "Load from File", tip: "Load tabs from text file" },
+          { action: "archive", label: `Open Archive (${archiveCount})`, tip: "View archived tabs" },
+        ]},
+      ] as section, si}
+        {#if si > 0}
+          <div class="my-1.5 h-px bg-border/30"></div>
+        {/if}
+        <div class="text-[9px] font-semibold uppercase tracking-wider text-text-muted mb-1">{section.title}</div>
+        {#each section.items as item}
+          <button
+            class="w-full text-left flex items-center gap-2 px-2.5 py-1.5 rounded-md hover:bg-surface-hover text-xs text-text transition-colors"
+            onclick={() => { handleOverflowAction(item.action); activeSection = "dashboard"; }}
+            title={item.tip}
+          >
+            {item.label}
+            <span class="ml-auto text-[10px] text-text-muted">{item.tip}</span>
+          </button>
+        {/each}
+      {/each}
+    </div>
+  {:else if showHelp}
+    {@const allCmds = [...ALL_COMMANDS, ...TRIAGE_COMMANDS]}
+    {@const filteredCmds = helpFilter ? allCmds.filter(c => c.prefix.includes(helpFilter.toLowerCase()) || c.description.toLowerCase().includes(helpFilter.toLowerCase())) : allCmds}
+    <div class="flex-1 overflow-y-auto px-3 py-2 min-h-0">
+      <div class="flex items-center gap-2 mb-2">
+        <div class="text-xs font-semibold text-text">Commands</div>
+        <div class="flex-1"></div>
+        <input type="text" class="w-28 px-1.5 py-0.5 rounded border border-border bg-surface-hover text-[10px] text-text placeholder:text-text-muted focus:outline-none focus:border-primary" placeholder="Filter..." bind:value={helpFilter} />
+      </div>
+      <div class="grid grid-cols-[auto_auto_1fr] gap-x-2 gap-y-0.5 mb-2 px-1 py-1.5 rounded-md bg-surface-hover border border-border">
+        <kbd class="px-1 py-0.5 rounded bg-surface text-[9px] text-center">⌘E</kbd><span class="text-[10px] text-text-muted">Open TabOrdo</span><span></span>
+        <kbd class="px-1 py-0.5 rounded bg-surface text-[9px] text-center">↑↓</kbd><span class="text-[10px] text-text-muted">Navigate</span><span></span>
+        <kbd class="px-1 py-0.5 rounded bg-surface text-[9px] text-center">↵</kbd><span class="text-[10px] text-text-muted">Open / run</span><span></span>
+        <kbd class="px-1 py-0.5 rounded bg-surface text-[9px] text-center">⇧Tab</kbd><span class="text-[10px] text-text-muted">Search mode</span><span></span>
+        <kbd class="px-1 py-0.5 rounded bg-surface text-[9px] text-center">^Del</kbd><span class="text-[10px] text-text-muted">Close tab</span><span></span>
+        <kbd class="px-1 py-0.5 rounded bg-surface text-[9px] text-center">⌘Z</kbd><span class="text-[10px] text-text-muted">Undo</span><span></span>
+      </div>
       {#each (["search", "action", "view"] as CommandCategory[]) as cat}
+        {@const catCmds = filteredCmds.filter(c => c.category === cat)}
+        {#if catCmds.length > 0}
         <div class="flex items-center gap-2 mb-1 mt-2">
           <span class="text-[10px] font-semibold uppercase tracking-wider {CATEGORY_STYLES[cat].color}">{CATEGORY_STYLES[cat].label}</span>
           <div class="flex-1 h-px bg-border/50"></div>
         </div>
-        {#each [...ALL_COMMANDS, ...TRIAGE_COMMANDS].filter(c => c.category === cat) as cmd}
+        {#each catCmds as cmd}
           <button
-            class="w-full flex items-center gap-2 px-2 py-1 rounded hover:bg-surface-hover transition-colors text-left"
-            onclick={() => { query = cmd.prefix.startsWith("@") ? `${cmd.prefix} ` : `/${cmd.prefix} `; showHelp = false; updateResults(); }}
+            class="w-full flex items-center gap-2 px-2 py-1 rounded hover:bg-surface-hover transition-colors text-left focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface"
+            onclick={() => { query = cmd.prefix.startsWith("@") ? `${cmd.prefix} ` : `/${cmd.prefix} `; showHelp = false; helpFilter = ""; updateResults(); }}
           >
             <span class="font-mono text-xs font-medium w-16 shrink-0 {cmd.color}">{cmd.label}</span>
             <span class="text-xs text-text-muted">{cmd.description}</span>
           </button>
         {/each}
+        {/if}
       {/each}
-      <div class="mt-3 pt-2 border-t border-border">
-        <div class="text-[10px] font-semibold text-text-muted uppercase tracking-wider mb-1.5">Keyboard</div>
-        <div class="grid grid-cols-2 gap-y-1 text-xs text-text-muted">
-          <span><kbd class="px-1 py-0.5 rounded bg-surface-hover text-[10px]">Tab</kbd> Cycle search mode</span>
-          <span><kbd class="px-1 py-0.5 rounded bg-surface-hover text-[10px]">↑↓</kbd> Navigate results</span>
-          <span><kbd class="px-1 py-0.5 rounded bg-surface-hover text-[10px]">Enter</kbd> Open / run</span>
-          <span><kbd class="px-1 py-0.5 rounded bg-surface-hover text-[10px]">Ctrl+Del</kbd> Close tab</span>
-          <span><kbd class="px-1 py-0.5 rounded bg-surface-hover text-[10px]">Esc</kbd> Clear / back</span>
-          <span><kbd class="px-1 py-0.5 rounded bg-surface-hover text-[10px]">/</kbd> Commands</span>
-        </div>
-      </div>
     </div>
   {:else if showPalette}
     <!-- Command palette mode -->
@@ -812,121 +909,92 @@
   {:else}
     <!-- Dashboard mode -->
     <div class="flex-1 overflow-y-auto min-h-0">
-      <!-- Action buttons -->
-      <div class="grid grid-cols-4 gap-1.5 px-3 pb-2 {busy ? 'opacity-50 pointer-events-none' : ''}"
-        aria-busy={busy}>
-        <ActionButton label="Sort All" icon="↕️" tooltip="Sort tabs by domain. Groups left, ungrouped right." onclick={() => dashAction(async () => { await snapshotBeforeGroup(); await sortTabsInWindow(currentWindowId); return "Sorted"; })} />
-        <ActionButton label="Group+" icon="📁" tooltip="Group ungrouped tabs by domain. Keeps existing groups." onclick={() => dashAction(async () => { await snapshotBeforeGroup(); await groupTabsByDomain("additive"); return "Grouped"; })} />
-        <ActionButton label={pendingConfirm === "regroup" ? "Sure?" : "Regroup"} icon="🔀" tooltip="Ungroup everything, then regroup all from scratch." onclick={() => confirmAction("regroup", () => dashAction(async () => { await snapshotBeforeGroup(); await groupTabsByDomain("rebuild"); return "Regrouped"; }))} />
-        <ActionButton label="Dedup" icon="🔄" tooltip="Close duplicate tabs. Keeps most recently accessed." onclick={() => dashAction(async () => { await snapshotBeforeGroup(); const n = await removeDuplicates(); return n > 0 ? `${n} removed` : "No dupes"; })} />
-        <ActionButton label="Pin Tab" icon="📌" tooltip="Pin current tab to the end of its group's pin list. ⌥/Ctrl-click pins to the start." onclick={(e) => handlePinCurrent(e)} />
-        <ActionButton label={pendingConfirm === "ungroup" ? "Sure?" : "Ungroup"} icon="📤" tooltip="Remove all tab groups. Tabs stay in place." onclick={() => confirmAction("ungroup", () => dashAction(async () => { await snapshotBeforeGroup(); await ungroupAll(); return "Ungrouped all"; }))} />
-        <ActionButton label={pendingConfirm === "merge" ? "Sure?" : "Merge"} icon="🔗" tooltip="Move all tabs from other windows here." onclick={() => confirmAction("merge", () => dashAction(async () => { await snapshotBeforeGroup(); await mergeAllWindows(); return "Merged"; }))} />
-        <ActionButton label={pendingConfirm === "closeSel" ? "Sure?" : "Close Sel."} icon="✕" variant="danger" disabled={selectedTabs.size === 0}
-          tooltip="Close all selected tabs." onclick={() => confirmAction("closeSel", () => dashAction(async () => { await snapshotBeforeClose([...selectedTabs]); await closeTabs([...selectedTabs]); return `Closed ${selectedTabs.size}`; }))} />
-        <ActionButton label="Archive Sel." icon="📦" disabled={selectedTabs.size === 0}
-          tooltip="Archive selected tabs (save & close). View in Archive page." onclick={() => dashAction(async () => {
-            const tabs = dashboardTabs.filter((t) => selectedTabs.has(t.id));
-            const tabData = tabs.map((t) => ({ url: t.url, title: t.title, favIconUrl: t.favIconUrl, groupName: t.groupTitle }));
-            const archived = await archiveTabs(tabData);
-            await closeTabs([...selectedTabs]);
-            return `Archived ${archived}`;
-          })} />
-        <ActionButton label="Close Left" icon="⬅️"
-          tooltip="Close all tabs to the left of active tab in current window." onclick={() => dashAction(async () => { const n = await closeTabsToLeft(); return n > 0 ? `Closed ${n} left` : "None to close"; })} />
-        <ActionButton label="Close Right" icon="➡️"
-          tooltip="Close all tabs to the right of active tab in current window." onclick={() => dashAction(async () => { const n = await closeTabsToRight(); return n > 0 ? `Closed ${n} right` : "None to close"; })} />
-        <ActionButton label="Discard Sel." icon="💤" disabled={selectedTabs.size === 0}
-          tooltip="Suspend selected tabs to free memory." onclick={() => dashAction(async () => { await discardTabs([...selectedTabs]); return `Discarded ${selectedTabs.size}`; })} />
-        <ActionButton label="Shuffle" icon="🎲"
-          tooltip="Randomly reorder tabs in current window." onclick={() => dashAction(async () => { await snapshotBeforeGroup(); await shuffleTabs(); return "Shuffled"; })} />
-        <ActionButton label="Unite" icon="🧲"
-          tooltip="Bring same-domain tabs from other windows here." onclick={() => dashAction(async () => { const n = await uniteDomain(); return n > 0 ? `United ${n}` : "None to unite"; })} />
-        <ActionButton label="Isolate" icon="🔬"
-          tooltip="Move same-domain tabs to new window." onclick={() => dashAction(async () => { const n = await isolateDomain(); return n > 0 ? `Isolated ${n}` : "Not enough tabs"; })} />
-        <ActionButton label="Split V" icon="⬜"
-          tooltip="Split window in half vertically, side by side." onclick={() => dashAction(async () => { await snapshotBeforeGroup(); await splitWindow("vertical"); return "Split V"; })} />
-        <ActionButton label="Split Dom." icon="🌐"
-          tooltip="Each domain gets its own window." onclick={() => dashAction(async () => { await snapshotBeforeGroup(); const n = await splitByDomain(); return n > 0 ? `${n + 1} windows` : "One domain"; })} />
-        <ActionButton label="Stack" icon="📚"
-          tooltip="Stack all windows to left side of screen." onclick={() => dashAction(async () => { await stackWindows(); return "Stacked"; })} />
-        <ActionButton label={hasWorkspace ? "Unfocus" : "Focus"} icon={hasWorkspace ? "🔓" : "🎯"}
-          tooltip={hasWorkspace ? "Restore saved workspace." : "Save tabs & start fresh."}
-          onclick={() => dashAction(async () => {
-            if (hasWorkspace) { const n = await unfocusMode(); hasWorkspace = false; return n > 0 ? `Restored ${n}` : "No workspace"; }
-            else { const n = await focusMode(); hasWorkspace = true; return `Saved ${n}, focused`; }
-          })} />
-        <ActionButton label="Save" icon="💾"
-          tooltip="Export current tabs to text file." onclick={() => { exportTabsToFile(); statusMessage = "Exporting..."; setTimeout(() => { statusMessage = ""; }, 2000); }} />
-        <ActionButton label="Load" icon="📂"
-          tooltip="Load tabs from text file into new window." onclick={() => fileInputEl?.click()} />
-        <ActionButton label="Archive" icon="📦"
-          tooltip="Open archive page ({archiveCount} saved tabs)." onclick={() => { chrome.tabs.create({ url: chrome.runtime.getURL("/archive.html") }); }} />
+      <!-- Stats overview -->
+      <div class="flex items-center gap-1.5 px-3 pb-1.5 text-[11px] text-text-muted">
+        <span>{allTabs.length} tabs</span>
+        <span class="text-border">·</span>
+        <span>{groupCount} groups</span>
+        {#if audioCount > 0}
+          <span class="text-border">·</span>
+          <span>{audioCount} 🔊</span>
+        {/if}
+        {#if dupeCount > 0}
+          <span class="text-border">·</span>
+          <span>{dupeCount} dupes</span>
+        {/if}
       </div>
 
+      <!-- Onboarding hint -->
+      {#if !onboardingDismissed && allTabs.length <= 5}
+        <div class="mx-3 mb-2 flex items-center gap-2 px-2.5 py-2 rounded-lg border border-primary/20 bg-primary/5 text-[11px] text-text-muted">
+          <span class="text-primary">💡</span>
+          <span>Type <kbd class="px-1 py-0.5 rounded bg-surface-hover text-[10px] font-mono">/</kbd> for commands, <kbd class="px-1 py-0.5 rounded bg-surface-hover text-[10px] font-mono">@</kbd> for triage. Try <span class="text-primary font-medium">/sort</span> to organize tabs.</span>
+          <button class="ml-auto shrink-0 text-text-muted hover:text-text transition-colors" onclick={() => { onboardingDismissed = true; chrome.storage.local.set({ onboardingDismissed: true }); }}>✕</button>
+        </div>
+      {/if}
+
+      <!-- Primary action buttons -->
+      <div class="grid grid-cols-3 gap-1.5 px-3 pb-2 {busy ? 'opacity-50 pointer-events-none' : ''}"
+        aria-busy={busy}>
+        <ActionButton label="Sort All" icon="↕️" tooltip="Sort tabs by domain." onclick={() => dashAction(async () => { await snapshotBeforeGroup(); await sortTabsInWindow(currentWindowId); return "Sorted"; })} />
+        <ActionButton label="Group+" icon="📁" tooltip="Group ungrouped tabs by domain." onclick={() => dashAction(async () => { await snapshotBeforeGroup(); await groupTabsByDomain("additive"); return "Grouped"; })} />
+        <ActionButton label="Dedup" icon="🔄" tooltip="Close duplicate tabs." onclick={() => dashAction(async () => { await snapshotBeforeGroup(); const n = await removeDuplicates(); return n > 0 ? `${n} removed` : "No dupes"; })} />
+        <ActionButton label={pendingConfirm === "merge" ? "Confirm" : "Merge"} icon="🔗" tooltip="Move all tabs from other windows here." onclick={() => confirmAction("merge", () => dashAction(async () => { await snapshotBeforeGroup(); await mergeAllWindows(); return "Merged"; }))} />
+        <ActionButton label="Pin Tab" icon="📌" tooltip="Pin current tab at position." onclick={(e) => handlePinCurrent(e)} />
+      </div>
+
+      <!-- Selection actions -->
+      {#if selectedTabs.size > 0}
+        <div class="flex items-center gap-1.5 px-3 pb-2">
+          <span class="text-[10px] text-text-muted">{selectedTabs.size} sel:</span>
+          <button class="px-2 py-0.5 rounded text-[10px] font-medium bg-accent-red/10 text-accent-red border border-accent-red/20 hover:bg-accent-red/20 transition-colors"
+            onclick={() => confirmAction("closeSel", () => dashAction(async () => { await snapshotBeforeClose([...selectedTabs]); await closeTabs([...selectedTabs]); return `Closed ${selectedTabs.size}`; }))}>
+            {pendingConfirm === "closeSel" ? "Confirm" : "Close"}
+          </button>
+          <button class="px-2 py-0.5 rounded text-[10px] font-medium bg-surface-hover text-text-muted border border-border hover:text-text transition-colors"
+            onclick={() => dashAction(async () => {
+              const tabs = dashboardTabs.filter((t) => selectedTabs.has(t.id));
+              const tabData = tabs.map((t) => ({ url: t.url, title: t.title, favIconUrl: t.favIconUrl, groupName: t.groupTitle }));
+              const archived = await archiveTabs(tabData);
+              await closeTabs([...selectedTabs]);
+              return `Archived ${archived}`;
+            })}>Archive</button>
+          <button class="px-2 py-0.5 rounded text-[10px] font-medium bg-surface-hover text-text-muted border border-border hover:text-text transition-colors"
+            onclick={() => dashAction(async () => { await discardTabs([...selectedTabs]); return `Discarded ${selectedTabs.size}`; })}>Discard</button>
+        </div>
+      {/if}
+
       <!-- Toggles -->
-      <div class="flex items-center gap-1.5 px-3 pb-2">
-        <button
-          class="flex items-center gap-1.5 px-2 py-1 rounded-md text-[10px] transition-colors
-            {useRulesEnabled ? 'bg-accent-green/15 text-accent-green border border-accent-green/30' : 'bg-surface-hover text-text-muted border border-border'}"
-          onclick={async () => { useRulesEnabled = !useRulesEnabled; await setUseRules(useRulesEnabled); }}
-          title="When ON, Group+ and Regroup use your custom rules to merge multiple domains into one group. Configure rules with the ⚙ button."
-        >
-          <span class="w-2 h-2 rounded-full {useRulesEnabled ? 'bg-accent-green' : 'bg-border'}"></span>
-          Rules
-        </button>
-        <button
-          class="flex items-center gap-1.5 px-2 py-1 rounded-md text-[10px] transition-colors
-            {autoGroupEnabled ? 'bg-primary/15 text-primary border border-primary/30' : 'bg-surface-hover text-text-muted border border-border'}"
-          onclick={async () => { autoGroupEnabled = !autoGroupEnabled; await setAutoGroup(autoGroupEnabled); }}
-          title="When ON, new tabs are automatically grouped by domain as they load. Rules take priority if also enabled."
-        >
-          <span class="w-2 h-2 rounded-full {autoGroupEnabled ? 'bg-primary' : 'bg-border'}"></span>
-          Auto
-        </button>
-        <button
-          class="flex items-center gap-1.5 px-2 py-1 rounded-md text-[10px] transition-colors
-            {autoUngroupEnabled ? 'bg-accent-purple/15 text-accent-purple border border-accent-purple/30' : 'bg-surface-hover text-text-muted border border-border'}"
-          onclick={async () => { autoUngroupEnabled = !autoUngroupEnabled; await setAutoUngroup(autoUngroupEnabled); }}
-          title="When ON, groups with only 1 tab are automatically ungrouped."
-        >
-          <span class="w-2 h-2 rounded-full {autoUngroupEnabled ? 'bg-accent-purple' : 'bg-border'}"></span>
-          Ungroup
-        </button>
-        <button
-          class="flex items-center gap-1.5 px-2 py-1 rounded-md text-[10px] transition-colors
-            {autoSortEnabled ? 'bg-accent-orange/15 text-accent-orange border border-accent-orange/30' : 'bg-surface-hover text-text-muted border border-border'}"
-          onclick={async () => { autoSortEnabled = !autoSortEnabled; await setAutoSort(autoSortEnabled); }}
-          title="Auto-sort tabs by domain when a tab finishes loading."
-        >
-          <span class="w-2 h-2 rounded-full {autoSortEnabled ? 'bg-accent-orange' : 'bg-border'}"></span>
-          Sort
-        </button>
-        <button
-          class="flex items-center gap-1.5 px-2 py-1 rounded-md text-[10px] transition-colors
-            {autoPinFollowEnabled ? 'bg-accent-cyan/15 text-accent-cyan border border-accent-cyan/30' : 'bg-surface-hover text-text-muted border border-border'}"
-          onclick={async () => { autoPinFollowEnabled = !autoPinFollowEnabled; await setAutoPinFollow(autoPinFollowEnabled); }}
-          title="Sync pinned tabs across all windows."
-        >
-          <span class="w-2 h-2 rounded-full {autoPinFollowEnabled ? 'bg-accent-cyan' : 'bg-border'}"></span>
-          Pin
-        </button>
-        <button
-          class="flex items-center gap-1.5 px-2 py-1 rounded-md text-[10px] transition-colors
-            {autoDiscardEnabled ? 'bg-accent-pink/15 text-accent-pink border border-accent-pink/30' : 'bg-surface-hover text-text-muted border border-border'}"
-          onclick={async () => { autoDiscardEnabled = !autoDiscardEnabled; await setAutoDiscard(autoDiscardEnabled); }}
-          title="Auto-discard tabs inactive for 45+ minutes."
-        >
-          <span class="w-2 h-2 rounded-full {autoDiscardEnabled ? 'bg-accent-pink' : 'bg-border'}"></span>
-          Discard
-        </button>
+      <div class="flex items-center gap-1 px-3 pb-2 text-[10px]">
+        {#each [{label: "Rules", enabled: useRulesEnabled, toggle: async () => { useRulesEnabled = !useRulesEnabled; await setUseRules(useRulesEnabled); }, tip: "Custom rules for grouping"},
+                {label: "Auto", enabled: autoGroupEnabled, toggle: async () => { autoGroupEnabled = !autoGroupEnabled; await setAutoGroup(autoGroupEnabled); }, tip: "Auto-group new tabs"},
+                {label: "Ungroup", enabled: autoUngroupEnabled, toggle: async () => { autoUngroupEnabled = !autoUngroupEnabled; await setAutoUngroup(autoUngroupEnabled); }, tip: "Auto-ungroup singles"}] as t}
+          <button
+            class="px-1.5 py-0.5 rounded transition-colors border
+              {t.enabled ? 'bg-primary/15 text-primary border-primary/30 font-medium' : 'bg-surface-hover text-text-muted border-transparent hover:border-border'}"
+            onclick={t.toggle} title={t.tip} aria-pressed={t.enabled}
+          >{t.enabled ? "✓ " : ""}{t.label}</button>
+        {/each}
+        <div class="w-px h-3 bg-border/40 mx-0.5"></div>
+        {#each [{label: "Sort", enabled: autoSortEnabled, toggle: async () => { autoSortEnabled = !autoSortEnabled; await setAutoSort(autoSortEnabled); }, tip: "Auto-sort on load"},
+                {label: "Pin", enabled: autoPinFollowEnabled, toggle: async () => { autoPinFollowEnabled = !autoPinFollowEnabled; await setAutoPinFollow(autoPinFollowEnabled); }, tip: "Sync pins across windows"},
+                {label: "Discard", enabled: autoDiscardEnabled, toggle: async () => { autoDiscardEnabled = !autoDiscardEnabled; await setAutoDiscard(autoDiscardEnabled); }, tip: "Auto-discard 45min+"}] as t}
+          <button
+            class="px-1.5 py-0.5 rounded transition-colors border
+              {t.enabled ? 'bg-primary/15 text-primary border-primary/30 font-medium' : 'bg-surface-hover text-text-muted border-transparent hover:border-border'}"
+            onclick={t.toggle} title={t.tip} aria-pressed={t.enabled}
+          >{t.enabled ? "✓ " : ""}{t.label}</button>
+        {/each}
       </div>
 
       <!-- Hidden file input for Load -->
       <input type="file" accept=".txt,.json,.csv" class="hidden" bind:this={fileInputEl} onchange={handleFileLoad} />
 
+      <!-- Divider between controls and tab list -->
+      <div class="mx-3 mb-2 border-t border-border/50"></div>
+
       <!-- Selection + collapse controls -->
-      <div class="flex items-center gap-3 px-3 pb-2 text-xs">
+      <div class="flex items-center gap-3 px-3 pb-1.5 text-xs">
         <button onmousedown={(e) => { e.preventDefault(); selectedTabs = new Set(dashboardTabs.map((t) => t.id)); }} class="text-primary hover:text-primary-hover transition-colors">All</button>
         <button onmousedown={(e) => { e.preventDefault(); selectedTabs = new Set(); }} class="text-text-muted hover:text-text transition-colors">None</button>
         {#if selectedTabs.size > 0}
@@ -967,7 +1035,7 @@
           <input type="checkbox" checked={winAllSelected} indeterminate={winSomeSelected && !winAllSelected}
             onchange={() => toggleSelectGroup(winTabs.map(t => t.id))}
             class="shrink-0 w-3 h-3 rounded accent-primary" title="Select all tabs in this window" />
-          <button class="flex items-center gap-2 flex-1" onclick={() => toggleGroupCollapse(winCollapseKey)}>
+          <button class="flex items-center gap-2 flex-1 focus-visible:ring-2 focus-visible:ring-primary focus-visible:rounded" aria-expanded={!winCollapsed} onclick={() => toggleGroupCollapse(winCollapseKey)}>
             <svg class="w-3 h-3 text-text-muted transition-transform shrink-0 {winCollapsed ? '' : 'rotate-90'}" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
             <span class="text-[10px] font-semibold uppercase tracking-wider {w.isCurrent ? 'text-primary' : 'text-text-muted'}">
               {w.isCurrent ? "Current Window" : `Window ${wi + 1}`}
@@ -988,7 +1056,7 @@
               <input type="checkbox" checked={allSelected} indeterminate={someSelected && !allSelected}
                 onchange={() => toggleSelectGroup(group.tabs.map(t => t.id))} onclick={(e) => e.stopPropagation()}
                 class="shrink-0 w-3 h-3 rounded accent-primary" title="Select all tabs in this group" />
-              <button class="flex items-center gap-2 flex-1 min-w-0" onclick={() => toggleGroupCollapse(groupId)}>
+              <button class="flex items-center gap-2 flex-1 min-w-0 focus-visible:ring-2 focus-visible:ring-primary focus-visible:rounded" aria-expanded={!collapsed} onclick={() => toggleGroupCollapse(groupId)}>
                 <svg class="w-3 h-3 text-text-muted transition-transform shrink-0 {collapsed ? '' : 'rotate-90'}" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
                 <span class="w-2 h-2 rounded-full shrink-0 {dotColors[group.color] || 'bg-border'}"></span>
                 <span class="text-xs font-medium text-text truncate">{group.title}</span>
@@ -1026,7 +1094,7 @@
               <input type="checkbox" checked={allUngroupedSelected} indeterminate={someUngroupedSelected && !allUngroupedSelected}
                 onchange={() => toggleSelectGroup(w.ungrouped.map(t => t.id))} onclick={(e) => e.stopPropagation()}
                 class="shrink-0 w-3 h-3 rounded accent-primary" title="Select all ungrouped tabs" />
-              <button class="flex items-center gap-2 flex-1" onclick={() => toggleGroupCollapse(ungroupedKey)}>
+              <button class="flex items-center gap-2 flex-1 focus-visible:ring-2 focus-visible:ring-primary focus-visible:rounded" aria-expanded={!ungroupedCollapsed} onclick={() => toggleGroupCollapse(ungroupedKey)}>
                 <svg class="w-3 h-3 text-text-muted transition-transform {ungroupedCollapsed ? '' : 'rotate-90'}" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
                 <span class="text-xs font-medium text-text-muted">Ungrouped</span>
                 <span class="text-[10px] text-text-muted">({w.ungrouped.length})</span>
@@ -1050,15 +1118,8 @@
   {/if}
   </div>
 
-  <div class="shrink-0 flex items-center justify-between px-3 py-1.5 border-t border-border text-[11px] text-text-muted">
-    <span class="flex items-center gap-2">
-      {allTabs.length} tab{allTabs.length !== 1 ? "s" : ""}
-      <button
-        class="text-accent-yellow hover:text-accent-yellow/80 transition-colors"
-        onclick={() => { chrome.tabs.create({ url: chrome.runtime.getURL("/archive.html") }); }}
-        title="Open archive ({archiveCount} saved)"
-      >📦{archiveCount > 0 ? ` ${archiveCount}` : ""}</button>
-    </span>
+  <div class="shrink-0 grow-0 basis-auto flex items-center justify-between px-3 py-1.5 border-t border-border text-[11px] text-text-muted">
+    <span>{allTabs.length} tab{allTabs.length !== 1 ? "s" : ""}</span>
     <span class="{statusMessage.startsWith('Error:') ? 'text-accent-red' : 'text-accent-green'}" aria-live="polite">{statusMessage}</span>
     {#if canUndo}
       <button

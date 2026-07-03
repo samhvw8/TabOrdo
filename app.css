@@ -22,7 +22,7 @@
 
 html, body {
   margin: 0;
-  width: 400px;
+  width: 450px;
   height: 600px;
   overflow: hidden;
   background: var(--color-surface);

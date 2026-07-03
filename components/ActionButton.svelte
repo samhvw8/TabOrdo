@@ -6,6 +6,7 @@
     variant = "default",
     disabled = false,
     tooltip = "",
+    confirming = false,
   }: {
     label: string;
     icon: string;
@@ -13,6 +14,7 @@
     variant?: "default" | "danger";
     disabled?: boolean;
     tooltip?: string;
+    confirming?: boolean;
   } = $props();
 
   let btnEl = $state<HTMLButtonElement | undefined>(undefined);
@@ -54,7 +56,9 @@
     onmouseleave={hideTip}
     onfocus={showTip}
     onblur={hideTip}
-    class="w-full flex flex-col items-center gap-1 px-3 py-2.5 rounded-lg border transition-all text-sm
+    class="relative overflow-hidden w-full flex flex-col items-center gap-1 px-3 py-2.5 rounded-lg border transition-all text-sm
+      focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface
+      {confirming ? 'ring-2 ring-accent-red/60 border-accent-red/50' : ''}
       {disabled ? 'opacity-40 cursor-not-allowed border-border bg-surface' :
        variant === 'danger'
         ? 'border-accent-red/30 bg-accent-red/5 hover:bg-accent-red/10 hover:border-accent-red/50 text-accent-red'
@@ -62,9 +66,26 @@
       }"
   >
     <span class="text-base">{icon}</span>
-    <span class="text-xs">{label}</span>
+    <span class="text-xs {confirming ? 'text-accent-red font-medium' : ''}">{label}</span>
+    {#if confirming}
+      <span class="confirm-countdown absolute bottom-0 left-0 h-0.5 bg-accent-red/70"></span>
+    {/if}
   </button>
 </div>
+
+<style>
+  .confirm-countdown {
+    width: 100%;
+    animation: confirm-countdown 3s linear forwards;
+  }
+  @keyframes confirm-countdown {
+    from { width: 100%; }
+    to { width: 0%; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .confirm-countdown { animation: none; }
+  }
+</style>
 {#if tooltip && show}
   <span
     role="tooltip"
