@@ -61,8 +61,8 @@
       {confirming ? 'ring-2 ring-accent-red/60 border-accent-red/50' : ''}
       {disabled ? 'opacity-40 cursor-not-allowed border-border bg-surface' :
        variant === 'danger'
-        ? 'border-accent-red/30 bg-accent-red/5 hover:bg-accent-red/10 hover:border-accent-red/50 text-accent-red'
-        : 'border-border bg-surface-hover hover:bg-surface-active hover:border-text-muted/30 text-text'
+        ? 'border-accent-red/30 bg-accent-red/5 hover:bg-accent-red/10 hover:border-accent-red/50 active:scale-[0.97] text-accent-red'
+        : 'border-border bg-surface-hover hover:bg-surface-active hover:border-text-muted/30 active:scale-[0.97] text-text'
       }"
   >
     <span class="text-base">{icon}</span>
@@ -91,7 +91,7 @@
     role="tooltip"
     class="pointer-events-none fixed z-50 -translate-x-1/2 {below ? '' : '-translate-y-full'}
       px-2 py-1 rounded-md bg-text text-surface text-[10px] leading-tight
-      whitespace-normal w-max max-w-[180px] text-center shadow-lg"
-    style="left: {tx}px; top: {ty}px;"
+      whitespace-normal w-max max-w-[180px] text-center"
+    style="left: {tx}px; top: {ty}px; box-shadow: 0 8px 24px rgba(30, 30, 46, 0.6), 0 2px 8px rgba(30, 30, 46, 0.4);"
   >{tooltip}</span>
 {/if}

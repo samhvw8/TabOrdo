@@ -940,7 +940,7 @@
         <ActionButton label="Group+" icon="📁" tooltip="Group ungrouped tabs by domain." onclick={() => dashAction(async () => { await snapshotBeforeGroup(); await groupTabsByDomain("additive"); return "Grouped"; })} />
         <ActionButton label="Dedup" icon="🔄" tooltip="Close duplicate tabs." onclick={() => dashAction(async () => { await snapshotBeforeGroup(); const n = await removeDuplicates(); return n > 0 ? `${n} removed` : "No dupes"; })} />
         <ActionButton label={pendingConfirm === "merge" ? "Confirm" : "Merge"} icon="🔗" tooltip="Move all tabs from other windows here." onclick={() => confirmAction("merge", () => dashAction(async () => { await snapshotBeforeGroup(); await mergeAllWindows(); return "Merged"; }))} />
-        <ActionButton label="Pin Tab" icon="📌" tooltip="Pin current tab at position." onclick={(e) => handlePinCurrent(e)} />
+        <ActionButton label="Pin Tab" icon="📌" tooltip="Pin current tab at position." onclick={(e: MouseEvent) => handlePinCurrent(e)} />
       </div>
 
       <!-- Selection actions -->

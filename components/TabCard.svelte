@@ -34,8 +34,8 @@
 </script>
 
 <div
-  class="flex items-center gap-2 px-2 py-1.5 rounded-md group transition-colors overflow-hidden
-    {selected ? 'bg-primary/10 border border-primary/30' : 'hover:bg-surface-hover border border-transparent'}"
+  class="flex items-center gap-2 px-2 py-1.5 rounded-md group transition-all overflow-hidden
+    {selected ? 'bg-primary/10 border border-primary/30' : 'hover:bg-surface-hover border border-transparent active:bg-surface-active'}"
 >
   <input
     type="checkbox"

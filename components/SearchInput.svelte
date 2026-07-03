@@ -49,7 +49,7 @@
     onfocus={() => onfocuschange?.(true)}
     onblur={() => onfocuschange?.(false)}
     type="text"
-    class="w-full pl-8 pr-3 py-2 border border-border rounded-lg placeholder:text-text-muted text-sm outline-none focus:border-primary transition-colors relative
+    class="w-full pl-8 pr-3 py-2 border border-border rounded-lg placeholder:text-text-muted text-sm outline-none focus:border-primary focus:shadow-[0_0_0_3px_rgba(99,102,241,0.1)] transition-all relative
       {cmdPart ? 'text-transparent caret-text bg-surface-hover' : 'text-text bg-surface-hover'}"
     spellcheck="false"
     autocomplete="off"
@@ -59,6 +59,6 @@
       class="absolute inset-0 pl-8 pr-3 py-2 text-sm pointer-events-none overflow-hidden"
       style="white-space: pre; line-height: 1.4;"
       aria-hidden="true"
-    ><span class="text-primary font-medium">{cmdPart.cmd}</span><span class="text-text">{cmdPart.rest}</span></div>
+    ><span class="text-primary font-medium font-[family-name:var(--font-family-mono)]">{cmdPart.cmd}</span><span class="text-text">{cmdPart.rest}</span></div>
   {/if}
 </div>
