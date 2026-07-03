@@ -10,6 +10,8 @@ export interface GroupRule {
 export interface IgnoreRule {
   pattern: string;
   enabled: boolean;
+  caseSensitive?: boolean;
+  isRegex?: boolean;
 }
 
 export interface RulesConfig {
@@ -32,7 +34,15 @@ function normalizeIgnoreRules(raw: unknown): IgnoreRule[] {
   if (!Array.isArray(raw)) return [];
   return raw.map((item: unknown) => {
     if (typeof item === "string") return { pattern: item, enabled: true };
-    if (item && typeof item === "object" && "pattern" in item) return { pattern: String((item as IgnoreRule).pattern), enabled: (item as IgnoreRule).enabled !== false };
+    if (item && typeof item === "object" && "pattern" in item) {
+      const r = item as Record<string, unknown>;
+      return {
+        pattern: String(r.pattern),
+        enabled: r.enabled !== false,
+        caseSensitive: r.caseSensitive === true ? true : undefined,
+        isRegex: r.isRegex === true ? true : undefined,
+      };
+    }
     return null;
   }).filter((x): x is IgnoreRule => x !== null);
 }
@@ -173,25 +183,75 @@ export function isIgnoredUrl(url: string, ignorePatterns: IgnoreRule[]): boolean
   if (!hostname) return false;
   for (const rule of ignorePatterns) {
     if (!rule.enabled) continue;
-    if (domainMatches(hostname, rule.pattern)) return true;
+    if (rule.isRegex) {
+      if (ruleMatches(hostname, rule)) return true;
+    } else {
+      if (domainMatches(hostname, rule.pattern, rule.caseSensitive)) return true;
+    }
   }
   return false;
 }
 
 export function isIgnoredGroupName(title: string, ignoreGroupNames: IgnoreRule[]): boolean {
   if (ignoreGroupNames.length === 0) return false;
-  const lower = title.toLowerCase();
   for (const rule of ignoreGroupNames) {
     if (!rule.enabled) continue;
-    const p = rule.pattern;
-    if (p.includes("*")) {
-      const escaped = p.toLowerCase().replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
-      if (new RegExp(`^${escaped}$`, "i").test(title)) return true;
-    } else {
-      if (p.toLowerCase() === lower) return true;
-    }
+    if (ruleMatches(title, rule)) return true;
   }
   return false;
+}
+
+export function ruleMatches(input: string, rule: IgnoreRule): boolean {
+  const flags = rule.caseSensitive ? "" : "i";
+  if (rule.isRegex) {
+    try { return new RegExp(rule.pattern, flags).test(input); } catch { return false; }
+  }
+  const p = rule.pattern;
+  if (p.includes("*")) {
+    const escaped = p.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+    return new RegExp(`^${escaped}$`, flags).test(input);
+  }
+  return rule.caseSensitive ? p === input : p.toLowerCase() === input.toLowerCase();
+}
+
+export function ruleToRegex(rule: IgnoreRule): string {
+  if (rule.isRegex) return rule.pattern;
+  const p = rule.pattern;
+  if (p.includes("*")) {
+    return "^" + p.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*") + "$";
+  }
+  return "^" + p.replace(/[.+*?^${}()|[\]\\]/g, "\\$&") + "$";
+}
+
+// ponytail: O(n*m²) — fine for a handful of rules, suffix tree if perf matters
+export function longestCommonSubstring(strings: string[]): string {
+  if (strings.length === 0) return "";
+  if (strings.length === 1) return strings[0];
+  const orig = strings[0];
+  const first = orig.toLowerCase();
+  const rest = strings.slice(1).map((s) => s.toLowerCase());
+  let bestStart = 0, bestLen = 0;
+  for (let i = 0; i < first.length; i++) {
+    for (let len = first.length - i; len > bestLen; len--) {
+      const candidate = first.substring(i, i + len);
+      if (rest.every((s) => s.includes(candidate))) { bestStart = i; bestLen = len; break; }
+    }
+  }
+  return orig.substring(bestStart, bestStart + bestLen);
+}
+
+export function generalizePatterns(rules: IgnoreRule[]): string {
+  const texts = rules.map((r) => {
+    if (r.isRegex) return r.pattern;
+    return r.pattern.replace(/^\*|\*$/g, "");
+  });
+  const lcs = longestCommonSubstring(texts);
+  if (lcs.length >= 2) {
+    const escaped = lcs.replace(/[.+*?^${}()|[\]\\]/g, "\\$&");
+    return `.*${escaped}.*`;
+  }
+  const parts = rules.map((r) => ruleToRegex(r));
+  return parts.length === 1 ? parts[0] : `(${parts.join("|")})`;
 }
 
 export async function addRule(rule: Omit<GroupRule, "id">): Promise<GroupRule> {
@@ -262,17 +322,21 @@ export function matchDomainToRule(
 
 const regexCache = new Map<string, RegExp>();
 
-export function domainMatches(domain: string, pattern: string): boolean {
+export function domainMatches(domain: string, pattern: string, caseSensitive?: boolean): boolean {
+  const flags = caseSensitive ? "" : "i";
+  const cacheKey = `${pattern}:${flags}`;
   if (pattern.includes("*")) {
-    let re = regexCache.get(pattern);
+    let re = regexCache.get(cacheKey);
     if (!re) {
       const escaped = pattern
         .replace(/[.+^${}()|[\]\\]/g, "\\$&")
         .replace(/\*/g, ".*");
-      re = new RegExp(`^${escaped}$`, "i");
-      regexCache.set(pattern, re);
+      re = new RegExp(`^${escaped}$`, flags);
+      regexCache.set(cacheKey, re);
     }
     return re.test(domain);
   }
-  return domain === pattern || domain.endsWith("." + pattern);
+  if (caseSensitive) return domain === pattern || domain.endsWith("." + pattern);
+  const d = domain.toLowerCase(), p = pattern.toLowerCase();
+  return d === p || d.endsWith("." + p);
 }
