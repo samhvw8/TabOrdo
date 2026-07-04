@@ -54,7 +54,13 @@ async function tryGroupTab(tabId: number, groupId: number, title: string, color:
 }
 
 export default defineBackground(() => {
-  // Track recently created tabs — give other extensions time to group them
+  chrome.commands.onCommand.addListener(async (command) => {
+    if (command === "open-dashboard") {
+      await chrome.storage.session.set({ openMode: "dashboard" });
+      await chrome.action.openPopup();
+    }
+  });
+
   const recentTabs = new Map<number, number>();
   chrome.tabs.onCreated.addListener((tab) => {
     if (tab.id) {

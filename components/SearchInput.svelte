@@ -2,12 +2,14 @@
   let {
     value = $bindable(""),
     placeholder = "Search...",
+    autofocus = true,
     onkeydown,
     oninput,
     onfocuschange,
   }: {
     value: string;
     placeholder?: string;
+    autofocus?: boolean;
     onkeydown?: (e: KeyboardEvent) => void;
     oninput?: () => void;
     onfocuschange?: (focused: boolean) => void;
@@ -16,7 +18,7 @@
   let inputEl: HTMLInputElement;
 
   $effect(() => {
-    inputEl?.focus();
+    if (autofocus) inputEl?.focus();
   });
 
   let cmdPart = $derived((() => {

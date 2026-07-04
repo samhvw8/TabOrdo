@@ -46,6 +46,7 @@
   let autoDiscardEnabled = $state(false);
   let hasWorkspace = $state(false);
   let inputFocused = $state(true);
+  let searchAutofocus = $state(true);
   let canUndo = $state(false);
   let archiveCount = $state(0);
   let pinnedTabs = $state<PinnedTabEntry[]>([]);
@@ -722,6 +723,12 @@
     if (config.collapsedGroups) collapsedGroups = new Set(config.collapsedGroups);
     const ob = await chrome.storage.local.get("onboardingDismissed");
     onboardingDismissed = !!ob.onboardingDismissed;
+    const mode = await chrome.storage.session.get("openMode");
+    if (mode.openMode === "dashboard") {
+      searchAutofocus = false;
+      inputFocused = false;
+      await chrome.storage.session.remove("openMode");
+    }
   });
 
   $effect(() => {
@@ -744,6 +751,7 @@
       bind:value={query}
       oninput={onQueryChange}
       placeholder="Search tabs... (/ commands, @ triage)"
+      autofocus={searchAutofocus}
       onfocuschange={(f) => { inputFocused = f; }}
       onkeydown={(e) => {
         if (e.key === "Tab" && e.shiftKey) {

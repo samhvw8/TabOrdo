@@ -32,6 +32,13 @@ export default defineConfig({
         },
         description: "Open TabOrdo command palette",
       },
+      "open-dashboard": {
+        suggested_key: {
+          default: "Ctrl+Shift+D",
+          mac: "Command+Shift+E",
+        },
+        description: "Open TabOrdo dashboard (no search focus)",
+      },
     },
   },
 });
