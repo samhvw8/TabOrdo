@@ -815,52 +815,88 @@
   {:else if activeSection === "settings"}
     <SettingsPanel />
   {:else if activeSection === "more"}
-    <div class="flex-1 overflow-y-auto px-3 py-2 min-h-0">
-      <div class="flex items-center gap-2 mb-2">
-        <div class="text-xs font-semibold text-text">More Actions</div>
-        <div class="flex-1"></div>
-      </div>
+    <div class="flex-1 overflow-y-auto px-2 py-2 min-h-0">
       {#each [
-        { title: "Organize", items: [
-          { action: "regroup", label: "Regroup All", tip: "Ungroup everything, then regroup from scratch" },
-          { action: "ungroup", label: "Ungroup All", tip: "Remove all tab groups" },
-          { action: "shuffle", label: "Shuffle", tip: "Randomly reorder tabs" },
+        { title: "Organize", icon: "layers", items: [
+          { action: "regroup", label: "Regroup All", tip: "Ungroup all, then regroup from scratch", icon: "refresh" },
+          { action: "ungroup", label: "Ungroup All", tip: "Remove all tab groups", icon: "unlink" },
+          { action: "shuffle", label: "Shuffle", tip: "Randomly reorder tabs", icon: "shuffle" },
         ]},
-        { title: "Windows", items: [
-          { action: "unite", label: "Unite Domain", tip: "Bring same-domain tabs from other windows" },
-          { action: "isolate", label: "Isolate Domain", tip: "Move same-domain tabs to new window" },
-          { action: "splitv", label: "Split Vertical", tip: "Split window in half, side by side" },
-          { action: "splith", label: "Split Horizontal", tip: "Split window top/bottom" },
-          { action: "splitdomain", label: "Split by Domain", tip: "Each domain gets its own window" },
-          { action: "stack", label: "Stack Windows", tip: "Stack all windows to left side" },
+        { title: "Windows", icon: "layout", items: [
+          { action: "unite", label: "Unite Domain", tip: "Pull same-domain tabs here", icon: "magnet" },
+          { action: "isolate", label: "Isolate Domain", tip: "Move domain to new window", icon: "external" },
+          { action: "splitv", label: "Split Vertical", tip: "Side by side windows", icon: "columns" },
+          { action: "splith", label: "Split Horizontal", tip: "Top/bottom windows", icon: "rows" },
+          { action: "splitdomain", label: "Split by Domain", tip: "One window per domain", icon: "grid" },
+          { action: "stack", label: "Stack", tip: "Stack windows to left", icon: "layers" },
         ]},
-        { title: "Close", items: [
-          { action: "closeleft", label: "Close Left", tip: "Close tabs to the left of active tab" },
-          { action: "closeright", label: "Close Right", tip: "Close tabs to the right of active tab" },
-          { action: "closeold", label: "Close Old (7d)", tip: "Close tabs older than 7 days" },
-          { action: "closesite", label: "Close Same Site", tip: "Close other tabs from this site" },
+        { title: "Close", icon: "x", items: [
+          { action: "closeleft", label: "Close Left", tip: "Tabs left of active", icon: "arrow-left" },
+          { action: "closeright", label: "Close Right", tip: "Tabs right of active", icon: "arrow-right" },
+          { action: "closeold", label: "Close Old", tip: "Tabs older than 7 days", icon: "clock" },
+          { action: "closesite", label: "Close Same Site", tip: "Other tabs from this domain", icon: "globe" },
         ]},
-        { title: "Workspace", items: [
-          { action: "focus", label: hasWorkspace ? "Unfocus (Restore)" : "Focus (Save & Clear)", tip: hasWorkspace ? "Restore saved workspace" : "Save tabs & start fresh" },
-          { action: "save", label: "Save to File", tip: "Export current tabs to text file" },
-          { action: "load", label: "Load from File", tip: "Load tabs from text file" },
-          { action: "archive", label: `Open Archive (${archiveCount})`, tip: "View archived tabs" },
+        { title: "Workspace", icon: "briefcase", items: [
+          { action: "focus", label: hasWorkspace ? "Unfocus" : "Focus", tip: hasWorkspace ? "Restore saved tabs" : "Save tabs & start fresh", icon: "target" },
+          { action: "save", label: "Save to File", tip: "Export as text", icon: "download" },
+          { action: "load", label: "Load from File", tip: "Import from text", icon: "upload" },
+          { action: "archive", label: "Open Archive", tip: `${archiveCount} saved`, icon: "archive" },
         ]},
       ] as section, si}
         {#if si > 0}
-          <div class="my-1.5 h-px bg-border/30"></div>
+          <div class="my-1 mx-1 h-px bg-border/20"></div>
         {/if}
-        <div class="text-[9px] font-semibold uppercase tracking-wider text-text-muted mb-1">{section.title}</div>
-        {#each section.items as item}
-          <button
-            class="w-full text-left flex items-center gap-2 px-2.5 py-1.5 rounded-md hover:bg-surface-hover text-xs text-text transition-colors"
-            onclick={() => { handleOverflowAction(item.action); activeSection = "dashboard"; }}
-            title={item.tip}
-          >
-            {item.label}
-            <span class="ml-auto text-[10px] text-text-muted">{item.tip}</span>
-          </button>
-        {/each}
+        <div class="px-2 pt-1.5 pb-1 text-[9px] font-semibold uppercase tracking-wider text-text-muted/70">{section.title}</div>
+        <div class="grid gap-0.5">
+          {#each section.items as item}
+            <button
+              class="w-full text-left flex items-start gap-2.5 px-2 py-1.5 rounded-md hover:bg-surface-hover active:bg-surface-active transition-all group"
+              onclick={() => { handleOverflowAction(item.action); activeSection = "dashboard"; }}
+            >
+              <span class="shrink-0 w-5 h-5 rounded bg-surface-active/60 flex items-center justify-center mt-px group-hover:bg-primary/15 group-hover:text-primary transition-colors">
+                {#if item.icon === "refresh"}
+                  <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg>
+                {:else if item.icon === "unlink"}
+                  <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m18.84 12.25 1.72-1.71h-.02a5.004 5.004 0 0 0-.12-7.07 5.006 5.006 0 0 0-6.95 0l-1.72 1.71"/><path d="m5.17 11.75-1.71 1.71a5.004 5.004 0 0 0 .12 7.07 5.006 5.006 0 0 0 6.95 0l1.71-1.71"/><line x1="8" x2="8" y1="2" y2="5"/><line x1="2" x2="5" y1="8" y2="8"/><line x1="16" x2="16" y1="19" y2="22"/><line x1="19" x2="22" y1="16" y2="16"/></svg>
+                {:else if item.icon === "shuffle"}
+                  <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 18h1.4c1.3 0 2.5-.6 3.3-1.7l6.1-8.6c.7-1.1 2-1.7 3.3-1.7H22"/><path d="m18 2 4 4-4 4"/><path d="M2 6h1.9c1.5 0 2.9.9 3.6 2.2"/><path d="M22 18h-5.9c-1.3 0-2.6-.7-3.3-1.8l-.5-.8"/><path d="m18 14 4 4-4 4"/></svg>
+                {:else if item.icon === "magnet"}
+                  <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 15-4-4 6.75-6.77a7.79 7.79 0 0 1 11 11L13 22l-4-4 6.39-6.36a2.14 2.14 0 0 0-3-3L6 15"/><path d="m5 8 4 4"/><path d="m12 15 4 4"/></svg>
+                {:else if item.icon === "external"}
+                  <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>
+                {:else if item.icon === "columns"}
+                  <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M12 3v18"/></svg>
+                {:else if item.icon === "rows"}
+                  <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 12h18"/></svg>
+                {:else if item.icon === "grid"}
+                  <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M3 15h18"/><path d="M9 3v18"/><path d="M15 3v18"/></svg>
+                {:else if item.icon === "layers"}
+                  <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m2 12 8.58 3.91a2 2 0 0 0 1.66 0L21 12"/></svg>
+                {:else if item.icon === "arrow-left"}
+                  <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>
+                {:else if item.icon === "arrow-right"}
+                  <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+                {:else if item.icon === "clock"}
+                  <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                {:else if item.icon === "globe"}
+                  <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>
+                {:else if item.icon === "target"}
+                  <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
+                {:else if item.icon === "download"}
+                  <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+                {:else if item.icon === "upload"}
+                  <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg>
+                {:else if item.icon === "archive"}
+                  <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
+                {/if}
+              </span>
+              <div class="flex-1 min-w-0">
+                <div class="text-xs text-text font-medium">{item.label}</div>
+                <div class="text-[10px] text-text-muted/70 leading-tight">{item.tip}</div>
+              </div>
+            </button>
+          {/each}
+        </div>
       {/each}
     </div>
   {:else if showHelp}
