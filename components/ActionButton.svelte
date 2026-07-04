@@ -65,7 +65,7 @@
         : 'border-border bg-surface-hover hover:bg-surface-active hover:border-text-muted/30 active:scale-[0.97] text-text'
       }"
   >
-    <span class="text-base">{icon}</span>
+    <span class="text-text-muted">{@html icon}</span>
     <span class="text-xs {confirming ? 'text-accent-red font-medium' : ''}">{label}</span>
     {#if confirming}
       <span class="confirm-countdown absolute bottom-0 left-0 h-0.5 bg-accent-red/70"></span>

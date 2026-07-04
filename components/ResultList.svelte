@@ -57,12 +57,15 @@
 
 <div class="flex-1 overflow-y-auto px-1 py-1 min-h-0">
   {#if loading}
-    <div class="flex items-center justify-center py-8 text-text-muted text-sm">
-      Searching...
+    <div class="flex flex-col items-center justify-center py-10 gap-2">
+      <svg class="animate-spin text-text-muted" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+      <span class="text-text-muted text-xs">Searching...</span>
     </div>
   {:else if results.length === 0}
-    <div class="flex items-center justify-center py-8 text-text-muted text-sm">
-      No results
+    <div class="flex flex-col items-center justify-center py-10 gap-2">
+      <svg class="text-text-muted/50" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/><path d="M8 11h6"/></svg>
+      <span class="text-text-muted text-xs">No matching tabs</span>
+      <span class="text-text-muted/50 text-[10px]">Try a different search or press Esc to clear</span>
     </div>
   {:else}
     {#each results as item, i}
