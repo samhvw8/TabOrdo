@@ -376,26 +376,27 @@
   let dupeCount = $derived(findDuplicateTabs(allTabs).length);
 
   async function handleOverflowAction(action: string) {
+    const goBack = () => { activeSection = "dashboard"; };
     switch (action) {
-      case "regroup": confirmAction("regroup", () => dashAction(async () => { await snapshotBeforeGroup(); await groupTabsByDomain("rebuild"); return "Regrouped"; })); break;
-      case "ungroup": confirmAction("ungroup", () => dashAction(async () => { await snapshotBeforeGroup(); await ungroupAll(); return "Ungrouped all"; })); break;
-      case "shuffle": dashAction(async () => { await snapshotBeforeGroup(); await shuffleTabs(); return "Shuffled"; }); break;
-      case "unite": dashAction(async () => { const n = await uniteDomain(); return n > 0 ? `United ${n}` : "None to unite"; }); break;
-      case "isolate": dashAction(async () => { const n = await isolateDomain(); return n > 0 ? `Isolated ${n}` : "Not enough tabs"; }); break;
-      case "splitv": dashAction(async () => { await snapshotBeforeGroup(); await splitWindow("vertical"); return "Split V"; }); break;
-      case "splith": dashAction(async () => { await snapshotBeforeGroup(); await splitWindow("horizontal"); return "Split H"; }); break;
-      case "splitdomain": dashAction(async () => { await snapshotBeforeGroup(); const n = await splitByDomain(); return n > 0 ? `${n + 1} windows` : "One domain"; }); break;
-      case "stack": dashAction(async () => { await stackWindows(); return "Stacked"; }); break;
-      case "closeleft": dashAction(async () => { const n = await closeTabsToLeft(); return n > 0 ? `Closed ${n} left` : "None to close"; }); break;
-      case "closeright": dashAction(async () => { const n = await closeTabsToRight(); return n > 0 ? `Closed ${n} right` : "None to close"; }); break;
-      case "closeold": dashAction(async () => { const n = await closeOldTabs(); return n > 0 ? `Closed ${n} old` : "No old tabs"; }); break;
-      case "closesite": dashAction(async () => { const n = await closeTabsSameSite(); return n > 0 ? `Closed ${n} same-site` : "No other tabs"; }); break;
+      case "regroup": goBack(); dashAction(async () => { await snapshotBeforeGroup(); await groupTabsByDomain("rebuild"); return "Regrouped"; }); break;
+      case "ungroup": goBack(); dashAction(async () => { await snapshotBeforeGroup(); await ungroupAll(); return "Ungrouped all"; }); break;
+      case "shuffle": goBack(); dashAction(async () => { await snapshotBeforeGroup(); await shuffleTabs(); return "Shuffled"; }); break;
+      case "unite": goBack(); dashAction(async () => { const n = await uniteDomain(); return n > 0 ? `United ${n}` : "None to unite"; }); break;
+      case "isolate": goBack(); dashAction(async () => { const n = await isolateDomain(); return n > 0 ? `Isolated ${n}` : "Not enough tabs"; }); break;
+      case "splitv": goBack(); dashAction(async () => { await snapshotBeforeGroup(); await splitWindow("vertical"); return "Split V"; }); break;
+      case "splith": goBack(); dashAction(async () => { await snapshotBeforeGroup(); await splitWindow("horizontal"); return "Split H"; }); break;
+      case "splitdomain": goBack(); dashAction(async () => { await snapshotBeforeGroup(); const n = await splitByDomain(); return n > 0 ? `${n + 1} windows` : "One domain"; }); break;
+      case "stack": goBack(); dashAction(async () => { await stackWindows(); return "Stacked"; }); break;
+      case "closeleft": goBack(); dashAction(async () => { const n = await closeTabsToLeft(); return n > 0 ? `Closed ${n} left` : "None to close"; }); break;
+      case "closeright": goBack(); dashAction(async () => { const n = await closeTabsToRight(); return n > 0 ? `Closed ${n} right` : "None to close"; }); break;
+      case "closeold": goBack(); dashAction(async () => { const n = await closeOldTabs(); return n > 0 ? `Closed ${n} old` : "No old tabs"; }); break;
+      case "closesite": goBack(); dashAction(async () => { const n = await closeTabsSameSite(); return n > 0 ? `Closed ${n} same-site` : "No other tabs"; }); break;
       case "focus":
-        dashAction(async () => {
+        goBack(); dashAction(async () => {
           if (hasWorkspace) { const n = await unfocusMode(); hasWorkspace = false; return n > 0 ? `Restored ${n}` : "No workspace"; }
           else { const n = await focusMode(); hasWorkspace = true; return `Saved ${n}, focused`; }
         }); break;
-      case "save": exportTabsToFile(); statusMessage = "Exporting..."; setTimeout(() => { statusMessage = ""; }, 2000); break;
+      case "save": goBack(); exportTabsToFile(); statusMessage = "Exporting..."; setTimeout(() => { statusMessage = ""; }, 2000); break;
       case "load": fileInputEl?.click(); break;
       case "archive": chrome.tabs.create({ url: chrome.runtime.getURL("/archive.html") }); break;
       case "feedback": chrome.tabs.create({ url: "https://github.com/nicepkg/TabOrdo/issues" }); break;
@@ -859,7 +860,7 @@
           {#each section.items as item}
             <button
               class="w-full text-left flex items-start gap-2.5 px-2 py-1.5 rounded-md hover:bg-surface-hover active:bg-surface-active transition-all group"
-              onclick={() => { handleOverflowAction(item.action); activeSection = "dashboard"; }}
+              onclick={() => handleOverflowAction(item.action)}
             >
               <span class="shrink-0 w-5 h-5 rounded bg-surface-active/60 flex items-center justify-center mt-px group-hover:bg-primary/15 group-hover:text-primary transition-colors">
                 {#if item.icon === "refresh"}
