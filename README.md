@@ -40,6 +40,8 @@ A keyboard-first tab manager for Chrome. Press `Cmd+E` to open a command palette
 
 The dashboard shows a live 🔊 banner when any tabs are playing audio — click it to jump to `@a` triage. `/pin` and `/pingroup` positions persist across Group+ and Sort operations. The **Archive** button opens a full-page archive view with search, date grouping, bulk restore/delete, and group name filtering.
 
+**Customizable actions** — the action buttons on the dashboard are configurable. Open the **More Actions** sidebar panel and click ★ next to any action to add or remove it from the dashboard grid. Your selection persists across sessions.
+
 ## Triage Views
 
 | Command | Shows |

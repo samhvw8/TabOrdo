@@ -58,6 +58,54 @@
   let onboardingDismissed = $state(true);
   let helpFilter = $state("");
 
+  const ICON = (d: string) => `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+
+  interface DashActionDef { id: string; label: string; icon: string; tooltip: string; }
+
+  const DASHBOARD_ACTION_POOL: DashActionDef[] = [
+    { id: "sort", label: "Sort All", icon: ICON('<path d="m3 16 4 4 4-4"/><path d="M7 20V4"/><path d="m21 8-4-4-4 4"/><path d="M17 4v16"/>'), tooltip: "Sort tabs by domain." },
+    { id: "group", label: "Group+", icon: ICON('<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/><path d="M12 10v6"/><path d="M9 13h6"/>'), tooltip: "Group ungrouped tabs by domain." },
+    { id: "dedup", label: "Dedup", icon: ICON('<rect width="8" height="14" x="2" y="6" rx="2"/><rect width="8" height="14" x="14" y="4" rx="2" opacity="0.5"/><path d="m15 2-3 3-3-3"/>'), tooltip: "Close duplicate tabs." },
+    { id: "merge", label: "Merge", icon: ICON('<path d="m8 6 4-4 4 4"/><path d="M12 2v10.3a4 4 0 0 1-1.172 2.872L4 22"/><path d="m20 22-5-5"/>'), tooltip: "Move all tabs from other windows here." },
+    { id: "pin", label: "Pin Tab", icon: ICON('<path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 2-2H6a2 2 0 0 0 2 2 1 1 0 0 1 1 1z"/>'), tooltip: "Pin current tab at position." },
+    { id: "regroup", label: "Regroup", icon: ICON('<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/>'), tooltip: "Ungroup all, then regroup from scratch." },
+    { id: "ungroup", label: "Ungroup", icon: ICON('<path d="m18.84 12.25 1.72-1.71h-.02a5.004 5.004 0 0 0-.12-7.07 5.006 5.006 0 0 0-6.95 0l-1.72 1.71"/><path d="m5.17 11.75-1.71 1.71a5.004 5.004 0 0 0 .12 7.07 5.006 5.006 0 0 0 6.95 0l1.71-1.71"/><line x1="8" x2="8" y1="2" y2="5"/><line x1="2" x2="5" y1="8" y2="8"/><line x1="16" x2="16" y1="19" y2="22"/><line x1="19" x2="22" y1="16" y2="16"/>'), tooltip: "Remove all tab groups." },
+    { id: "shuffle", label: "Shuffle", icon: ICON('<path d="M2 18h1.4c1.3 0 2.5-.6 3.3-1.7l6.1-8.6c.7-1.1 2-1.7 3.3-1.7H22"/><path d="m18 2 4 4-4 4"/><path d="M2 6h1.9c1.5 0 2.9.9 3.6 2.2"/><path d="M22 18h-5.9c-1.3 0-2.6-.7-3.3-1.8l-.5-.8"/><path d="m18 14 4 4-4 4"/>'), tooltip: "Randomly reorder tabs." },
+    { id: "unite", label: "Unite", icon: ICON('<path d="m6 15-4-4 6.75-6.77a7.79 7.79 0 0 1 11 11L13 22l-4-4 6.39-6.36a2.14 2.14 0 0 0-3-3L6 15"/><path d="m5 8 4 4"/><path d="m12 15 4 4"/>'), tooltip: "Pull same-domain tabs here." },
+    { id: "isolate", label: "Isolate", icon: ICON('<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>'), tooltip: "Move domain to new window." },
+    { id: "splitv", label: "Split V", icon: ICON('<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M12 3v18"/>'), tooltip: "Side by side windows." },
+    { id: "splith", label: "Split H", icon: ICON('<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 12h18"/>'), tooltip: "Top/bottom windows." },
+    { id: "splitdomain", label: "Split Dom", icon: ICON('<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M3 15h18"/><path d="M9 3v18"/><path d="M15 3v18"/>'), tooltip: "One window per domain." },
+    { id: "stack", label: "Stack", icon: ICON('<path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m2 12 8.58 3.91a2 2 0 0 0 1.66 0L21 12"/>'), tooltip: "Stack windows to left." },
+    { id: "closeleft", label: "Close Left", icon: ICON('<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>'), tooltip: "Close tabs left of active." },
+    { id: "closeright", label: "Close Right", icon: ICON('<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>'), tooltip: "Close tabs right of active." },
+    { id: "closeold", label: "Close Old", icon: ICON('<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>'), tooltip: "Close tabs older than 7 days." },
+    { id: "closesite", label: "Close Site", icon: ICON('<circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/>'), tooltip: "Close other tabs from this domain." },
+    { id: "focus", label: "Focus", icon: ICON('<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>'), tooltip: "Save tabs & start fresh." },
+    { id: "save", label: "Save", icon: ICON('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/>'), tooltip: "Export tabs as text." },
+    { id: "load", label: "Load", icon: ICON('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/>'), tooltip: "Import tabs from text." },
+    { id: "archive", label: "Archive", icon: ICON('<rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>'), tooltip: "Open archive." },
+  ];
+
+  const DEFAULT_DASHBOARD_IDS = ["sort", "group", "dedup", "merge", "pin"];
+  const ACTION_POOL_MAP = new Map(DASHBOARD_ACTION_POOL.map(a => [a.id, a]));
+  let dashboardActionIds = $state<string[]>([...DEFAULT_DASHBOARD_IDS]);
+  let dashboardActions = $derived(dashboardActionIds.map(id => ACTION_POOL_MAP.get(id)).filter((a): a is DashActionDef => !!a));
+
+  function smallIcon(svg: string): string {
+    return svg.replace('width="16" height="16"', 'width="11" height="11"');
+  }
+
+  async function toggleDashboardAction(id: string) {
+    const idx = dashboardActionIds.indexOf(id);
+    if (idx >= 0) {
+      dashboardActionIds = dashboardActionIds.filter(a => a !== id);
+    } else {
+      dashboardActionIds = [...dashboardActionIds, id];
+    }
+    await chrome.storage.local.set({ dashboardActionIds });
+  }
+
   function confirmAction(id: string, action: () => void) {
     if (pendingConfirm === id) {
       clearTimeout(confirmTimer);
@@ -400,6 +448,11 @@
       case "load": fileInputEl?.click(); break;
       case "archive": chrome.tabs.create({ url: chrome.runtime.getURL("/archive.html") }); break;
       case "feedback": chrome.tabs.create({ url: "https://github.com/nicepkg/TabOrdo/issues" }); break;
+      case "sort": goBack(); dashAction(async () => { await snapshotBeforeGroup(); await sortTabsInWindow(currentWindowId); return "Sorted"; }); break;
+      case "group": goBack(); dashAction(async () => { await snapshotBeforeGroup(); await groupTabsByDomain("additive"); return "Grouped"; }); break;
+      case "dedup": goBack(); dashAction(async () => { await snapshotBeforeGroup(); const n = await removeDuplicates(); return n > 0 ? `${n} removed` : "No dupes"; }); break;
+      case "merge": goBack(); confirmAction("merge", () => dashAction(async () => { await snapshotBeforeGroup(); await mergeAllWindows(); return "Merged"; })); break;
+      case "pin": goBack(); handlePinCurrent(new MouseEvent("click")); break;
     }
   }
 
@@ -709,7 +762,7 @@
     await loadTabs();
     await loadUndoStack();
     canUndo = !!peekUndo();
-    const config = await chrome.storage.local.get(["rulesConfig", "collapsedGroups"]);
+    const config = await chrome.storage.local.get(["rulesConfig", "collapsedGroups", "dashboardActionIds"]);
     const rc = config.rulesConfig;
     if (rc) {
       autoGroupEnabled = rc.autoGroup ?? false;
@@ -722,6 +775,7 @@
     hasWorkspace = await hasSavedWorkspace();
     archiveCount = await getArchiveCount();
     if (config.collapsedGroups) collapsedGroups = new Set(config.collapsedGroups);
+    if (config.dashboardActionIds) dashboardActionIds = config.dashboardActionIds;
     const ob = await chrome.storage.local.get("onboardingDismissed");
     onboardingDismissed = !!ob.onboardingDismissed;
     const mode = await chrome.storage.session.get("openMode");
@@ -825,31 +879,37 @@
     <SettingsPanel />
   {:else if activeSection === "more"}
     <div class="flex-1 overflow-y-auto px-2 py-2 min-h-0">
+      <div class="px-2 pb-1.5 text-[9px] text-text-muted/60">Click ★ to add/remove actions from dashboard</div>
       {#each [
-        { title: "Organize", icon: "layers", items: [
-          { action: "regroup", label: "Regroup All", tip: "Ungroup all, then regroup from scratch", icon: "refresh" },
-          { action: "ungroup", label: "Ungroup All", tip: "Remove all tab groups", icon: "unlink" },
-          { action: "shuffle", label: "Shuffle", tip: "Randomly reorder tabs", icon: "shuffle" },
+        { title: "Organize", items: [
+          { action: "sort", label: "Sort All", tip: "Sort tabs by domain" },
+          { action: "group", label: "Group+", tip: "Group ungrouped tabs by domain" },
+          { action: "dedup", label: "Dedup", tip: "Close duplicate tabs" },
+          { action: "pin", label: "Pin Tab", tip: "Pin current tab at position" },
+          { action: "regroup", label: "Regroup All", tip: "Ungroup all, then regroup from scratch" },
+          { action: "ungroup", label: "Ungroup All", tip: "Remove all tab groups" },
+          { action: "shuffle", label: "Shuffle", tip: "Randomly reorder tabs" },
         ]},
-        { title: "Windows", icon: "layout", items: [
-          { action: "unite", label: "Unite Domain", tip: "Pull same-domain tabs here", icon: "magnet" },
-          { action: "isolate", label: "Isolate Domain", tip: "Move domain to new window", icon: "external" },
-          { action: "splitv", label: "Split Vertical", tip: "Side by side windows", icon: "columns" },
-          { action: "splith", label: "Split Horizontal", tip: "Top/bottom windows", icon: "rows" },
-          { action: "splitdomain", label: "Split by Domain", tip: "One window per domain", icon: "grid" },
-          { action: "stack", label: "Stack", tip: "Stack windows to left", icon: "layers" },
+        { title: "Windows", items: [
+          { action: "merge", label: "Merge", tip: "Move all tabs from other windows here" },
+          { action: "unite", label: "Unite Domain", tip: "Pull same-domain tabs here" },
+          { action: "isolate", label: "Isolate Domain", tip: "Move domain to new window" },
+          { action: "splitv", label: "Split Vertical", tip: "Side by side windows" },
+          { action: "splith", label: "Split Horizontal", tip: "Top/bottom windows" },
+          { action: "splitdomain", label: "Split by Domain", tip: "One window per domain" },
+          { action: "stack", label: "Stack", tip: "Stack windows to left" },
         ]},
-        { title: "Close", icon: "x", items: [
-          { action: "closeleft", label: "Close Left", tip: "Tabs left of active", icon: "arrow-left" },
-          { action: "closeright", label: "Close Right", tip: "Tabs right of active", icon: "arrow-right" },
-          { action: "closeold", label: "Close Old", tip: "Tabs older than 7 days", icon: "clock" },
-          { action: "closesite", label: "Close Same Site", tip: "Other tabs from this domain", icon: "globe" },
+        { title: "Close", items: [
+          { action: "closeleft", label: "Close Left", tip: "Tabs left of active" },
+          { action: "closeright", label: "Close Right", tip: "Tabs right of active" },
+          { action: "closeold", label: "Close Old", tip: "Tabs older than 7 days" },
+          { action: "closesite", label: "Close Same Site", tip: "Other tabs from this domain" },
         ]},
-        { title: "Workspace", icon: "briefcase", items: [
-          { action: "focus", label: hasWorkspace ? "Unfocus" : "Focus", tip: hasWorkspace ? "Restore saved tabs" : "Save tabs & start fresh", icon: "target" },
-          { action: "save", label: "Save to File", tip: "Export as text", icon: "download" },
-          { action: "load", label: "Load from File", tip: "Import from text", icon: "upload" },
-          { action: "archive", label: "Open Archive", tip: `${archiveCount} saved`, icon: "archive" },
+        { title: "Workspace", items: [
+          { action: "focus", label: hasWorkspace ? "Unfocus" : "Focus", tip: hasWorkspace ? "Restore saved tabs" : "Save tabs & start fresh" },
+          { action: "save", label: "Save to File", tip: "Export as text" },
+          { action: "load", label: "Load from File", tip: "Import from text" },
+          { action: "archive", label: "Open Archive", tip: `${archiveCount} saved` },
         ]},
       ] as section, si}
         {#if si > 0}
@@ -858,52 +918,26 @@
         <div class="px-2 pt-1.5 pb-1 text-[9px] font-semibold uppercase tracking-wider text-text-muted/70">{section.title}</div>
         <div class="grid gap-0.5">
           {#each section.items as item}
-            <button
-              class="w-full text-left flex items-start gap-2.5 px-2 py-1.5 rounded-md hover:bg-surface-hover active:bg-surface-active transition-all group"
+            {@const poolEntry = ACTION_POOL_MAP.get(item.action)}
+            <div
+              class="w-full text-left flex items-start gap-2.5 px-2 py-1.5 rounded-md hover:bg-surface-hover active:bg-surface-active transition-all group cursor-pointer"
+              role="button" tabindex="0"
               onclick={() => handleOverflowAction(item.action)}
+              onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleOverflowAction(item.action); } }}
             >
               <span class="shrink-0 w-5 h-5 rounded bg-surface-active/60 flex items-center justify-center mt-px group-hover:bg-primary/15 group-hover:text-primary transition-colors">
-                {#if item.icon === "refresh"}
-                  <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg>
-                {:else if item.icon === "unlink"}
-                  <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m18.84 12.25 1.72-1.71h-.02a5.004 5.004 0 0 0-.12-7.07 5.006 5.006 0 0 0-6.95 0l-1.72 1.71"/><path d="m5.17 11.75-1.71 1.71a5.004 5.004 0 0 0 .12 7.07 5.006 5.006 0 0 0 6.95 0l1.71-1.71"/><line x1="8" x2="8" y1="2" y2="5"/><line x1="2" x2="5" y1="8" y2="8"/><line x1="16" x2="16" y1="19" y2="22"/><line x1="19" x2="22" y1="16" y2="16"/></svg>
-                {:else if item.icon === "shuffle"}
-                  <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 18h1.4c1.3 0 2.5-.6 3.3-1.7l6.1-8.6c.7-1.1 2-1.7 3.3-1.7H22"/><path d="m18 2 4 4-4 4"/><path d="M2 6h1.9c1.5 0 2.9.9 3.6 2.2"/><path d="M22 18h-5.9c-1.3 0-2.6-.7-3.3-1.8l-.5-.8"/><path d="m18 14 4 4-4 4"/></svg>
-                {:else if item.icon === "magnet"}
-                  <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 15-4-4 6.75-6.77a7.79 7.79 0 0 1 11 11L13 22l-4-4 6.39-6.36a2.14 2.14 0 0 0-3-3L6 15"/><path d="m5 8 4 4"/><path d="m12 15 4 4"/></svg>
-                {:else if item.icon === "external"}
-                  <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>
-                {:else if item.icon === "columns"}
-                  <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M12 3v18"/></svg>
-                {:else if item.icon === "rows"}
-                  <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 12h18"/></svg>
-                {:else if item.icon === "grid"}
-                  <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M3 15h18"/><path d="M9 3v18"/><path d="M15 3v18"/></svg>
-                {:else if item.icon === "layers"}
-                  <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m2 12 8.58 3.91a2 2 0 0 0 1.66 0L21 12"/></svg>
-                {:else if item.icon === "arrow-left"}
-                  <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>
-                {:else if item.icon === "arrow-right"}
-                  <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
-                {:else if item.icon === "clock"}
-                  <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-                {:else if item.icon === "globe"}
-                  <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>
-                {:else if item.icon === "target"}
-                  <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
-                {:else if item.icon === "download"}
-                  <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
-                {:else if item.icon === "upload"}
-                  <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg>
-                {:else if item.icon === "archive"}
-                  <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
-                {/if}
+                {#if poolEntry}{@html smallIcon(poolEntry.icon)}{/if}
               </span>
               <div class="flex-1 min-w-0">
                 <div class="text-xs text-text font-medium">{item.label}</div>
                 <div class="text-[10px] text-text-muted/70 leading-tight">{item.tip}</div>
               </div>
-            </button>
+              <button
+                class="shrink-0 self-center text-sm leading-none transition-all hover:scale-110 {dashboardActionIds.includes(item.action) ? 'text-primary' : 'text-text-muted/30 opacity-0 group-hover:opacity-100'}"
+                onclick={(e) => { e.stopPropagation(); toggleDashboardAction(item.action); }}
+                title={dashboardActionIds.includes(item.action) ? "Remove from dashboard" : "Add to dashboard"}
+              >{dashboardActionIds.includes(item.action) ? "★" : "☆"}</button>
+            </div>
           {/each}
         </div>
       {/each}
@@ -978,15 +1012,29 @@
         </div>
       {/if}
 
-      <!-- Primary action buttons -->
-      <div class="grid grid-cols-3 gap-1.5 px-3 pb-2 {busy ? 'opacity-50 pointer-events-none' : ''}"
-        aria-busy={busy}>
-        <ActionButton label="Sort All" icon='<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 16 4 4 4-4"/><path d="M7 20V4"/><path d="m21 8-4-4-4 4"/><path d="M17 4v16"/></svg>' tooltip="Sort tabs by domain." onclick={() => dashAction(async () => { await snapshotBeforeGroup(); await sortTabsInWindow(currentWindowId); return "Sorted"; })} />
-        <ActionButton label="Group+" icon='<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/><path d="M12 10v6"/><path d="M9 13h6"/></svg>' tooltip="Group ungrouped tabs by domain." onclick={() => dashAction(async () => { await snapshotBeforeGroup(); await groupTabsByDomain("additive"); return "Grouped"; })} />
-        <ActionButton label="Dedup" icon='<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="14" x="2" y="6" rx="2"/><rect width="8" height="14" x="14" y="4" rx="2" opacity="0.5"/><path d="m15 2-3 3-3-3"/></svg>' tooltip="Close duplicate tabs." onclick={() => dashAction(async () => { await snapshotBeforeGroup(); const n = await removeDuplicates(); return n > 0 ? `${n} removed` : "No dupes"; })} />
-        <ActionButton label={pendingConfirm === "merge" ? "Confirm" : "Merge"} icon='<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m8 6 4-4 4 4"/><path d="M12 2v10.3a4 4 0 0 1-1.172 2.872L4 22"/><path d="m20 22-5-5"/></svg>' tooltip="Move all tabs from other windows here." onclick={() => confirmAction("merge", () => dashAction(async () => { await snapshotBeforeGroup(); await mergeAllWindows(); return "Merged"; }))} />
-        <ActionButton label="Pin Tab" icon='<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 2-2H6a2 2 0 0 0 2 2 1 1 0 0 1 1 1z"/></svg>' tooltip="Pin current tab at position." onclick={(e: MouseEvent) => handlePinCurrent(e)} />
-      </div>
+      <!-- Primary action buttons (customizable) -->
+      {#if dashboardActions.length > 0}
+        <div class="grid grid-cols-3 gap-1.5 px-3 pb-2 {busy ? 'opacity-50 pointer-events-none' : ''}"
+          aria-busy={busy}>
+          {#each dashboardActions as action}
+            <ActionButton
+              label={action.id === "merge" && pendingConfirm === "merge" ? "Confirm" : action.id === "focus" ? (hasWorkspace ? "Unfocus" : "Focus") : action.label}
+              icon={action.icon}
+              tooltip={action.tooltip}
+              confirming={action.id === "merge" && pendingConfirm === "merge"}
+              onclick={(e) => {
+                if (action.id === "merge") confirmAction("merge", () => dashAction(async () => { await snapshotBeforeGroup(); await mergeAllWindows(); return "Merged"; }));
+                else if (action.id === "pin") handlePinCurrent(e);
+                else handleOverflowAction(action.id);
+              }}
+            />
+          {/each}
+        </div>
+      {:else}
+        <div class="px-3 pb-2 text-[10px] text-text-muted text-center py-2">
+          No dashboard actions. Add some from <button class="text-primary hover:underline" onclick={() => { activeSection = "more"; }}>More Actions</button>.
+        </div>
+      {/if}
 
       <!-- Selection actions -->
       {#if selectedTabs.size > 0}

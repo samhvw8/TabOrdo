@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.1 — 2026-07-05
+
+### New Features
+
+- **Customizable dashboard actions** — choose which action buttons appear on the main dashboard grid via the More Actions panel (★ toggle)
+- **All actions in More panel** — primary actions (Sort, Group+, Dedup, Merge, Pin) now listed alongside overflow actions for unified discovery and customization
+- **Empty dashboard state** — helpful prompt when all actions are removed, linking to the More panel
+
+### Improvements
+
+- **Simplified icon rendering** — replaced 35-line icon if/else chain in More panel with shared icon pool
+- **Data-driven action grid** — dashboard buttons now render from a stored action list instead of hardcoded markup
+
 ## 0.2.1 — 2026-05-30
 
 ### New Features
