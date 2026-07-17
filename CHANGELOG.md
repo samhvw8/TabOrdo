@@ -1,13 +1,17 @@
 # Changelog
 
-## 0.4.1 — 2026-07-17
+## 0.4.2 — 2026-07-17
 
 ### Bug Fixes
 
-- **Fix sidebar clicks for More and Archive tabs** — clicking sidebar buttons while search input was focused caused a layout shift (search mode pills row removed from DOM on blur), making clicks miss their target; pills row now uses CSS `invisible` instead of conditional rendering to prevent layout shift
-- **Fix archive sidebar action** — replaced fragile `$effect` (read+write same `$state`) with direct `onarchive` callback to avoid Svelte 5 reactivity issues
-- **Sidebar `onmousedown` preventDefault** — prevents search input blur when clicking sidebar buttons, providing secondary defense against layout shift
-- **Resilient Chrome API calls** — wrapped `chrome.storage.session` calls in `try/catch` (`.catch()` only handles Promise rejections, not synchronous property access errors)
+- **Fix dashboard actions lost on reload** — Svelte 5's `$state` proxy was serialized as an object by `chrome.storage.local`, corrupting the array; now spread to plain array before saving and validated with `Array.isArray()` on load
+- **Fix sidebar clicks for More and Archive tabs** — clicking sidebar buttons while search input was focused caused a layout shift (search mode pills removed from DOM on blur), making clicks miss their target; pills row now uses CSS `invisible` instead of conditional rendering
+- **Fix archive sidebar action** — replaced fragile `$effect` (read+write same `$state`) with direct `onarchive` callback
+- **Resilient Chrome API calls** — wrapped `chrome.storage.session` calls in `try/catch`
+
+### Improvements
+
+- **SEO-friendly extension name** — renamed to "TabOrdo - Tab Manager & Organizer" for better discoverability
 
 ## 0.3.1 — 2026-07-05
 

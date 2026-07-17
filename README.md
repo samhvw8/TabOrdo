@@ -1,10 +1,10 @@
-# TabOrdo
+# TabOrdo - Tab Manager & Organizer
 
 A keyboard-first tab manager for Chrome. Press `Cmd+E` to open a command palette that lets you search, sort, group, deduplicate, and manage your tabs.
 
 ## Install
 
-[Chrome Web Store](https://chromewebstore.google.com) (pending review)
+[Chrome Web Store](https://chromewebstore.google.com/detail/tabOrdo/kkobnbbfolmicnhnnbmcmdbgilocpnbi)
 
 ## Commands
 
