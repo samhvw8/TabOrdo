@@ -94,3 +94,36 @@ describe("rankedSearch", () => {
     expect(rankedSearch(hay, "git")).toEqual([0, 2, 1]);
   });
 });
+
+describe("rankedSearch with a title haystack", () => {
+  // "com" appears in every URL but only in one title — the URL-only hits are noise.
+  const full = [
+    "Company Handbook https://a.com/handbook", // "com" in title AND url -> title-prefix tier
+    "Product Roadmap https://comfy.io/roadmap", // "com" only in url -> full-prefix tier
+    "Weekly Sync https://example.com/sync", // "com" only in url (substring) -> full-exact tier
+  ];
+  const titleOnly = ["Company Handbook", "Product Roadmap", "Weekly Sync"];
+  const rec = [100, 999, 999];
+
+  it("ranks a title hit above a URL-only hit even when the URL match is more recent", () => {
+    const res = rankedSearch(full, "com", 50, rec, titleOnly);
+    expect(res[0]).toBe(0);
+  });
+
+  it("still surfaces URL-only matches, just lower", () => {
+    const res = rankedSearch(full, "com", 50, rec, titleOnly);
+    expect(res).toEqual(expect.arrayContaining([0, 1, 2]));
+    expect(res.indexOf(0)).toBeLessThan(res.indexOf(1));
+  });
+
+  it("does not duplicate a title hit when it also matches the full haystack", () => {
+    const res = rankedSearch(full, "com", 50, rec, titleOnly);
+    expect(new Set(res).size).toBe(res.length);
+  });
+
+  it("without a title haystack, falls back to prior (unweighted) behavior", () => {
+    const res = rankedSearch(full, "com", 50, rec);
+    // "comfy" (999) now outranks "company" (100) since nothing favors title matches
+    expect(res[0]).toBe(1);
+  });
+});

@@ -78,7 +78,8 @@ export function rankedSearch(
   haystack: string[],
   needle: string,
   limit = 50,
-  recency?: number[]
+  recency?: number[],
+  titleHaystack?: string[]
 ): number[] {
   if (!needle.trim()) {
     return sortByRecency(haystack.map((_, i) => i), recency).slice(0, limit);
@@ -96,7 +97,12 @@ export function rankedSearch(
       }
     }
   };
+  // A title/group-name hit is a stronger signal than a URL-only hit (e.g. "com" inside every
+  // domain), so it's ranked first when a title-only view of the haystack is supplied.
+  const titleHay = titleHaystack ?? haystack;
+  take(sortByRecency(prefixSearch(titleHay, needle, titleHay.length), recency));
   take(sortByRecency(prefixSearch(haystack, needle, haystack.length), recency));
+  take(sortByRecency(exactSearch(titleHay, needle, titleHay.length), recency));
   take(sortByRecency(exactSearch(haystack, needle, haystack.length), recency));
   take(fuzzySearch(haystack, needle, limit));
   return out.slice(0, limit);
@@ -201,6 +207,19 @@ export function buildSearchHaystack(items: { title: string; url: string; groupTi
     const stripped = stripDiacritics(original);
     let hay = original === stripped ? original : `${original} ${stripped}`;
     const pin = pinyinVariants(t.groupTitle ? `${t.title} ${t.groupTitle}` : t.title);
+    if (pin) hay = `${hay} ${pin}`;
+    return hay;
+  });
+}
+
+// Title + group name only, no URL — used to rank a real title/label match above a URL-only
+// hit (e.g. "com" matching every domain) instead of treating both as equally relevant.
+export function buildTitleHaystack(items: { title: string; groupTitle?: string }[]): string[] {
+  return items.map((t) => {
+    const label = t.groupTitle ? `${t.title} ${t.groupTitle}` : t.title;
+    const stripped = stripDiacritics(label);
+    let hay = label === stripped ? label : `${label} ${stripped}`;
+    const pin = pinyinVariants(label);
     if (pin) hay = `${hay} ${pin}`;
     return hay;
   });

@@ -3,7 +3,7 @@
   import { getAllTabs, getCurrentWindowTabs, switchToTab, closeTabs, sortTabsInWindow, sortTabsInGroup, groupTabsByDomain, ungroupAll, removeDuplicates, mergeAllWindows, muteTab, setTabVolume, splitTabToWindow, extractGroupToWindow, discardTabs, closeTabsToLeft, closeTabsToRight, closeTabsSameSite, closeOldTabs, shuffleTabs, uniteDomain, isolateDomain, splitWindow, splitByDomain, stackWindows, collapseAllGroups, moveCurrentTab, moveGroup, pinCurrentTab, unpinCurrentTab, pinCurrentGroup, unpinCurrentGroup, type TabInfo } from "../../lib/tabs.ts";
   import { getPinnedTabs, getPinForTab, type PinnedTabEntry } from "../../lib/pin.ts";
   import { archiveTabs, getArchiveCount } from "../../lib/archive.ts";
-  import { search, rankedSearch, tabsToSearchItems, searchBookmarks, searchHistory, parseCommand, buildSearchHaystack, type SearchResult } from "../../lib/search.ts";
+  import { search, rankedSearch, tabsToSearchItems, searchBookmarks, searchHistory, parseCommand, buildSearchHaystack, buildTitleHaystack, type SearchResult } from "../../lib/search.ts";
   import { getAutoGroup, setAutoGroup, getAutoUngroup, setAutoUngroup, getUseRules, setUseRules, getAutoSort, setAutoSort, getAutoPinFollow, setAutoPinFollow, getAutoDiscard, setAutoDiscard, setSwitchToExisting } from "../../lib/rules.ts";
   import { matchCommands, ALL_COMMANDS, ACTION_COMMANDS, TRIAGE_COMMANDS, CATEGORY_STYLES, type CommandDefinition, type CommandCategory } from "../../lib/commands.ts";
   import { snapshotBeforeClose, snapshotBeforeGroup, executeUndo, peekUndo, loadUndoStack } from "../../lib/undo.ts";
@@ -167,6 +167,7 @@
 
   let allTabs = $state<SearchResult[]>([]);
   let searchHaystack = $state<string[]>([]);
+  let searchTitleHaystack = $state<string[]>([]);
   let searchRecency = $state<number[]>([]);
 
   interface WindowData {
@@ -208,6 +209,7 @@
 
     allTabs = tabsToSearchItems(tabs);
     searchHaystack = buildSearchHaystack(allTabs);
+    searchTitleHaystack = buildTitleHaystack(allTabs);
     // Active tab sinks to the bottom so empty-query MRU leads with the *previous* tab (Cmd+E → Enter = alt-tab).
     searchRecency = tabs.map((t) => (t.active && t.windowId === currentWindowId ? 0 : (t.lastAccessed ?? 0)));
     dashboardTabs = tabs;
@@ -261,7 +263,7 @@
     if (prefix) {
       handlePrefixSearch(prefix, searchQuery);
     } else {
-      const indices = rankedSearch(searchHaystack, query, 50, searchRecency);
+      const indices = rankedSearch(searchHaystack, query, 50, searchRecency, searchTitleHaystack);
       const tabResults = indices.map((i) => allTabs[i]);
       results = tabResults;
 
@@ -274,7 +276,7 @@
             searchHistory(capturedQuery, 5),
           ]);
           if (query !== capturedQuery) return;
-          const freshIndices = rankedSearch(searchHaystack, capturedQuery, 50, searchRecency);
+          const freshIndices = rankedSearch(searchHaystack, capturedQuery, 50, searchRecency, searchTitleHaystack);
           const freshTabResults = freshIndices.map((i) => allTabs[i]);
           results = [
             ...freshTabResults,
@@ -409,10 +411,10 @@
         }
         default:
           if (ACTION_PREFIXES.has(prefix)) {
-            const indices = searchQuery ? rankedSearch(searchHaystack, searchQuery, 50, searchRecency) : [];
+            const indices = searchQuery ? rankedSearch(searchHaystack, searchQuery, 50, searchRecency, searchTitleHaystack) : [];
             results = indices.map((i) => allTabs[i]);
           } else {
-            const indices = rankedSearch(searchHaystack, `/${prefix} ${searchQuery}`, 50, searchRecency);
+            const indices = rankedSearch(searchHaystack, `/${prefix} ${searchQuery}`, 50, searchRecency, searchTitleHaystack);
             results = indices.map((i) => allTabs[i]);
           }
       }
@@ -483,7 +485,7 @@
 
     try {
     await withBulkLock(async () => {
-    const matchingIndices = searchQuery ? rankedSearch(searchHaystack, searchQuery, 50, searchRecency) : [];
+    const matchingIndices = searchQuery ? rankedSearch(searchHaystack, searchQuery, 50, searchRecency, searchTitleHaystack) : [];
     const matchingTabs = matchingIndices.map((i) => allTabs[i]).filter((t) => t.tabId);
     const tabIds = matchingTabs.map((t) => t.tabId!);
     let acted = false;
@@ -630,7 +632,7 @@
           const level = Math.max(0, Math.min(100, parseInt(volMatch[1])));
           const filter = volMatch[2].trim();
           if (filter) {
-            const indices = rankedSearch(searchHaystack, filter, 50, searchRecency);
+            const indices = rankedSearch(searchHaystack, filter, 50, searchRecency, searchTitleHaystack);
             const targets = indices.map((i) => allTabs[i]).filter((t) => t.tabId);
             for (const t of targets) await setTabVolume(t.tabId!, level / 100);
             statusMessage = `Volume ${level}% on ${targets.length} tab(s)`;
@@ -716,6 +718,7 @@
     results = results.filter((r) => r.id !== item.id);
     allTabs = allTabs.filter((t) => t.id !== item.id);
     searchHaystack = buildSearchHaystack(allTabs);
+    searchTitleHaystack = buildTitleHaystack(allTabs);
     dashboardTabs = dashboardTabs.filter((t) => t.id !== item.tabId);
     await loadTabs();
   }
