@@ -169,6 +169,7 @@
   let searchHaystack = $state<string[]>([]);
   let searchTitleHaystack = $state<string[]>([]);
   let searchRecency = $state<number[]>([]);
+  let highlightQuery = $state("");
 
   interface WindowData {
     windowId: number;
@@ -246,6 +247,7 @@
 
   async function updateResults() {
     const { prefix, query: searchQuery } = parseCommand(query);
+    highlightQuery = prefix ? searchQuery : query;
 
     if ((query.startsWith("/") || query.startsWith("@")) && !query.includes(" ")) {
       commandHints = matchCommands(query);
@@ -1012,7 +1014,7 @@
     {#if paletteMode === "commands"}
       <CommandHints commands={commandHints} {selectedIndex} onselect={handleCommandSelect} />
     {:else}
-      <ResultList {results} {selectedIndex} {loading} {currentWindowId} windowIds={windows.map(w => w.windowId)} onselect={handleSelect} onclose={handleClose} />
+      <ResultList {results} {selectedIndex} {loading} {currentWindowId} windowIds={windows.map(w => w.windowId)} query={highlightQuery} onselect={handleSelect} onclose={handleClose} />
     {/if}
   {:else}
     <!-- Dashboard mode -->

@@ -29,6 +29,57 @@ const fuzzy = new uFuzzy({
   unicode: true,
 });
 
+export interface MatchRange {
+  start: number;
+  end: number;
+}
+
+// Highlight ranges for a piece of DISPLAYED text (e.g. a tab's title), computed independently
+// from the internal search haystack (which mixes in URL/pinyin variants a user never sees).
+// Prefers a contiguous substring match; falls back to a greedy in-order character match so
+// fuzzy-tier hits still show something, at the cost of a scattered rather than solid highlight.
+export function matchRanges(text: string, needle: string): MatchRange[] {
+  const q = needle.trim();
+  if (!q || !text) return [];
+  const lower = text.toLowerCase();
+  const qLower = q.toLowerCase();
+
+  const idx = lower.indexOf(qLower);
+  if (idx !== -1) return [{ start: idx, end: idx + q.length }];
+
+  const ranges: MatchRange[] = [];
+  let ti = 0;
+  for (let qi = 0; qi < qLower.length; qi++) {
+    const ch = qLower[qi];
+    while (ti < lower.length && lower[ti] !== ch) ti++;
+    if (ti >= lower.length) return []; // needle not fully found in order — don't show a partial/misleading highlight
+    const last = ranges[ranges.length - 1];
+    if (last && last.end === ti) last.end = ti + 1;
+    else ranges.push({ start: ti, end: ti + 1 });
+    ti++;
+  }
+  return ranges;
+}
+
+export interface HighlightSegment {
+  text: string;
+  matched: boolean;
+}
+
+export function highlightSegments(text: string, needle: string): HighlightSegment[] {
+  const ranges = matchRanges(text, needle);
+  if (ranges.length === 0) return [{ text, matched: false }];
+  const segments: HighlightSegment[] = [];
+  let pos = 0;
+  for (const r of ranges) {
+    if (r.start > pos) segments.push({ text: text.slice(pos, r.start), matched: false });
+    segments.push({ text: text.slice(r.start, r.end), matched: true });
+    pos = r.end;
+  }
+  if (pos < text.length) segments.push({ text: text.slice(pos), matched: false });
+  return segments;
+}
+
 export function stripDiacritics(s: string): string {
   return s
     .normalize("NFD")

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { SearchResult } from "../lib/search.ts";
+  import { highlightSegments, type SearchResult } from "../lib/search.ts";
   import { getFullHostname } from "../lib/tabs.ts";
 
   let {
@@ -8,6 +8,7 @@
     loading = false,
     currentWindowId = 0,
     windowIds = [] as number[],
+    query = "",
     onselect,
     onclose,
   }: {
@@ -16,6 +17,7 @@
     loading?: boolean;
     currentWindowId?: number;
     windowIds?: number[];
+    query?: string;
     onselect: (item: SearchResult) => void;
     onclose: (item: SearchResult) => void;
   } = $props();
@@ -112,7 +114,7 @@
             {#if item.discarded}
               <span class="text-[10px] text-text-muted shrink-0">💤</span>
             {/if}
-            <span class="truncate text-sm text-text">{item.title || "Untitled"}</span>
+            <span class="truncate text-sm text-text">{#each highlightSegments(item.title || "Untitled", query) as seg}{#if seg.matched}<span class="text-primary font-semibold">{seg.text}</span>{:else}{seg.text}{/if}{/each}</span>
           </div>
           <div class="truncate text-xs text-text-muted">
             {getFullHostname(item.url)}
