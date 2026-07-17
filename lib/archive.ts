@@ -52,12 +52,14 @@ export async function restoreFromArchive(ids: string[]): Promise<number> {
   const results = await Promise.allSettled(
     toRestore.map((item) => chrome.tabs.create({ url: item.url, active: false }))
   );
-  const restored = results.filter((r) => r.status === "fulfilled").length;
-  for (const r of results) {
-    if (r.status === "rejected") console.warn("Failed to restore tab:", r.reason);
-  }
-  await saveArchive(archive.filter((a) => !idSet.has(a.id)));
-  return restored;
+  // Only drop entries whose tab actually opened — a failed restore must not lose the archive entry.
+  const restoredIds = new Set<string>();
+  results.forEach((r, i) => {
+    if (r.status === "fulfilled") restoredIds.add(toRestore[i].id);
+    else console.warn("Failed to restore tab:", r.reason);
+  });
+  await saveArchive(archive.filter((a) => !restoredIds.has(a.id)));
+  return restoredIds.size;
 }
 
 export async function deleteFromArchive(ids: string[]): Promise<void> {

@@ -68,6 +68,21 @@ describe("restoreFromArchive", () => {
     expect(await restoreFromArchive(["nope"])).toBe(0);
     expect(await getArchive()).toHaveLength(1);
   });
+
+  it("keeps the archived entry when tab creation fails (regression)", async () => {
+    await archiveTabs([
+      { url: "https://works.com", title: "OK" },
+      { url: "https://broken.com", title: "Fails" },
+    ]);
+    const [ok, broken] = await getArchive();
+    stub.failCreateUrls.add("https://broken.com");
+
+    const restored = await restoreFromArchive([ok.id, broken.id]);
+    expect(restored).toBe(1);
+    const remaining = await getArchive();
+    // The failed one must survive; only the successfully reopened entry leaves the archive
+    expect(remaining.map((a) => a.id)).toEqual([broken.id]);
+  });
 });
 
 describe("deleteFromArchive / clearArchive", () => {
