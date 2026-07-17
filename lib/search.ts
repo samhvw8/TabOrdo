@@ -1,5 +1,6 @@
 import uFuzzy from "@leeoniya/ufuzzy";
 import type { TabInfo } from "./tabs.ts";
+import { pinyinVariants, hasChinese } from "./pinyin.ts";
 
 export interface SearchResult {
   type: "tab" | "bookmark" | "history" | "divider";
@@ -58,6 +59,10 @@ export function search(
 
   switch (mode) {
     case "fuzzy":
+      // uFuzzy's term matching only handles space-delimited scripts; CJK needles use substring matching.
+      if (hasChinese(needle)) {
+        return sortByRecency(exactSearch(haystack, needle, scanLimit), recency).slice(0, limit);
+      }
       return fuzzySearch(haystack, needle, limit);
     case "exact":
       return sortByRecency(exactSearch(haystack, needle, scanLimit), recency).slice(0, limit);
@@ -171,7 +176,10 @@ export function buildSearchHaystack(items: { title: string; url: string; groupTi
   return items.map((t) => {
     const original = `${t.title} ${t.url}${t.groupTitle ? ` ${t.groupTitle}` : ""}`;
     const stripped = stripDiacritics(original);
-    return original === stripped ? original : `${original} ${stripped}`;
+    let hay = original === stripped ? original : `${original} ${stripped}`;
+    const pin = pinyinVariants(t.groupTitle ? `${t.title} ${t.groupTitle}` : t.title);
+    if (pin) hay = `${hay} ${pin}`;
+    return hay;
   });
 }
 
