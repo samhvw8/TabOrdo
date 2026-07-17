@@ -22,6 +22,7 @@ export interface RulesConfig {
   autoSort: boolean;
   autoPinFollow: boolean;
   autoDiscard: boolean;
+  switchToExisting: boolean;
   useAI: boolean;
   ignorePatterns: IgnoreRule[];
   ignoreGroupNames: IgnoreRule[];
@@ -63,12 +64,13 @@ export async function getConfig(): Promise<RulesConfig> {
       autoSort: stored.autoSort ?? false,
       autoPinFollow: stored.autoPinFollow ?? false,
       autoDiscard: stored.autoDiscard ?? false,
+      switchToExisting: stored.switchToExisting ?? false,
       useAI: stored.useAI ?? false,
       ignorePatterns: normalizeIgnoreRules(stored.ignorePatterns),
       ignoreGroupNames: normalizeIgnoreRules(stored.ignoreGroupNames),
     };
   }
-  const config: RulesConfig = { rules: [], autoGroup: false, autoUngroup: false, useRules: false, autoSort: false, autoPinFollow: false, autoDiscard: false, useAI: false, ignorePatterns: [], ignoreGroupNames: [] };
+  const config: RulesConfig = { rules: [], autoGroup: false, autoUngroup: false, useRules: false, autoSort: false, autoPinFollow: false, autoDiscard: false, switchToExisting: false, useAI: false, ignorePatterns: [], ignoreGroupNames: [] };
   await saveConfig(config);
   return config;
 }
@@ -152,6 +154,12 @@ export async function getAutoDiscard(): Promise<boolean> {
 export async function setAutoDiscard(enabled: boolean): Promise<void> {
   const config = await getConfig();
   config.autoDiscard = enabled;
+  await saveConfig(config);
+}
+
+export async function setSwitchToExisting(enabled: boolean): Promise<void> {
+  const config = await getConfig();
+  config.switchToExisting = enabled;
   await saveConfig(config);
 }
 

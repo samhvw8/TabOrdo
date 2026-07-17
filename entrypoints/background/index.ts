@@ -1,6 +1,7 @@
 import { getConfig, matchDomainToRule, isIgnoredUrl, isIgnoredGroupName } from "../../lib/rules.ts";
 import { getFullHostname, getDomain, sortTabsInWindow, GROUP_COLORS, hashCode } from "../../lib/tabs.ts";
 import { syncPinUrl } from "../../lib/pin.ts";
+import { findBounceTarget } from "../../lib/bounce.ts";
 let pinSyncInProgress = false;
 const ungroupTimers = new Map<number, ReturnType<typeof setTimeout>>();
 
@@ -77,6 +78,28 @@ export default defineBackground(() => {
       scheduleAutoUngroup(removeInfo.windowId);
     } catch (e) {
       console.error("[TabOrdo] onRemoved config read:", e);
+    }
+  });
+
+  // Switch to an existing tab instead of keeping a fresh duplicate.
+  // Fires only for brand-new (recentTabs) foreground tabs on their first navigation —
+  // background-created tabs (restores, bulk loads, middle-click) are never bounced.
+  chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+    if (!changeInfo.url || !tab.active) return;
+    if (!recentTabs.has(tabId)) return;
+    try {
+      const config = await getConfig();
+      if (!config.switchToExisting) return;
+      const session = await chrome.storage.session.get("bulkOpInProgress").catch((): Record<string, unknown> => ({}));
+      if (session.bulkOpInProgress) return;
+      const allTabs = await chrome.tabs.query({});
+      const target = findBounceTarget(allTabs, tabId, changeInfo.url, tab.openerTabId);
+      if (!target) return;
+      await chrome.tabs.update(target.id, { active: true });
+      await chrome.windows.update(target.windowId, { focused: true });
+      await chrome.tabs.remove(tabId);
+    } catch (e) {
+      console.error("[TabOrdo] switch-to-existing error:", e);
     }
   });
 
