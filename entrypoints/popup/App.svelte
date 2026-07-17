@@ -459,8 +459,8 @@
       case "closesite": goBack(); dashAction(async () => { const n = await closeTabsSameSite(); return n > 0 ? `Closed ${n} same-site` : "No other tabs"; }); break;
       case "focus":
         goBack(); dashAction(async () => {
-          if (hasWorkspace) { const n = await unfocusMode(); hasWorkspace = false; return n > 0 ? `Restored ${n}` : "No workspace"; }
-          else { const n = await focusMode(); hasWorkspace = true; return `Saved ${n}, focused`; }
+          if (hasWorkspace) { const n = await unfocusMode(); hasWorkspace = await hasSavedWorkspace(); return n > 0 ? `Restored ${n}` : "No workspace"; }
+          else { const n = await focusMode(); hasWorkspace = await hasSavedWorkspace(); return n > 0 ? `Saved ${n}, focused` : "No tabs to save"; }
         }); break;
       case "save": goBack(); exportTabsToFile(); statusMessage = "Exporting..."; setTimeout(() => { statusMessage = ""; }, 2000); break;
       case "load": fileInputEl?.click(); break;
@@ -602,12 +602,12 @@
         await stackWindows(); statusMessage = "Stacked windows"; acted = true; break;
       case "focus": {
         const n = await focusMode();
-        hasWorkspace = true;
-        statusMessage = `Saved ${n} tab(s), focus mode on`; acted = true; break;
+        hasWorkspace = await hasSavedWorkspace();
+        statusMessage = n > 0 ? `Saved ${n} tab(s), focus mode on` : "No tabs to save"; acted = true; break;
       }
       case "unfocus": {
         const n = await unfocusMode();
-        hasWorkspace = false;
+        hasWorkspace = await hasSavedWorkspace();
         statusMessage = n > 0 ? `Restored ${n} tab(s)` : "No saved workspace"; acted = true; break;
       }
       case "save":

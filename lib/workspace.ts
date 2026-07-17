@@ -3,35 +3,54 @@ interface SavedWorkspace {
   savedAt: number;
 }
 
-const WORKSPACE_KEY = "tabOrdo_workspace";
+// Pre-0.4.4 versions stored a single workspace under this key; folded into the stack on read.
+const LEGACY_WORKSPACE_KEY = "tabOrdo_workspace";
+const WORKSPACES_KEY = "tabOrdo_workspaces";
+
+async function getWorkspaceStack(): Promise<SavedWorkspace[]> {
+  const data = await chrome.storage.local.get([WORKSPACES_KEY, LEGACY_WORKSPACE_KEY]);
+  const stored = data[WORKSPACES_KEY];
+  const stack: SavedWorkspace[] = Array.isArray(stored) ? stored : [];
+  const legacy = data[LEGACY_WORKSPACE_KEY] as SavedWorkspace | undefined;
+  if (legacy && legacy.tabs.length > 0) stack.unshift(legacy);
+  return stack;
+}
+
+async function saveWorkspaceStack(stack: SavedWorkspace[]): Promise<void> {
+  await chrome.storage.local.set({ [WORKSPACES_KEY]: stack });
+  await chrome.storage.local.remove(LEGACY_WORKSPACE_KEY);
+}
 
 export async function focusMode(): Promise<number> {
   const tabs = await chrome.tabs.query({ currentWindow: true });
   const toSave = tabs.filter((t) => t.url && !t.url.startsWith("chrome://") && !t.url.startsWith("chrome-extension://"));
-  const workspace: SavedWorkspace = {
+  if (toSave.length === 0) return 0;
+  const stack = await getWorkspaceStack();
+  stack.push({
     tabs: toSave.map((t) => ({ url: t.url!, pinned: t.pinned })),
     savedAt: Date.now(),
-  };
-  await chrome.storage.local.set({ [WORKSPACE_KEY]: workspace });
+  });
+  // Persist before closing anything so a failure mid-close can never lose tabs.
+  await saveWorkspaceStack(stack);
   await chrome.tabs.create({ active: true });
   await chrome.tabs.remove(toSave.map((t) => t.id!));
   return toSave.length;
 }
 
 export async function unfocusMode(): Promise<number> {
-  const data = await chrome.storage.local.get(WORKSPACE_KEY);
-  const workspace = data[WORKSPACE_KEY] as SavedWorkspace | undefined;
-  if (!workspace || workspace.tabs.length === 0) return 0;
+  const stack = await getWorkspaceStack();
+  const workspace = stack.pop();
+  if (!workspace) return 0;
   for (const t of workspace.tabs) {
     await chrome.tabs.create({ url: t.url, pinned: t.pinned, active: false });
   }
-  await chrome.storage.local.remove(WORKSPACE_KEY);
+  // Persist after restoring: a failure mid-restore keeps the workspace recoverable.
+  await saveWorkspaceStack(stack);
   return workspace.tabs.length;
 }
 
 export async function hasSavedWorkspace(): Promise<boolean> {
-  const data = await chrome.storage.local.get(WORKSPACE_KEY);
-  return !!data[WORKSPACE_KEY];
+  return (await getWorkspaceStack()).length > 0;
 }
 
 export function exportTabsToFile(): void {
