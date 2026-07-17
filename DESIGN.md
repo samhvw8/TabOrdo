@@ -136,7 +136,7 @@ Eight accent colors mapped 1:1 to Chrome's tab group color API. Used exclusively
 - **Signal Blue** (#60a5fa): Audio indicators, bookmark markers, `blue` groups.
 - **Signal Yellow** (#facc15): Pin indicators, archive count, `yellow` groups.
 - **Signal Purple** (#a78bfa): Audio controls, mute toggles, `purple` groups.
-- **Signal Cyan** (#22d3ee): Regex/mode toggles, window badges, `cyan` groups.
+- **Signal Cyan** (#22d3ee): History/navigation commands, window badges, `cyan` groups.
 - **Signal Orange** (#fb923c): Auto-sort toggle, `orange` groups.
 - **Signal Pink** (#f472b6): Auto-discard toggle, `pink` groups.
 

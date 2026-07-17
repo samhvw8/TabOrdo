@@ -53,7 +53,6 @@ A keyboard-first tab manager for Chrome. Press `Cmd+E` to open a command palette
 | `Cmd+Shift+E` | Open TabOrdo (dashboard, no search focus) |
 | `↑↓` | Navigate results |
 | `Enter` | Open / run command |
-| `Shift+Tab` | Cycle search mode (fuzzy/exact/prefix/regex) |
 | `Ctrl+Del` | Close selected tab |
 | `Cmd+Z` | Undo last action |
 

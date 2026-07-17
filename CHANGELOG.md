@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.5.0 — 2026-07-17
+
+### New Features
+
+- **MRU empty state** — Cmd+E with no query now lists tabs by most-recently-used instead of positional order, with the previous tab first (Cmd+E → Enter acts as alt-tab)
+- **Recency-ranked search** — exact/prefix/regex matches are now ordered by recency instead of tab index, and a single ranked search (prefix → substring → fuzzy) replaces the old user-selected search modes
+- **Switch to existing tab** — new "Switch" toggle: navigating to an already-open URL in a fresh tab focuses the existing tab instead of creating a duplicate (intentional "Duplicate Tab" copies are left alone)
+- **Pinyin and CJK search** — tabs with Chinese titles are now searchable by typing pinyin (`zhihu`, `zh`) on a Latin keyboard, and typing Chinese directly now works in every search mode
+- **`/re` regex command** — regex search is now a slash command instead of a cycled mode
+
+### Bug Fixes
+
+- **Fix focus mode data loss** — saving a second workspace while one was already saved silently destroyed the first (after its tabs were already closed); workspaces are now a stack, saved before tabs close and restored in LIFO order
+- **Fix archive restore data loss** — an archived tab that failed to reopen was deleted from the archive anyway; failed restores now stay in the archive
+- **Fix fuzzy search returning nothing for Chinese queries** — uFuzzy's term matching doesn't handle CJK text; CJK needles now use substring matching in every mode
+
+### Improvements
+
+- **Removed the search-mode picker** — fuzzy/exact/prefix/regex pills and ⇧Tab cycling are gone; search now ranks results automatically
+- **Test coverage for undo and archive** — characterization tests lock the behavior of the undo stack, `executeUndo`, and the archive module ahead of future work
+
 ## 0.4.3 — 2026-07-17
 
 ### New Features
