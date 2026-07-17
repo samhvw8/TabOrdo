@@ -51,15 +51,19 @@
         }
       }
     }
-    // Backfill tabIds for existing pins that don't have them
+    // Sync pins with currently open tabs: backfill tabIds, update titles/URLs
     const allTabs = await chrome.tabs.query({});
     for (const pin of raw) {
-      if (!pin.tabId) {
-        const match = allTabs.find((t) => t.url === pin.url);
-        if (match?.id) {
-          pin.tabId = match.id;
-          needsSave = true;
-        }
+      const openTab = pin.tabId ? allTabs.find((t) => t.id === pin.tabId) : undefined;
+      const matchByUrl = !openTab ? allTabs.find((t) => t.url === pin.url) : undefined;
+      const match = openTab || matchByUrl;
+      if (match) {
+        if (match.id && pin.tabId !== match.id) { pin.tabId = match.id; needsSave = true; }
+        if (match.title && pin.title !== match.title) { pin.title = match.title; needsSave = true; }
+        if (match.url && pin.url !== match.url) { pin.url = match.url; needsSave = true; }
+      } else if (!pin.tabId) {
+        const byUrl = allTabs.find((t) => t.url === pin.url);
+        if (byUrl?.id) { pin.tabId = byUrl.id; needsSave = true; }
       }
     }
 

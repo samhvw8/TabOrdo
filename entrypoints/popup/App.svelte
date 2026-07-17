@@ -57,8 +57,11 @@
   let confirmTimer: ReturnType<typeof setTimeout> | undefined;
   let onboardingDismissed = $state(true);
   let helpFilter = $state("");
+  let altPressed = $state(false);
 
   const ICON = (d: string) => `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+  const UNPIN_ICON = ICON('<path d="M12 17v5"/><path d="M15 9.34V7a1 1 0 0 1 1-1 2 2 0 0 0 2-2H6a2 2 0 0 0 2 2 1 1 0 0 1 1 1v2.34"/><path d="m2 2 20 20"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76"/>');
+  const PIN_TOP_ICON = ICON('<path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 2-2H6a2 2 0 0 0 2 2 1 1 0 0 1 1 1z"/><path d="M5 3h14"/>');
 
   interface DashActionDef { id: string; label: string; icon: string; tooltip: string; }
 
@@ -91,6 +94,21 @@
   const ACTION_POOL_MAP = new Map(DASHBOARD_ACTION_POOL.map(a => [a.id, a]));
   let dashboardActionIds = $state<string[]>([...DEFAULT_DASHBOARD_IDS]);
   let dashboardActions = $derived(dashboardActionIds.map(id => ACTION_POOL_MAP.get(id)).filter((a): a is DashActionDef => !!a));
+
+  let activeTabPin = $derived.by(() => {
+    const active = dashboardTabs.find(t => t.active && t.windowId === currentWindowId);
+    if (!active || active.groupId === -1 || !active.groupTitle) return null;
+    return getPinForTab(active.url, active.groupTitle, pinnedTabs, active.id) ?? null;
+  });
+
+  let pinDisplay = $derived.by(() => {
+    if (altPressed) {
+      if (activeTabPin && activeTabPin.position === 0) return { label: "Unpin", icon: UNPIN_ICON, tooltip: "Unpin tab from fixed position." };
+      return { label: "Pin Top", icon: PIN_TOP_ICON, tooltip: "Pin tab at first position in group." };
+    }
+    if (activeTabPin) return { label: "Unpin", icon: UNPIN_ICON, tooltip: "Unpin tab from fixed position." };
+    return { label: "Pin Tab", icon: ACTION_POOL_MAP.get("pin")!.icon, tooltip: "Pin current tab at position." };
+  });
 
   function smallIcon(svg: string): string {
     return svg.replace('width="16" height="16"', 'width="11" height="11"');
@@ -452,7 +470,7 @@
       case "group": goBack(); dashAction(async () => { await snapshotBeforeGroup(); await groupTabsByDomain("additive"); return "Grouped"; }); break;
       case "dedup": goBack(); dashAction(async () => { await snapshotBeforeGroup(); const n = await removeDuplicates(); return n > 0 ? `${n} removed` : "No dupes"; }); break;
       case "merge": goBack(); confirmAction("merge", () => dashAction(async () => { await snapshotBeforeGroup(); await mergeAllWindows(); return "Merged"; })); break;
-      case "pin": goBack(); handlePinCurrent(new MouseEvent("click")); break;
+      case "pin": goBack(); handlePinCurrent(new MouseEvent("click", { altKey: altPressed })); break;
     }
   }
 
@@ -743,8 +761,16 @@
   }
 
   async function handlePinCurrent(e: MouseEvent) {
-    const toStart = e.altKey || e.ctrlKey;
-    await dashAction(() => pinCurrentTab(toStart ? "^" : ""));
+    const toTop = e.altKey || e.ctrlKey;
+    if (activeTabPin) {
+      if (toTop && activeTabPin.position !== 0) {
+        await dashAction(() => pinCurrentTab("^"));
+      } else {
+        await dashAction(() => unpinCurrentTab());
+      }
+    } else {
+      await dashAction(() => pinCurrentTab(toTop ? "^" : ""));
+    }
   }
 
   async function handleFileLoad(e: Event) {
@@ -756,6 +782,20 @@
     setTimeout(() => { statusMessage = ""; }, 3000);
     (e.target as HTMLInputElement).value = "";
   }
+
+  $effect(() => {
+    const onKeyDown = (e: KeyboardEvent) => { if (e.key === "Alt") altPressed = true; };
+    const onKeyUp = (e: KeyboardEvent) => { if (e.key === "Alt") altPressed = false; };
+    const onBlur = () => { altPressed = false; };
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
+    };
+  });
 
   onMount(async () => {
     try { await chrome.storage.session.set({ bulkOpInProgress: false }); } catch {}
@@ -923,11 +963,11 @@
               onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleOverflowAction(item.action); } }}
             >
               <span class="shrink-0 w-5 h-5 rounded bg-surface-active/60 flex items-center justify-center mt-px group-hover:bg-primary/15 group-hover:text-primary transition-colors">
-                {#if poolEntry}{@html smallIcon(poolEntry.icon)}{/if}
+                {#if poolEntry}{@html smallIcon(item.action === "pin" ? pinDisplay.icon : poolEntry.icon)}{/if}
               </span>
               <div class="flex-1 min-w-0">
-                <div class="text-xs text-text font-medium">{item.label}</div>
-                <div class="text-[10px] text-text-muted/70 leading-tight">{item.tip}</div>
+                <div class="text-xs text-text font-medium">{item.action === "pin" ? pinDisplay.label : item.label}</div>
+                <div class="text-[10px] text-text-muted/70 leading-tight">{item.action === "pin" ? pinDisplay.tooltip : item.tip}</div>
               </div>
               <button
                 class="shrink-0 self-center text-sm leading-none transition-all hover:scale-110 {dashboardActionIds.includes(item.action) ? 'text-primary' : 'text-text-muted/30 opacity-0 group-hover:opacity-100'}"
@@ -1015,9 +1055,9 @@
           aria-busy={busy}>
           {#each dashboardActions as action}
             <ActionButton
-              label={action.id === "merge" && pendingConfirm === "merge" ? "Confirm" : action.id === "focus" ? (hasWorkspace ? "Unfocus" : "Focus") : action.label}
-              icon={action.icon}
-              tooltip={action.tooltip}
+              label={action.id === "merge" && pendingConfirm === "merge" ? "Confirm" : action.id === "focus" ? (hasWorkspace ? "Unfocus" : "Focus") : action.id === "pin" ? pinDisplay.label : action.label}
+              icon={action.id === "pin" ? pinDisplay.icon : action.icon}
+              tooltip={action.id === "pin" ? pinDisplay.tooltip : action.tooltip}
               confirming={action.id === "merge" && pendingConfirm === "merge"}
               onclick={(e) => {
                 if (action.id === "merge") confirmAction("merge", () => dashAction(async () => { await snapshotBeforeGroup(); await mergeAllWindows(); return "Merged"; }));

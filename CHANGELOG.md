@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.3 — 2026-07-17
+
+### New Features
+
+- **Pin/Unpin toggle** — Pin Tab button now detects if the active tab is already pinned and shows "Unpin" with a pin-off icon; clicking toggles between pin and unpin
+- **Alt modifier for Pin Top** — hold Alt (or Ctrl) to pin the active tab at the first position in its group; shows "Pin Top" label and icon while held
+- **Dynamic pin state in sidebar** — the More Actions panel also reflects the current pin/unpin state and responds to the Alt modifier
+
+### Improvements
+
+- **PinsPanel title/URL sync** — opening the Pins panel now syncs each pin's title, URL, and tabId from the currently open tabs, keeping the list accurate even after tab navigations
+
 ## 0.4.2 — 2026-07-17
 
 ### Bug Fixes
