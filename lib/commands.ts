@@ -20,6 +20,7 @@ export const SEARCH_COMMANDS: CommandDefinition[] = [
   { prefix: "w", label: "/w", description: "Current window tabs", category: "search", color: "text-accent-blue" },
   { prefix: "p", label: "/p", description: "Pinned tabs only", category: "search", color: "text-accent-yellow" },
   { prefix: "g", label: "/g", description: "Current group tabs", category: "search", color: "text-accent-green" },
+  { prefix: "re", label: "/re", description: "Regex search tabs", category: "search", color: "text-accent-purple" },
 ];
 
 export const ACTION_COMMANDS: CommandDefinition[] = [

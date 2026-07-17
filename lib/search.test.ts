@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { search } from "./search.ts";
+import { search, rankedSearch } from "./search.ts";
 
 const haystack = [
   "Alpha Docs https://a.com", // recency 100
@@ -49,5 +49,48 @@ describe("recency ordering for score-less modes", () => {
   it("fuzzy keeps uFuzzy relevance order over recency", () => {
     const res = search(haystack, "docs", "fuzzy", 50, recency);
     expect([...res].sort((a, b) => a - b)).toEqual([0, 1, 3]);
+  });
+});
+
+describe("rankedSearch", () => {
+  const hay = [
+    "GitHub home https://github.com", // "git" word-start -> prefix tier
+    "Digital garden https://d.com", // "git" inside "digital" -> substring tier
+    "Git tips https://t.com", // "git" word-start -> prefix tier
+    "Nothing here https://n.com", // no match
+  ];
+  const rec = [100, 999, 300, 500];
+
+  it("ranks prefix matches above substring matches, recency within tier", () => {
+    const res = rankedSearch(hay, "git", 50, rec);
+    // prefix tier by recency: 2 (300) > 0 (100); then substring tier: 1 (999) — tier beats recency
+    expect(res).toEqual([2, 0, 1]);
+  });
+
+  it("does not duplicate an item across tiers", () => {
+    const res = rankedSearch(hay, "git", 50, rec);
+    expect(new Set(res).size).toBe(res.length);
+  });
+
+  it("fuzzy tier catches typos the other tiers miss", () => {
+    expect(rankedSearch(hay, "githb", 50, rec)).toEqual([0]);
+  });
+
+  it("empty query returns MRU order", () => {
+    expect(rankedSearch(hay, "", 3, rec)).toEqual([1, 3, 2]);
+  });
+
+  it("respects the limit across tiers", () => {
+    expect(rankedSearch(hay, "git", 2, rec)).toEqual([2, 0]);
+  });
+
+  it("uses substring matching for CJK needles", () => {
+    const cjk = ["知乎 - 首页", "GitHub", "知乎专栏"];
+    const res = rankedSearch(cjk, "知乎", 50, [10, 20, 30]);
+    expect(res).toEqual([2, 0]);
+  });
+
+  it("works without recency (positional within tier)", () => {
+    expect(rankedSearch(hay, "git")).toEqual([0, 2, 1]);
   });
 });

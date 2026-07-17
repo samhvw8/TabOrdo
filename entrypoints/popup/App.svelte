@@ -3,7 +3,7 @@
   import { getAllTabs, getCurrentWindowTabs, switchToTab, closeTabs, sortTabsInWindow, sortTabsInGroup, groupTabsByDomain, ungroupAll, removeDuplicates, mergeAllWindows, muteTab, setTabVolume, splitTabToWindow, extractGroupToWindow, discardTabs, closeTabsToLeft, closeTabsToRight, closeTabsSameSite, closeOldTabs, shuffleTabs, uniteDomain, isolateDomain, splitWindow, splitByDomain, stackWindows, collapseAllGroups, moveCurrentTab, moveGroup, pinCurrentTab, unpinCurrentTab, pinCurrentGroup, unpinCurrentGroup, type TabInfo } from "../../lib/tabs.ts";
   import { getPinnedTabs, getPinForTab, type PinnedTabEntry } from "../../lib/pin.ts";
   import { archiveTabs, getArchiveCount } from "../../lib/archive.ts";
-  import { search, tabsToSearchItems, searchBookmarks, searchHistory, parseCommand, buildSearchHaystack, SEARCH_MODES, type SearchResult, type SearchMode } from "../../lib/search.ts";
+  import { search, rankedSearch, tabsToSearchItems, searchBookmarks, searchHistory, parseCommand, buildSearchHaystack, type SearchResult } from "../../lib/search.ts";
   import { getAutoGroup, setAutoGroup, getAutoUngroup, setAutoUngroup, getUseRules, setUseRules, getAutoSort, setAutoSort, getAutoPinFollow, setAutoPinFollow, getAutoDiscard, setAutoDiscard, setSwitchToExisting } from "../../lib/rules.ts";
   import { matchCommands, ALL_COMMANDS, ACTION_COMMANDS, TRIAGE_COMMANDS, CATEGORY_STYLES, type CommandDefinition, type CommandCategory } from "../../lib/commands.ts";
   import { snapshotBeforeClose, snapshotBeforeGroup, executeUndo, peekUndo, loadUndoStack } from "../../lib/undo.ts";
@@ -26,17 +26,10 @@
   let statusMessage = $state("");
   let loading = $state(false);
   let paletteMode = $state<"search" | "commands">("search");
-  let searchModeIndex = $state(0);
-  let searchMode = $derived<SearchMode>(SEARCH_MODES[searchModeIndex].mode);
 
   let showHelp = $state(false);
   let activeSection = $state<SidebarSection>("dashboard");
   let showActions = $state(false);
-
-  function cycleSearchMode() {
-    searchModeIndex = (searchModeIndex + 1) % SEARCH_MODES.length;
-    if (query) updateResults();
-  }
 
   let autoGroupEnabled = $state(false);
   let autoUngroupEnabled = $state(false);
@@ -268,7 +261,7 @@
     if (prefix) {
       handlePrefixSearch(prefix, searchQuery);
     } else {
-      const indices = search(searchHaystack, query, searchMode, 50, searchRecency);
+      const indices = rankedSearch(searchHaystack, query, 50, searchRecency);
       const tabResults = indices.map((i) => allTabs[i]);
       results = tabResults;
 
@@ -281,7 +274,7 @@
             searchHistory(capturedQuery, 5),
           ]);
           if (query !== capturedQuery) return;
-          const freshIndices = search(searchHaystack, capturedQuery, searchMode, 50, searchRecency);
+          const freshIndices = rankedSearch(searchHaystack, capturedQuery, 50, searchRecency);
           const freshTabResults = freshIndices.map((i) => allTabs[i]);
           results = [
             ...freshTabResults,
@@ -311,14 +304,14 @@
           const windowTabs = await getCurrentWindowTabs();
           const items = tabsToSearchItems(windowTabs);
           const hay = buildSearchHaystack(items);
-          const indices = search(hay, searchQuery, searchMode);
+          const indices = rankedSearch(hay, searchQuery);
           results = indices.map((i) => items[i]);
           break;
         }
         case "p": {
           const pinned = allTabs.filter((t) => t.pinned);
           const hay = buildSearchHaystack(pinned);
-          const indices = search(hay, searchQuery, searchMode);
+          const indices = rankedSearch(hay, searchQuery);
           results = indices.map((i) => pinned[i]);
           break;
         }
@@ -329,7 +322,7 @@
             ? allTabs.filter((t) => t.groupId === activeGroupId)
             : allTabs.filter((t) => !t.groupId || t.groupId === -1);
           const hay = buildSearchHaystack(groupTabs);
-          const indices = search(hay, searchQuery, searchMode);
+          const indices = rankedSearch(hay, searchQuery);
           results = indices.map((i) => groupTabs[i]);
           break;
         }
@@ -352,7 +345,7 @@
             for (const cat of categories) {
               if (cat.tabs.length === 0) continue;
               const hay = buildSearchHaystack(cat.tabs);
-              const indices = search(hay, searchQuery, searchMode);
+              const indices = rankedSearch(hay, searchQuery);
               const matched = indices.map((i) => cat.tabs[i]);
               if (matched.length > 0) {
                 triageResults.push({ type: "divider", id: cat.id, title: `${cat.title} (${matched.length})`, url: "" });
@@ -374,47 +367,52 @@
         }
         case "@a": {
           const audio = allTabs.filter((t) => t.audible);
-          if (searchQuery) { const hay = buildSearchHaystack(audio); const indices = search(hay, searchQuery, searchMode); results = indices.map((i) => audio[i]); }
+          if (searchQuery) { const hay = buildSearchHaystack(audio); const indices = rankedSearch(hay, searchQuery); results = indices.map((i) => audio[i]); }
           else results = audio;
           break;
         }
         case "@m": {
           const muted = allTabs.filter((t) => t.muted);
-          if (searchQuery) { const hay = buildSearchHaystack(muted); const indices = search(hay, searchQuery, searchMode); results = indices.map((i) => muted[i]); }
+          if (searchQuery) { const hay = buildSearchHaystack(muted); const indices = rankedSearch(hay, searchQuery); results = indices.map((i) => muted[i]); }
           else results = muted;
           break;
         }
         case "@d": {
           const dupes = findDuplicateTabs(allTabs);
-          if (searchQuery) { const hay = buildSearchHaystack(dupes); const indices = search(hay, searchQuery, searchMode); results = indices.map((i) => dupes[i]); }
+          if (searchQuery) { const hay = buildSearchHaystack(dupes); const indices = rankedSearch(hay, searchQuery); results = indices.map((i) => dupes[i]); }
           else results = dupes;
           break;
         }
         case "@r": {
           const recent = [...allTabs].filter((t) => t.type === "tab").sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0)).slice(0, 20);
-          if (searchQuery) { const hay = buildSearchHaystack(recent); const indices = search(hay, searchQuery, searchMode); results = indices.map((i) => recent[i]); }
+          if (searchQuery) { const hay = buildSearchHaystack(recent); const indices = rankedSearch(hay, searchQuery); results = indices.map((i) => recent[i]); }
           else results = recent;
           break;
         }
         case "@s": {
           const suspended = allTabs.filter((t) => t.discarded);
-          if (searchQuery) { const hay = buildSearchHaystack(suspended); const indices = search(hay, searchQuery, searchMode); results = indices.map((i) => suspended[i]); }
+          if (searchQuery) { const hay = buildSearchHaystack(suspended); const indices = rankedSearch(hay, searchQuery); results = indices.map((i) => suspended[i]); }
           else results = suspended;
           break;
         }
         case "@u": {
           const ungrouped = allTabs.filter((t) => !t.groupId || t.groupId === -1);
-          if (searchQuery) { const hay = buildSearchHaystack(ungrouped); const indices = search(hay, searchQuery, searchMode); results = indices.map((i) => ungrouped[i]); }
+          if (searchQuery) { const hay = buildSearchHaystack(ungrouped); const indices = rankedSearch(hay, searchQuery); results = indices.map((i) => ungrouped[i]); }
           else results = ungrouped;
           if (ungrouped.length === 0) statusMessage = "All tabs are grouped";
           break;
         }
+        case "re": {
+          const indices = search(searchHaystack, searchQuery, "regex", 50, searchRecency);
+          results = indices.map((i) => allTabs[i]);
+          break;
+        }
         default:
           if (ACTION_PREFIXES.has(prefix)) {
-            const indices = searchQuery ? search(searchHaystack, searchQuery, searchMode) : [];
+            const indices = searchQuery ? rankedSearch(searchHaystack, searchQuery, 50, searchRecency) : [];
             results = indices.map((i) => allTabs[i]);
           } else {
-            const indices = search(searchHaystack, `/${prefix} ${searchQuery}`, searchMode);
+            const indices = rankedSearch(searchHaystack, `/${prefix} ${searchQuery}`, 50, searchRecency);
             results = indices.map((i) => allTabs[i]);
           }
       }
@@ -485,7 +483,7 @@
 
     try {
     await withBulkLock(async () => {
-    const matchingIndices = searchQuery ? search(searchHaystack, searchQuery, searchMode) : [];
+    const matchingIndices = searchQuery ? rankedSearch(searchHaystack, searchQuery, 50, searchRecency) : [];
     const matchingTabs = matchingIndices.map((i) => allTabs[i]).filter((t) => t.tabId);
     const tabIds = matchingTabs.map((t) => t.tabId!);
     let acted = false;
@@ -632,7 +630,7 @@
           const level = Math.max(0, Math.min(100, parseInt(volMatch[1])));
           const filter = volMatch[2].trim();
           if (filter) {
-            const indices = search(searchHaystack, filter, searchMode);
+            const indices = rankedSearch(searchHaystack, filter, 50, searchRecency);
             const targets = indices.map((i) => allTabs[i]).filter((t) => t.tabId);
             for (const t of targets) await setTabVolume(t.tabId!, level / 100);
             statusMessage = `Volume ${level}% on ${targets.length} tab(s)`;
@@ -853,10 +851,7 @@
       autofocus={searchAutofocus}
       onfocuschange={(f) => { inputFocused = f; }}
       onkeydown={(e) => {
-        if (e.key === "Tab" && e.shiftKey) {
-          e.preventDefault();
-          cycleSearchMode();
-        } else if (e.key === "Tab" && !e.shiftKey) {
+        if (e.key === "Tab" && !e.shiftKey) {
           e.preventDefault();
           const hints = matchCommands(query);
           if ((query.startsWith("/") || query.startsWith("@")) && hints.length > 0) {
@@ -899,16 +894,6 @@
       onclick={() => { showHelp = !showHelp; activeSection = "dashboard"; }}
       title="Command guide"
     >?</button>
-  </div>
-  <div class="flex items-center gap-1 px-3 pb-1 {inputFocused ? '' : 'invisible'}">
-    {#each SEARCH_MODES as m, i}
-      <button
-        class="px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors
-          {i === searchModeIndex ? 'bg-primary text-white' : 'bg-surface-hover text-text-muted hover:text-text'}"
-        onmousedown={(e) => { e.preventDefault(); searchModeIndex = i; if (query) updateResults(); }}
-      >{m.label}</button>
-    {/each}
-    <span class="text-[10px] text-text-muted ml-auto">⇧Tab cycle</span>
   </div>
 
   <div class="flex flex-1 min-h-0 overflow-hidden">
@@ -997,7 +982,6 @@
         <kbd class="px-1 py-0.5 rounded bg-surface text-[9px] text-center">⌘E</kbd><span class="text-[10px] text-text-muted">Open TabOrdo</span><span></span>
         <kbd class="px-1 py-0.5 rounded bg-surface text-[9px] text-center">↑↓</kbd><span class="text-[10px] text-text-muted">Navigate</span><span></span>
         <kbd class="px-1 py-0.5 rounded bg-surface text-[9px] text-center">↵</kbd><span class="text-[10px] text-text-muted">Open / run</span><span></span>
-        <kbd class="px-1 py-0.5 rounded bg-surface text-[9px] text-center">⇧Tab</kbd><span class="text-[10px] text-text-muted">Search mode</span><span></span>
         <kbd class="px-1 py-0.5 rounded bg-surface text-[9px] text-center">^Del</kbd><span class="text-[10px] text-text-muted">Close tab</span><span></span>
         <kbd class="px-1 py-0.5 rounded bg-surface text-[9px] text-center">⌘Z</kbd><span class="text-[10px] text-text-muted">Undo</span><span></span>
       </div>

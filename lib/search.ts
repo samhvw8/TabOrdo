@@ -22,13 +22,6 @@ export interface SearchResult {
 
 export type SearchMode = "fuzzy" | "exact" | "regex" | "prefix";
 
-export const SEARCH_MODES: { mode: SearchMode; label: string; key: string }[] = [
-  { mode: "fuzzy", label: "Fuzzy", key: "fzf" },
-  { mode: "exact", label: "Exact", key: "exact" },
-  { mode: "prefix", label: "Prefix", key: "pre" },
-  { mode: "regex", label: "Regex", key: "re" },
-];
-
 const fuzzy = new uFuzzy({
   intraMode: 1,
   intraIns: 1,
@@ -77,6 +70,36 @@ export function search(
 function sortByRecency(indices: number[], recency?: number[]): number[] {
   if (!recency) return indices;
   return [...indices].sort((a, b) => (recency[b] ?? 0) - (recency[a] ?? 0));
+}
+
+// One ranked search replacing user-selected modes: word-prefix matches first, then substring,
+// then fuzzy — each tier recency-ordered where it has no relevance score of its own.
+export function rankedSearch(
+  haystack: string[],
+  needle: string,
+  limit = 50,
+  recency?: number[]
+): number[] {
+  if (!needle.trim()) {
+    return sortByRecency(haystack.map((_, i) => i), recency).slice(0, limit);
+  }
+  if (hasChinese(needle)) {
+    return sortByRecency(exactSearch(haystack, needle, haystack.length), recency).slice(0, limit);
+  }
+  const seen = new Set<number>();
+  const out: number[] = [];
+  const take = (indices: number[]) => {
+    for (const i of indices) {
+      if (!seen.has(i)) {
+        seen.add(i);
+        out.push(i);
+      }
+    }
+  };
+  take(sortByRecency(prefixSearch(haystack, needle, haystack.length), recency));
+  take(sortByRecency(exactSearch(haystack, needle, haystack.length), recency));
+  take(fuzzySearch(haystack, needle, limit));
+  return out.slice(0, limit);
 }
 
 function fuzzySearch(haystack: string[], needle: string, limit: number): number[] {
