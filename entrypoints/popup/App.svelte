@@ -103,7 +103,7 @@
     } else {
       dashboardActionIds = [...dashboardActionIds, id];
     }
-    await chrome.storage.local.set({ dashboardActionIds });
+    await chrome.storage.local.set({ dashboardActionIds: [...dashboardActionIds] });
   }
 
   function confirmAction(id: string, action: () => void) {
@@ -775,7 +775,7 @@
     hasWorkspace = await hasSavedWorkspace();
     archiveCount = await getArchiveCount();
     if (config.collapsedGroups) collapsedGroups = new Set(config.collapsedGroups);
-    if (config.dashboardActionIds) dashboardActionIds = config.dashboardActionIds;
+    if (Array.isArray(config.dashboardActionIds)) dashboardActionIds = config.dashboardActionIds;
     const ob = await chrome.storage.local.get("onboardingDismissed");
     onboardingDismissed = !!ob.onboardingDismissed;
     try {
