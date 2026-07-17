@@ -15,7 +15,7 @@ export default defineConfig({
     },
   }),
   manifest: {
-    name: "TabOrdo",
+    name: "TabOrdo - Tab Manager & Organizer",
     description: "Sort, group, deduplicate and manage your tabs with a command palette",
     icons: {
       16: "assets/icon-16.png",
