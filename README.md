@@ -33,14 +33,46 @@ A keyboard-first tab manager for Chrome. Press `Cmd+E` to open a command palette
 | `/focus` | Save tabs and start fresh |
 | `/unfocus` | Restore saved workspace |
 | `/mute` `/unmute` | Control tab audio |
+| `/vol` | Set tab volume (e.g. `/vol 50`) |
 | `/split` `/splitv` `/splith` | Split tabs to new windows |
+| `/splitdomain` | One window per domain |
+| `/stack` | Stack windows to left |
+| `/unite` | Pull same-domain tabs here |
+| `/isolate` | Move domain to new window |
+| `/shuffle` | Randomly reorder tabs |
+| `/discard` | Suspend matching tabs |
+| `/reload` | Reload matching tabs |
 | `/save` `/load` | Export/import tabs as text |
+| `/feedback` | Open feedback page |
+
+## Keyboard Shortcuts
+
+| Shortcut | Action |
+|----------|--------|
+| `Cmd+E` | Open TabOrdo |
+| `Cmd+Shift+E` | Open TabOrdo (dashboard, no search focus) |
+| `↑↓` | Navigate results |
+| `Enter` | Open / run command |
+| `Shift+Tab` | Cycle search mode (fuzzy/exact/prefix/regex) |
+| `Ctrl+Del` | Close selected tab |
+| `Cmd+Z` | Undo last action |
 
 ## Dashboard
 
 The dashboard shows a live 🔊 banner when any tabs are playing audio — click it to jump to `@a` triage. `/pin` and `/pingroup` positions persist across Group+ and Sort operations. The **Archive** button opens a full-page archive view with search, date grouping, bulk restore/delete, and group name filtering.
 
-**Customizable actions** — the action buttons on the dashboard are configurable. Open the **More Actions** sidebar panel and click ★ next to any action to add or remove it from the dashboard grid. Your selection persists across sessions.
+**Customizable actions** — the action buttons on the dashboard are configurable. Open the **More** sidebar panel and click ★ next to any action to add or remove it from the dashboard grid. Your selection persists across sessions.
+
+## Sidebar
+
+| Section | Description |
+|---------|-------------|
+| Home | Dashboard with action buttons, toggles, and tab overview |
+| Pins | Manage position-pinned tabs |
+| Rules | Custom grouping rules editor |
+| More | All available actions with ★ toggle for dashboard |
+| Settings | Ignore lists for auto-group/ungroup |
+| Archive | Opens full-page archive in a new tab |
 
 ## Triage Views
 

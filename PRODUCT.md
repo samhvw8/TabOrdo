@@ -1,8 +1,6 @@
 # Product
 
-## Register
-
-product
+TabOrdo - Tab Manager & Organizer
 
 ## Users
 

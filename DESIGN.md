@@ -1,5 +1,5 @@
 ---
-name: TabOrdo
+name: TabOrdo - Tab Manager & Organizer
 description: Keyboard-first tab manager for Chrome
 colors:
   primary: "#6366f1"
@@ -20,18 +20,18 @@ colors:
   accent-pink: "#f472b6"
 typography:
   body:
-    fontFamily: "Inter, system-ui, -apple-system, sans-serif"
+    fontFamily: "-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif"
     fontSize: "13px"
     fontWeight: 400
     lineHeight: 1.4
   label:
-    fontFamily: "Inter, system-ui, -apple-system, sans-serif"
+    fontFamily: "-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif"
     fontSize: "10px"
     fontWeight: 600
     lineHeight: 1.2
     letterSpacing: "0.05em"
   title:
-    fontFamily: "Inter, system-ui, -apple-system, sans-serif"
+    fontFamily: "-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif"
     fontSize: "12px"
     fontWeight: 600
     lineHeight: 1.4
@@ -100,14 +100,14 @@ components:
 
 **Creative North Star: "The Command Station"**
 
-TabOrdo's interface is a cockpit: every control in reach, nothing wasted, focused calm under complexity. The 400×600px popup is a dense control surface where information glows against dark panels. Density is a feature, not a compromise — the user has 150 tabs and needs to act on them in seconds, not browse a spacious layout.
+TabOrdo's interface is a cockpit: every control in reach, nothing wasted, focused calm under complexity. The 450×600px popup is a dense control surface where information glows against dark panels. Density is a feature, not a compromise — the user has 150 tabs and needs to act on them in seconds, not browse a spacious layout.
 
 The system is built on restrained color strategy: a deep indigo-tinted dark surface with a single indigo primary accent used sparingly for active states and primary actions. Eight semantic accent colors exist for tab group identification (mapped to Chrome's native group color API), but they never compete with the primary — they appear at low opacity as background tints and small dots.
 
 This system explicitly rejects: corporate SaaS heaviness (Salesforce, Jira), dated browser extension aesthetics (OneTab, Tab Wrangler), and flashy decoration (neon, glassmorphism). If a control doesn't help the user act on tabs faster, it doesn't exist.
 
 **Key Characteristics:**
-- Dense, information-rich panels within a fixed 400×600px viewport
+- Dense, information-rich panels within a fixed 450×600px viewport
 - Single font family (Inter) at compact sizes (10–14px range)
 - Dark-only theme with indigo-tinted neutrals
 - Accent colors reserved for semantic meaning (group identity, state, severity)
@@ -147,9 +147,9 @@ Eight accent colors mapped 1:1 to Chrome's tab group color API. Used exclusively
 
 ## 3. Typography
 
-**Body Font:** Inter (with system-ui, -apple-system, sans-serif fallback)
+**Body Font:** System font stack (-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif)
 
-**Character:** One family, multiple weights. Inter at 13px is the workhorse — compact enough for density, legible enough for scanning. The type system is deliberately narrow: 10px for metadata up to 14px for section headers. No display sizes exist; this is a tool, not a landing page.
+**Character:** One family, multiple weights. System font at 13px is the workhorse — compact enough for density, legible enough for scanning. The type system is deliberately narrow: 10px for metadata up to 14px for section headers. No display sizes exist; this is a tool, not a landing page.
 
 ### Hierarchy
 - **Title** (600, 12-13px, 1.4): Section headers ("Settings", "Command Guide"), group titles in the dashboard.
@@ -160,7 +160,7 @@ Eight accent colors mapped 1:1 to Chrome's tab group color API. Used exclusively
 - **Nano** (400, 9px, 1.2): Window badges, fine-print hints. Used sparingly.
 
 ### Named Rules
-**The No-Display Rule.** There are no headings above 14px. Every screen fits in a 400×600px popup. Display typography is structurally impossible and would waste the user's scarce viewport.
+**The No-Display Rule.** There are no headings above 14px. Every screen fits in a 450×600px popup. Display typography is structurally impossible and would waste the user's scarce viewport.
 
 ## 4. Elevation
 
@@ -217,10 +217,11 @@ TabOrdo has three button registers, each for a specific density context:
 
 ### Navigation
 **Sidebar**
-- **Style:** 48px wide vertical strip, `surface` background, `border` right border.
-- **Items:** 36×36px icon buttons, `surface-hover` background by default.
-- **Active:** `primary` background, white icon.
-- **Icons:** 16px Lucide stroke icons (dashboard grid, pin, sliders, gear).
+- **Style:** 56px wide (w-14) vertical strip, `surface` background, `border` right border.
+- **Items:** 48px wide (w-12) icon buttons with icon + 8px label, `text-muted` by default.
+- **Active:** `primary` background, white icon and text.
+- **Icons:** 14px Lucide stroke icons (dashboard grid, pin, sliders, dots, gear, archive).
+- **Sections:** Home, Pins, Rules, More, Settings, Archive.
 
 ### Signature Component: Command Palette
 The search input doubles as a command palette. Typing `/` surfaces command hints with category-colored labels. Typing `@` enters triage mode. The palette auto-shows when query is non-empty and auto-hides when cleared. Tab completion fills the selected command. This is the primary interaction surface and the reason the extension exists.
@@ -231,14 +232,14 @@ The search input doubles as a command palette. Typing `/` surfaces command hints
 - **Do** use the three-step tonal ramp (Deep → Raised → Active) for all surface hierarchy. Never reach for shadows except on tooltips.
 - **Do** keep accent colors at low opacity on surfaces (5% bg, 30-40% borders). Full saturation only on dots, status text, and icons.
 - **Do** use Inter at 13px as the default text size. The 10-14px range covers every need.
-- **Do** use emoji for action button icons — they're compact, recognizable, and render without a sprite sheet or icon library. Inline SVG for structural icons (sidebar, close, chevrons).
+- **Do** use Lucide SVG icons for action buttons and sidebar — they're compact, consistent, and render at any size. Inline SVG for all icons (sidebar, actions, close, chevrons).
 - **Do** show close buttons only on hover (`opacity-0 group-hover:opacity-100`). Density means hiding destructive actions until the user signals intent.
 - **Do** use Chrome's native 9-color group palette for tab groups. Never invent custom group colors.
 - **Do** use `transition-colors` on interactive elements. Keep transitions under 200ms.
 
 ### Don't:
 - **Don't** add shadows to cards, panels, or buttons. TabOrdo is tonally layered, not elevated. The Flat-By-Default Rule applies everywhere except tooltips.
-- **Don't** introduce display-sized text (above 14px). The popup viewport is 400×600px; large headings waste the user's space.
+- **Don't** introduce display-sized text (above 14px). The popup viewport is 450×600px; large headings waste the user's space.
 - **Don't** make the interface look like corporate SaaS (Salesforce, Jira) — no heavy chrome, no deep nesting, no three-click workflows.
 - **Don't** apply dated browser extension aesthetics (OneTab, Tab Wrangler) — no icon-heavy rows, no blocky layouts, no Chrome Web Store 2018 energy.
 - **Don't** use flashy decoration — no neon, no glassmorphism, no gradients, no animated backgrounds.
