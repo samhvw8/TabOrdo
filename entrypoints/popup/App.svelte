@@ -119,11 +119,11 @@
   }
 
   async function withBulkLock<T>(fn: () => Promise<T>): Promise<T> {
-    await chrome.storage.session.set({ bulkOpInProgress: true }).catch(() => {});
+    try { await chrome.storage.session.set({ bulkOpInProgress: true }); } catch {}
     try {
       return await fn();
     } finally {
-      await chrome.storage.session.set({ bulkOpInProgress: false }).catch(() => {});
+      try { await chrome.storage.session.set({ bulkOpInProgress: false }); } catch {}
     }
   }
 
@@ -758,7 +758,7 @@
   }
 
   onMount(async () => {
-    await chrome.storage.session.set({ bulkOpInProgress: false }).catch(() => {});
+    try { await chrome.storage.session.set({ bulkOpInProgress: false }); } catch {}
     await loadTabs();
     await loadUndoStack();
     canUndo = !!peekUndo();
@@ -778,20 +778,19 @@
     if (config.dashboardActionIds) dashboardActionIds = config.dashboardActionIds;
     const ob = await chrome.storage.local.get("onboardingDismissed");
     onboardingDismissed = !!ob.onboardingDismissed;
-    const mode = await chrome.storage.session.get("openMode");
-    if (mode.openMode === "dashboard") {
-      searchAutofocus = false;
-      inputFocused = false;
-      await chrome.storage.session.remove("openMode");
-    }
+    try {
+      const mode = await chrome.storage.session.get("openMode");
+      if (mode.openMode === "dashboard") {
+        searchAutofocus = false;
+        inputFocused = false;
+        await chrome.storage.session.remove("openMode");
+      }
+    } catch {}
   });
 
-  $effect(() => {
-    if (activeSection === "archive") {
-      chrome.tabs.create({ url: chrome.runtime.getURL("/archive.html") });
-      activeSection = "dashboard";
-    }
-  });
+  function openArchive() {
+    chrome.tabs.create({ url: chrome.runtime.getURL("/archive.html") });
+  }
 
   function onQueryChange() {
     updateResults();
@@ -856,21 +855,19 @@
       title="Command guide"
     >?</button>
   </div>
-  {#if inputFocused}
-    <div class="flex items-center gap-1 px-3 pb-1">
-      {#each SEARCH_MODES as m, i}
-        <button
-          class="px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors
-            {i === searchModeIndex ? 'bg-primary text-white' : 'bg-surface-hover text-text-muted hover:text-text'}"
-          onmousedown={(e) => { e.preventDefault(); searchModeIndex = i; if (query) updateResults(); }}
-        >{m.label}</button>
-      {/each}
-      <span class="text-[10px] text-text-muted ml-auto">⇧Tab cycle</span>
-    </div>
-  {/if}
+  <div class="flex items-center gap-1 px-3 pb-1 {inputFocused ? '' : 'invisible'}">
+    {#each SEARCH_MODES as m, i}
+      <button
+        class="px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors
+          {i === searchModeIndex ? 'bg-primary text-white' : 'bg-surface-hover text-text-muted hover:text-text'}"
+        onmousedown={(e) => { e.preventDefault(); searchModeIndex = i; if (query) updateResults(); }}
+      >{m.label}</button>
+    {/each}
+    <span class="text-[10px] text-text-muted ml-auto">⇧Tab cycle</span>
+  </div>
 
   <div class="flex flex-1 min-h-0 overflow-hidden">
-    <Sidebar bind:active={activeSection} {archiveCount} />
+    <Sidebar bind:active={activeSection} {archiveCount} onarchive={openArchive} />
   {#if activeSection === "rules"}
     <RulesEditor onclose={() => { activeSection = "dashboard"; }} />
   {:else if activeSection === "pins"}

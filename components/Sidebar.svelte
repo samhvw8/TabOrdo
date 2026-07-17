@@ -3,7 +3,7 @@
 </script>
 
 <script lang="ts">
-  let { active = $bindable<SidebarSection>("dashboard"), archiveCount = 0 }: { active: SidebarSection; archiveCount?: number } = $props();
+  let { active = $bindable<SidebarSection>("dashboard"), archiveCount = 0, onarchive }: { active: SidebarSection; archiveCount?: number; onarchive?: () => void } = $props();
 
   const items: { id: SidebarSection; label: string }[] = [
     { id: "dashboard", label: "Home" },
@@ -20,7 +20,8 @@
     <button
       class="w-12 flex flex-col items-center gap-0.5 py-1 rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface
         {active === item.id ? 'bg-primary text-white' : 'text-text-muted hover:text-text hover:bg-surface-hover'}"
-      onclick={() => { active = item.id; }}
+      onmousedown={(e) => { e.preventDefault(); }}
+      onclick={() => { if (item.id === "archive") { onarchive?.(); } else { active = item.id; } }}
       title={item.label}
       aria-label={item.label}
       aria-pressed={active === item.id}
