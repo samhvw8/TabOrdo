@@ -173,6 +173,7 @@
 
   let allTabs = $state<SearchResult[]>([]);
   let searchHaystack = $state<string[]>([]);
+  let searchRecency = $state<number[]>([]);
 
   interface WindowData {
     windowId: number;
@@ -213,6 +214,8 @@
 
     allTabs = tabsToSearchItems(tabs);
     searchHaystack = buildSearchHaystack(allTabs);
+    // Active tab sinks to the bottom so empty-query MRU leads with the *previous* tab (Cmd+E → Enter = alt-tab).
+    searchRecency = tabs.map((t) => (t.active && t.windowId === currentWindowId ? 0 : (t.lastAccessed ?? 0)));
     dashboardTabs = tabs;
 
     const windowMap = new Map<number, WindowData>();
@@ -264,7 +267,7 @@
     if (prefix) {
       handlePrefixSearch(prefix, searchQuery);
     } else {
-      const indices = search(searchHaystack, query, searchMode);
+      const indices = search(searchHaystack, query, searchMode, 50, searchRecency);
       const tabResults = indices.map((i) => allTabs[i]);
       results = tabResults;
 
@@ -277,7 +280,7 @@
             searchHistory(capturedQuery, 5),
           ]);
           if (query !== capturedQuery) return;
-          const freshIndices = search(searchHaystack, capturedQuery, searchMode);
+          const freshIndices = search(searchHaystack, capturedQuery, searchMode, 50, searchRecency);
           const freshTabResults = freshIndices.map((i) => allTabs[i]);
           results = [
             ...freshTabResults,

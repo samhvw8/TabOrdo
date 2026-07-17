@@ -46,20 +46,32 @@ export function search(
   haystack: string[],
   needle: string,
   mode: SearchMode = "fuzzy",
-  limit = 50
+  limit = 50,
+  recency?: number[]
 ): number[] {
-  if (!needle.trim()) return haystack.map((_, i) => i).slice(0, limit);
+  if (!needle.trim()) {
+    return sortByRecency(haystack.map((_, i) => i), recency).slice(0, limit);
+  }
+
+  // With recency, scan the full haystack so a recent match past the limit window isn't cut off.
+  const scanLimit = recency ? haystack.length : limit;
 
   switch (mode) {
     case "fuzzy":
       return fuzzySearch(haystack, needle, limit);
     case "exact":
-      return exactSearch(haystack, needle, limit);
+      return sortByRecency(exactSearch(haystack, needle, scanLimit), recency).slice(0, limit);
     case "prefix":
-      return prefixSearch(haystack, needle, limit);
+      return sortByRecency(prefixSearch(haystack, needle, scanLimit), recency).slice(0, limit);
     case "regex":
-      return regexSearch(haystack, needle, limit);
+      return sortByRecency(regexSearch(haystack, needle, scanLimit), recency).slice(0, limit);
   }
+}
+
+// exact/prefix/regex matches carry no relevance score, so most-recently-used is the ranking.
+function sortByRecency(indices: number[], recency?: number[]): number[] {
+  if (!recency) return indices;
+  return [...indices].sort((a, b) => (recency[b] ?? 0) - (recency[a] ?? 0));
 }
 
 function fuzzySearch(haystack: string[], needle: string, limit: number): number[] {
