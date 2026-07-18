@@ -127,3 +127,30 @@ describe("rankedSearch with a title haystack", () => {
     expect(res[0]).toBe(1);
   });
 });
+
+describe("rankedSearch with priority (pinned / current-window boost)", () => {
+  const hay = ["Docs Page A https://a.com", "Docs Page B https://b.com", "Docs Page C https://c.com"];
+  const rec = [500, 100, 900]; // by recency alone: 2, 0, 1
+  const priority = [0, 1, 0]; // item 1 is pinned / in the current window
+
+  it("ranks the prioritized item first even though it's the least recent", () => {
+    expect(rankedSearch(hay, "docs", 50, rec, undefined, priority)).toEqual([1, 2, 0]);
+  });
+
+  it("falls back to recency ordering within the same priority tier", () => {
+    // items 0 and 2 share priority 0; 2 (900) stays above 0 (500)
+    const res = rankedSearch(hay, "docs", 50, rec, undefined, priority);
+    expect(res.indexOf(2)).toBeLessThan(res.indexOf(0));
+  });
+
+  it("has no effect when omitted (backward compatible)", () => {
+    expect(rankedSearch(hay, "docs", 50, rec)).toEqual([2, 0, 1]);
+  });
+
+  it("applies to the CJK substring path too", () => {
+    const cjk = ["知乎 首页", "知乎 专栏", "知乎 视频"];
+    const cjkPriority = [0, 1, 0];
+    const res = rankedSearch(cjk, "知乎", 50, [500, 100, 900], undefined, cjkPriority);
+    expect(res[0]).toBe(1);
+  });
+});

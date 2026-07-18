@@ -118,9 +118,16 @@ export function search(
 }
 
 // exact/prefix/regex matches carry no relevance score, so most-recently-used is the ranking.
-function sortByRecency(indices: number[], recency?: number[]): number[] {
-  if (!recency) return indices;
-  return [...indices].sort((a, b) => (recency[b] ?? 0) - (recency[a] ?? 0));
+// An optional priority (e.g. pinned / current-window) sorts first, recency only breaks ties within it.
+function sortByRecency(indices: number[], recency?: number[], priority?: number[]): number[] {
+  if (!recency && !priority) return indices;
+  return [...indices].sort((a, b) => {
+    if (priority) {
+      const p = (priority[b] ?? 0) - (priority[a] ?? 0);
+      if (p !== 0) return p;
+    }
+    return (recency?.[b] ?? 0) - (recency?.[a] ?? 0);
+  });
 }
 
 // One ranked search replacing user-selected modes: word-prefix matches first, then substring,
@@ -130,13 +137,14 @@ export function rankedSearch(
   needle: string,
   limit = 50,
   recency?: number[],
-  titleHaystack?: string[]
+  titleHaystack?: string[],
+  priority?: number[]
 ): number[] {
   if (!needle.trim()) {
     return sortByRecency(haystack.map((_, i) => i), recency).slice(0, limit);
   }
   if (hasChinese(needle)) {
-    return sortByRecency(exactSearch(haystack, needle, haystack.length), recency).slice(0, limit);
+    return sortByRecency(exactSearch(haystack, needle, haystack.length), recency, priority).slice(0, limit);
   }
   const seen = new Set<number>();
   const out: number[] = [];
@@ -151,10 +159,10 @@ export function rankedSearch(
   // A title/group-name hit is a stronger signal than a URL-only hit (e.g. "com" inside every
   // domain), so it's ranked first when a title-only view of the haystack is supplied.
   const titleHay = titleHaystack ?? haystack;
-  take(sortByRecency(prefixSearch(titleHay, needle, titleHay.length), recency));
-  take(sortByRecency(prefixSearch(haystack, needle, haystack.length), recency));
-  take(sortByRecency(exactSearch(titleHay, needle, titleHay.length), recency));
-  take(sortByRecency(exactSearch(haystack, needle, haystack.length), recency));
+  take(sortByRecency(prefixSearch(titleHay, needle, titleHay.length), recency, priority));
+  take(sortByRecency(prefixSearch(haystack, needle, haystack.length), recency, priority));
+  take(sortByRecency(exactSearch(titleHay, needle, titleHay.length), recency, priority));
+  take(sortByRecency(exactSearch(haystack, needle, haystack.length), recency, priority));
   take(fuzzySearch(haystack, needle, limit));
   return out.slice(0, limit);
 }

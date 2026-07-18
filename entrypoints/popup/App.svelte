@@ -169,6 +169,7 @@
   let searchHaystack = $state<string[]>([]);
   let searchTitleHaystack = $state<string[]>([]);
   let searchRecency = $state<number[]>([]);
+  let searchPriority = $state<number[]>([]);
   let highlightQuery = $state("");
 
   interface WindowData {
@@ -213,6 +214,8 @@
     searchTitleHaystack = buildTitleHaystack(allTabs);
     // Active tab sinks to the bottom so empty-query MRU leads with the *previous* tab (Cmd+E → Enter = alt-tab).
     searchRecency = tabs.map((t) => (t.active && t.windowId === currentWindowId ? 0 : (t.lastAccessed ?? 0)));
+    // Among equally-good search matches, favor tabs you're most likely looking for: pinned, or already in front of you.
+    searchPriority = tabs.map((t) => (t.pinned || t.windowId === currentWindowId ? 1 : 0));
     dashboardTabs = tabs;
 
     const windowMap = new Map<number, WindowData>();
@@ -265,7 +268,7 @@
     if (prefix) {
       handlePrefixSearch(prefix, searchQuery);
     } else {
-      const indices = rankedSearch(searchHaystack, query, 50, searchRecency, searchTitleHaystack);
+      const indices = rankedSearch(searchHaystack, query, 50, searchRecency, searchTitleHaystack, searchPriority);
       const tabResults = indices.map((i) => allTabs[i]);
       results = tabResults;
 
@@ -278,7 +281,7 @@
             searchHistory(capturedQuery, 5),
           ]);
           if (query !== capturedQuery) return;
-          const freshIndices = rankedSearch(searchHaystack, capturedQuery, 50, searchRecency, searchTitleHaystack);
+          const freshIndices = rankedSearch(searchHaystack, capturedQuery, 50, searchRecency, searchTitleHaystack, searchPriority);
           const freshTabResults = freshIndices.map((i) => allTabs[i]);
           results = [
             ...freshTabResults,
@@ -413,10 +416,10 @@
         }
         default:
           if (ACTION_PREFIXES.has(prefix)) {
-            const indices = searchQuery ? rankedSearch(searchHaystack, searchQuery, 50, searchRecency, searchTitleHaystack) : [];
+            const indices = searchQuery ? rankedSearch(searchHaystack, searchQuery, 50, searchRecency, searchTitleHaystack, searchPriority) : [];
             results = indices.map((i) => allTabs[i]);
           } else {
-            const indices = rankedSearch(searchHaystack, `/${prefix} ${searchQuery}`, 50, searchRecency, searchTitleHaystack);
+            const indices = rankedSearch(searchHaystack, `/${prefix} ${searchQuery}`, 50, searchRecency, searchTitleHaystack, searchPriority);
             results = indices.map((i) => allTabs[i]);
           }
       }
@@ -487,7 +490,7 @@
 
     try {
     await withBulkLock(async () => {
-    const matchingIndices = searchQuery ? rankedSearch(searchHaystack, searchQuery, 50, searchRecency, searchTitleHaystack) : [];
+    const matchingIndices = searchQuery ? rankedSearch(searchHaystack, searchQuery, 50, searchRecency, searchTitleHaystack, searchPriority) : [];
     const matchingTabs = matchingIndices.map((i) => allTabs[i]).filter((t) => t.tabId);
     const tabIds = matchingTabs.map((t) => t.tabId!);
     let acted = false;
@@ -634,7 +637,7 @@
           const level = Math.max(0, Math.min(100, parseInt(volMatch[1])));
           const filter = volMatch[2].trim();
           if (filter) {
-            const indices = rankedSearch(searchHaystack, filter, 50, searchRecency, searchTitleHaystack);
+            const indices = rankedSearch(searchHaystack, filter, 50, searchRecency, searchTitleHaystack, searchPriority);
             const targets = indices.map((i) => allTabs[i]).filter((t) => t.tabId);
             for (const t of targets) await setTabVolume(t.tabId!, level / 100);
             statusMessage = `Volume ${level}% on ${targets.length} tab(s)`;
