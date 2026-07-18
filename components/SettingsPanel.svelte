@@ -1,16 +1,41 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { getIgnorePatterns, setIgnorePatterns, getIgnoreGroupNames, setIgnoreGroupNames, ruleMatches, ruleToRegex, generalizePatterns, type IgnoreRule } from "../lib/rules.ts";
+  import { getActionLog, clearActionLog, ACTION_LOG_KEY, type ActionLogEntry } from "../lib/actionLog.ts";
 
   let ignorePatterns = $state<IgnoreRule[]>([]);
   let ignoreGroupNames = $state<IgnoreRule[]>([]);
   let newIgnorePattern = $state("");
   let newIgnoreGroupName = $state("");
+  let actionLog = $state<ActionLogEntry[]>([]);
 
   onMount(async () => {
     ignorePatterns = await getIgnorePatterns();
     ignoreGroupNames = await getIgnoreGroupNames();
+    actionLog = await getActionLog();
   });
+
+  $effect(() => {
+    const listener = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
+      if (area === "local" && changes[ACTION_LOG_KEY]) {
+        actionLog = Array.isArray(changes[ACTION_LOG_KEY].newValue) ? changes[ACTION_LOG_KEY].newValue : [];
+      }
+    };
+    chrome.storage.onChanged.addListener(listener);
+    return () => chrome.storage.onChanged.removeListener(listener);
+  });
+
+  function formatLogTime(ts: number): string {
+    const diff = Date.now() - ts;
+    if (diff < 60_000) return "just now";
+    if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+    return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+
+  async function handleClearLog() {
+    await clearActionLog();
+    actionLog = [];
+  }
 
   let newPatternIsRegex = $state(false);
   let newPatternCaseSensitive = $state(false);
@@ -325,6 +350,33 @@
             {/if}
           </div>
         </div>
+      {/if}
+    </div>
+  </div>
+
+  <!-- Automation activity -->
+  <div class="mb-3">
+    <div class="text-[10px] font-semibold text-text-muted uppercase tracking-wider mb-1.5">Automation Activity</div>
+    <div class="p-2 rounded-md bg-surface-hover border border-border">
+      <div class="text-[10px] text-text-muted mb-1.5">
+        Recent automatic grouping/ungrouping actions taken by TabOrdo. Use this to diagnose conflicts with other extensions.
+      </div>
+      {#if actionLog.length === 0}
+        <div class="text-[10px] text-text-muted italic">No automation activity yet.</div>
+      {:else}
+        <div class="flex flex-col gap-0.5 max-h-44 overflow-y-auto">
+          {#each actionLog as entry (entry.ts + entry.detail)}
+            <div class="flex items-baseline gap-1.5 text-[10px] leading-4">
+              <span class="text-text-muted/70 shrink-0 w-14">{formatLogTime(entry.ts)}</span>
+              <span class="font-medium text-text shrink-0">{entry.action}</span>
+              <span class="text-text-muted truncate" title={entry.detail}>{entry.detail}</span>
+            </div>
+          {/each}
+        </div>
+        <button
+          class="mt-1.5 px-2 py-0.5 rounded text-[10px] font-medium bg-surface text-text-muted border border-border hover:text-text transition-colors"
+          onclick={handleClearLog}
+        >Clear</button>
       {/if}
     </div>
   </div>

@@ -2,16 +2,42 @@ import { getConfig, matchDomainToRule, isIgnoredUrl, isIgnoredGroupName } from "
 import { getFullHostname, getDomain, sortTabsInWindow, GROUP_COLORS, hashCode } from "../../lib/tabs.ts";
 import { syncPinUrl } from "../../lib/pin.ts";
 import { findBounceTarget } from "../../lib/bounce.ts";
+import { logAction } from "../../lib/actionLog.ts";
 let pinSyncInProgress = false;
 const ungroupTimers = new Map<number, ReturnType<typeof setTimeout>>();
 
-function scheduleAutoUngroup(windowId: number): void {
+// Never dissolve a group younger than this — another manager (or our own
+// create→title two-step) may still be filling/titling it.
+const GROUP_SETTLE_MS = 2000;
+const groupCreatedAt = new Map<number, number>();
+
+// Tab ids TabOrdo itself just grouped/ungrouped, so listeners can tell our own
+// echoes apart from external mutations and skip re-reacting to them.
+const SELF_WRITE_TTL_MS = 1000;
+const selfWrites = new Map<number, number>();
+
+function markSelfWrite(tabIds: number[]): void {
+  const now = Date.now();
+  for (const id of tabIds) selfWrites.set(id, now);
+}
+
+function isRecentSelfWrite(tabId: number): boolean {
+  const t = selfWrites.get(tabId);
+  if (t === undefined) return false;
+  if (Date.now() - t > SELF_WRITE_TTL_MS) {
+    selfWrites.delete(tabId);
+    return false;
+  }
+  return true;
+}
+
+function scheduleAutoUngroup(windowId: number, delayMs = 150): void {
   const existing = ungroupTimers.get(windowId);
   if (existing) clearTimeout(existing);
   ungroupTimers.set(windowId, setTimeout(() => {
     ungroupTimers.delete(windowId);
     autoUngroupSingleTabGroups(windowId);
-  }, 150));
+  }, delayMs));
 }
 
 async function autoUngroupSingleTabGroups(windowId: number): Promise<void> {
@@ -34,11 +60,21 @@ async function autoUngroupSingleTabGroups(windowId: number): Promise<void> {
     }
     for (const [groupId, tabs] of groupCounts) {
       if (tabs.length !== 1 || !tabs[0].id) continue;
+      const createdAt = groupCreatedAt.get(groupId);
+      if (createdAt !== undefined) {
+        const age = Date.now() - createdAt;
+        if (age < GROUP_SETTLE_MS) {
+          scheduleAutoUngroup(windowId, GROUP_SETTLE_MS - age + 150);
+          continue;
+        }
+      }
       const title = groupTitleMap.get(groupId);
       if (!title) continue;
       if (ruleNames && ruleNames.has(title)) continue;
       if (isIgnoredGroupName(title, config.ignoreGroupNames)) continue;
+      markSelfWrite([tabs[0].id]);
       await chrome.tabs.ungroup(tabs[0].id);
+      await logAction("Ungrouped", `"${title}" (single tab left)`);
     }
   } catch (e) {
     console.error("[TabOrdo] auto-ungroup error:", e);
@@ -46,12 +82,17 @@ async function autoUngroupSingleTabGroups(windowId: number): Promise<void> {
 }
 
 async function tryGroupTab(tabId: number, groupId: number, title: string, color: chrome.tabGroups.ColorEnum): Promise<void> {
+  markSelfWrite([tabId]);
   try {
     await chrome.tabs.group({ tabIds: [tabId], groupId });
+    await logAction("Grouped", `tab into "${title}"`);
   } catch (e) {
     console.warn("[TabOrdo] stale group", groupId, "- creating new:", e);
     const newGroupId = await chrome.tabs.group({ tabIds: [tabId] }).catch((e2) => { console.error("[TabOrdo] fallback group create:", e2); return null; });
-    if (newGroupId) await chrome.tabGroups.update(newGroupId, { title, color }).catch((e2) => console.error("[TabOrdo] fallback group update:", e2));
+    if (newGroupId) {
+      await chrome.tabGroups.update(newGroupId, { title, color }).catch((e2) => console.error("[TabOrdo] fallback group update:", e2));
+      await logAction("Created group", `"${title}"`);
+    }
   }
 }
 
@@ -69,6 +110,15 @@ export default defineBackground(() => {
       recentTabs.set(tab.id, Date.now());
       setTimeout(() => recentTabs.delete(tab.id!), 2000);
     }
+  });
+
+  // Track group ages for the settle-window guard. Groups created before this
+  // worker session have no entry and are treated as settled.
+  chrome.tabGroups.onCreated.addListener((group) => {
+    groupCreatedAt.set(group.id, Date.now());
+  });
+  chrome.tabGroups.onRemoved.addListener((group) => {
+    groupCreatedAt.delete(group.id);
   });
   chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
     recentTabs.delete(tabId);
@@ -105,8 +155,9 @@ export default defineBackground(() => {
   });
 
   // Tab moved between groups / in or out of a group — fires changeInfo.groupId
-  chrome.tabs.onUpdated.addListener(async (_tabId, changeInfo, tab) => {
+  chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     if (changeInfo.groupId === undefined) return;
+    if (isRecentSelfWrite(tabId)) return;
     try {
       const config = await getConfig();
       if (config.autoUngroup) scheduleAutoUngroup(tab.windowId);
@@ -181,8 +232,12 @@ export default defineBackground(() => {
                 if (match) {
                   await tryGroupTab(tabId, match.id, rule.name, rule.color);
                 } else {
+                  markSelfWrite([tabId]);
                   const groupId = await chrome.tabs.group({ tabIds: [tabId] }).catch((e) => { console.error("[TabOrdo] rule group create:", e); return null; });
-                  if (groupId) await chrome.tabGroups.update(groupId, { title: rule.name, color: rule.color }).catch((e) => console.error("[TabOrdo] rule group update:", e));
+                  if (groupId) {
+                    await chrome.tabGroups.update(groupId, { title: rule.name, color: rule.color }).catch((e) => console.error("[TabOrdo] rule group update:", e));
+                    await logAction("Created group", `"${rule.name}" (rule)`);
+                  }
                 }
                 grouped = true;
               }
@@ -198,8 +253,13 @@ export default defineBackground(() => {
                   const windowTabs = await chrome.tabs.query({ windowId: tab.windowId });
                   const sameDomain = windowTabs.filter((t) => t.id !== tabId && t.groupId === -1 && getDomain(t.url || "") === domain);
                   if (sameDomain.length > 0) {
-                    const groupId = await chrome.tabs.group({ tabIds: [tabId, ...sameDomain.map((t) => t.id!)] }).catch((e) => { console.error("[TabOrdo] domain group create:", e); return null; });
-                    if (groupId) await chrome.tabGroups.update(groupId, { title: domain, color: GROUP_COLORS[Math.abs(hashCode(domain)) % GROUP_COLORS.length] }).catch((e) => console.error("[TabOrdo] domain group update:", e));
+                    const memberIds = [tabId, ...sameDomain.map((t) => t.id!)];
+                    markSelfWrite(memberIds);
+                    const groupId = await chrome.tabs.group({ tabIds: memberIds }).catch((e) => { console.error("[TabOrdo] domain group create:", e); return null; });
+                    if (groupId) {
+                      await chrome.tabGroups.update(groupId, { title: domain, color: GROUP_COLORS[Math.abs(hashCode(domain)) % GROUP_COLORS.length] }).catch((e) => console.error("[TabOrdo] domain group update:", e));
+                      await logAction("Created group", `"${domain}" (${memberIds.length} tabs)`);
+                    }
                   }
                 }
               }
