@@ -35,8 +35,9 @@ async function autoUngroupSingleTabGroups(windowId: number): Promise<void> {
     for (const [groupId, tabs] of groupCounts) {
       if (tabs.length !== 1 || !tabs[0].id) continue;
       const title = groupTitleMap.get(groupId);
-      if (ruleNames && title && ruleNames.has(title)) continue;
-      if (title && isIgnoredGroupName(title, config.ignoreGroupNames)) continue;
+      if (!title) continue;
+      if (ruleNames && ruleNames.has(title)) continue;
+      if (isIgnoredGroupName(title, config.ignoreGroupNames)) continue;
       await chrome.tabs.ungroup(tabs[0].id);
     }
   } catch (e) {

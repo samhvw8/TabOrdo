@@ -15,6 +15,7 @@
 - **Fix focus mode data loss** — saving a second workspace while one was already saved silently destroyed the first (after its tabs were already closed); workspaces are now a stack, saved before tabs close and restored in LIFO order
 - **Fix archive restore data loss** — an archived tab that failed to reopen was deleted from the archive anyway; failed restores now stay in the archive
 - **Fix fuzzy search returning nothing for Chinese queries** — uFuzzy's term matching doesn't handle CJK text; CJK needles now use substring matching in every mode
+- **Fix auto-ungroup fighting other extensions** — untitled single-tab groups (e.g. created by automation tools like Claude-in-Chrome MCP) were instantly dissolved, causing a delete/recreate loop that broke the other extension; auto-ungroup now skips untitled groups entirely
 
 ### Improvements
 
