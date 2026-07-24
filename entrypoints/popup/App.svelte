@@ -8,6 +8,9 @@
   import { matchCommands, ALL_COMMANDS, ACTION_COMMANDS, TRIAGE_COMMANDS, CATEGORY_STYLES, type CommandDefinition, type CommandCategory } from "../../lib/commands.ts";
   import { snapshotBeforeClose, snapshotBeforeGroup, executeUndo, peekUndo, loadUndoStack } from "../../lib/undo.ts";
   import { focusMode, unfocusMode, hasSavedWorkspace, exportTabsToFile, loadTabsFromText } from "../../lib/workspace.ts";
+  import { addTabsToReadingList, isReadingListAvailable, getReadingList } from "../../lib/readinglist.ts";
+  import { getRecentlyClosed, restoreSession } from "../../lib/sessions.ts";
+  import { checkAIAvailability, getAIProgress, setAIProgress, defaultProgress, type AIGroupProgress } from "../../lib/ai.ts";
   import SearchInput from "../../components/SearchInput.svelte";
   import ResultList from "../../components/ResultList.svelte";
   import CommandHints from "../../components/CommandHints.svelte";
@@ -46,6 +49,8 @@
   let pinnedTabs = $state<PinnedTabEntry[]>([]);
   let fileInputEl = $state<HTMLInputElement | undefined>(undefined);
   let busy = $state(false);
+  let aiProgress = $state<AIGroupProgress>(defaultProgress());
+  let aiPollTimer: ReturnType<typeof setTimeout> | undefined;
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
   let pendingConfirm = $state<string | null>(null);
   let confirmTimer: ReturnType<typeof setTimeout> | undefined;
@@ -82,6 +87,10 @@
     { id: "save", label: "Save", icon: ICON('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/>'), tooltip: "Export tabs as text." },
     { id: "load", label: "Load", icon: ICON('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/>'), tooltip: "Import tabs from text." },
     { id: "archive", label: "Archive", icon: ICON('<rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>'), tooltip: "Open archive." },
+    { id: "aigroup", label: "AI Group", icon: ICON('<path d="M12 2a4 4 0 0 0-4 4v2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2h-2V6a4 4 0 0 0-4-4z"/><circle cx="12" cy="15" r="2"/><path d="M12 13v-2"/>'), tooltip: "Smart group tabs with on-device AI." },
+    { id: "readlater", label: "Read Later", icon: ICON('<path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/><path d="m9 9.5 2 2 4-4"/>'), tooltip: "Save active tab to Reading List." },
+    { id: "recent", label: "Recent", icon: ICON('<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/>'), tooltip: "Show recently closed tabs." },
+    { id: "sidepanel", label: "Side Panel", icon: ICON('<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M15 3v18"/>'), tooltip: "Open TabOrdo in Side Panel." },
   ];
 
   const DEFAULT_DASHBOARD_IDS = ["sort", "group", "dedup", "merge", "pin"];
@@ -340,6 +349,7 @@
           const dupTabs = findDuplicateTabs(allTabs);
           const recentTabs = [...allTabs].filter((t) => t.type === "tab").sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0)).slice(0, 15);
           const suspendedTabs = allTabs.filter((t) => t.discarded);
+          const frozenTabs = allTabs.filter((t) => t.frozen);
 
           if (searchQuery) {
             const categories: { id: string; title: string; tabs: SearchResult[] }[] = [
@@ -348,6 +358,7 @@
               { id: "div-triage-dupes", title: "Duplicates", tabs: dupTabs },
               { id: "div-triage-recent", title: "Recently Active", tabs: recentTabs },
               { id: "div-triage-suspended", title: "Suspended", tabs: suspendedTabs },
+              { id: "div-triage-frozen", title: "Frozen", tabs: frozenTabs },
             ];
             for (const cat of categories) {
               if (cat.tabs.length === 0) continue;
@@ -367,6 +378,7 @@
             if (dupTabs.length > 0) { triageResults.push({ type: "divider", id: "div-triage-dupes", title: `Duplicates (${dupTabs.length})`, url: "" }); triageResults.push(...dupTabs); }
             if (recentTabs.length > 0) { triageResults.push({ type: "divider", id: "div-triage-recent", title: "Recently Active", url: "" }); triageResults.push(...recentTabs); }
             if (suspendedTabs.length > 0) { triageResults.push({ type: "divider", id: "div-triage-suspended", title: `Suspended (${suspendedTabs.length})`, url: "" }); triageResults.push(...suspendedTabs); }
+            if (frozenTabs.length > 0) { triageResults.push({ type: "divider", id: "div-triage-frozen", title: `Frozen (${frozenTabs.length})`, url: "" }); triageResults.push(...frozenTabs); }
             results = triageResults.length > 0 ? triageResults : [];
             if (triageResults.length === 0) statusMessage = "All clear — no tabs need attention";
           }
@@ -409,6 +421,40 @@
           if (ungrouped.length === 0) statusMessage = "All tabs are grouped";
           break;
         }
+        case "@f": {
+          const frozen = allTabs.filter((t) => t.frozen);
+          if (searchQuery) { const hay = buildSearchHaystack(frozen); const indices = rankedSearch(hay, searchQuery); results = indices.map((i) => frozen[i]); }
+          else results = frozen;
+          if (frozen.length === 0) statusMessage = "No frozen tabs";
+          break;
+        }
+        case "@shared": {
+          const allGroups = await chrome.tabGroups.query({});
+          const sharedIds = new Set(allGroups.filter((g) => (g as any).shared === true).map((g) => g.id));
+          const shared = allTabs.filter((t) => t.groupId && sharedIds.has(t.groupId));
+          if (searchQuery) { const hay = buildSearchHaystack(shared); const indices = rankedSearch(hay, searchQuery); results = indices.map((i) => shared[i]); }
+          else results = shared;
+          if (shared.length === 0) statusMessage = "No shared group tabs";
+          break;
+        }
+        case "rl": {
+          if (!isReadingListAvailable()) { results = []; statusMessage = "Reading List not available (Chrome 120+)"; break; }
+          const rlItems = await getReadingList();
+          const rlResults: SearchResult[] = rlItems.map((item, i) => ({
+            type: "bookmark" as const, id: `rl-${i}`, title: `${item.hasBeenRead ? "✓ " : ""}${item.title}`, url: item.url,
+          }));
+          if (searchQuery) { const hay = buildSearchHaystack(rlResults); const indices = rankedSearch(hay, searchQuery); results = indices.map((i) => rlResults[i]); }
+          else results = rlResults;
+          if (rlResults.length === 0) statusMessage = "Reading List is empty";
+          break;
+        }
+        case "rc": {
+          const rcItems = await getRecentlyClosed();
+          if (searchQuery) { const hay = buildSearchHaystack(rcItems); const indices = rankedSearch(hay, searchQuery); results = indices.map((i) => rcItems[i]); }
+          else results = rcItems;
+          if (rcItems.length === 0) statusMessage = "No recently closed tabs";
+          break;
+        }
         case "re": {
           const indices = search(searchHaystack, searchQuery, "regex", 50, searchRecency);
           results = indices.map((i) => allTabs[i]);
@@ -446,9 +492,27 @@
     return dupes;
   }
 
+  async function startAIPoll() {
+    await setAIProgress({ ...defaultProgress(), status: "checking" });
+    clearInterval(aiPollTimer);
+    let ticks = 0;
+    aiPollTimer = setInterval(async () => {
+      aiProgress = await getAIProgress();
+      ticks++;
+      if (aiProgress.status === "done" || aiProgress.status === "error") {
+        clearInterval(aiPollTimer);
+        if (aiProgress.status === "done") await loadTabs();
+      } else if (aiProgress.status === "idle" && ticks > 6) {
+        clearInterval(aiPollTimer);
+      }
+    }, 500);
+  }
+
   let groupCount = $derived(windows.reduce((n, w) => n + w.groups.size, 0));
   let audioCount = $derived(dashboardTabs.filter((t) => t.audible && !t.mutedInfo?.muted).length);
   let dupeCount = $derived(findDuplicateTabs(allTabs).length);
+  let frozenCount = $derived(dashboardTabs.filter((t) => t.frozen).length);
+  let suspendedCount = $derived(dashboardTabs.filter((t) => t.discarded && !t.frozen).length);
 
   async function handleOverflowAction(action: string) {
     const goBack = () => { activeSection = "dashboard"; };
@@ -480,6 +544,18 @@
       case "dedup": goBack(); dashAction(async () => { await snapshotBeforeGroup(); const n = await removeDuplicates(); return n > 0 ? `${n} removed` : "No dupes"; }); break;
       case "merge": goBack(); confirmAction("merge", () => dashAction(async () => { await snapshotBeforeGroup(); await mergeAllWindows(); return "Merged"; })); break;
       case "pin": goBack(); handlePinCurrent(new MouseEvent("click", { altKey: altPressed })); break;
+      case "aigroup": goBack(); await snapshotBeforeGroup(); chrome.runtime.sendMessage({ type: "aigroup-start" }); statusMessage = "AI grouping started..."; startAIPoll(); activeSection = "ai"; break;
+      case "readlater": goBack(); dashAction(async () => {
+        if (!isReadingListAvailable()) return "Reading List not available (Chrome 120+)";
+        const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (active?.url && active.title) { await addTabsToReadingList([{ url: active.url, title: active.title }]); return "Added to Reading List"; }
+        return "No active tab";
+      }); break;
+      case "recent": goBack(); query = "/recent "; updateResults(); break;
+      case "sidepanel":
+        if (chrome.sidePanel) { chrome.sidePanel.open({ windowId: currentWindowId }); }
+        else { statusMessage = "Side Panel not available (Chrome 114+)"; setTimeout(() => { statusMessage = ""; }, 3000); }
+        break;
     }
   }
 
@@ -694,6 +770,68 @@
         acted = true;
         break;
       }
+      case "readlater": {
+        if (!isReadingListAvailable()) { statusMessage = "Reading List not available (requires Chrome 120+)"; acted = true; break; }
+        if (tabIds.length > 0) {
+          const tabData = matchingTabs.map((t) => ({ url: t.url, title: t.title }));
+          const added = await addTabsToReadingList(tabData);
+          statusMessage = added > 0 ? `Added ${added} to Reading List` : "No valid tabs to add";
+        } else if (!searchQuery) {
+          const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+          if (active?.url && active.title) {
+            await addTabsToReadingList([{ url: active.url, title: active.title }]);
+            statusMessage = "Added to Reading List";
+          }
+        }
+        acted = true;
+        break;
+      }
+      case "recent": {
+        const recentClosed = await getRecentlyClosed();
+        if (searchQuery) {
+          const hay = buildSearchHaystack(recentClosed);
+          const indices = rankedSearch(hay, searchQuery);
+          results = indices.map((i) => recentClosed[i]);
+        } else {
+          results = recentClosed;
+        }
+        if (recentClosed.length === 0) statusMessage = "No recently closed tabs";
+        acted = false;
+        break;
+      }
+      case "sidepanel":
+        if (chrome.sidePanel) { await chrome.sidePanel.open({ windowId: currentWindowId }); statusMessage = "Opened Side Panel"; }
+        else { statusMessage = "Side Panel not available (Chrome 114+)"; }
+        acted = true;
+        break;
+      case "restore": {
+        const sessions = await chrome.sessions?.getRecentlyClosed?.({ maxResults: 1 }) ?? [];
+        if (sessions.length > 0) {
+          const s = sessions[0];
+          const sid = s.tab?.sessionId || s.window?.sessionId;
+          if (sid) { await restoreSession(sid); statusMessage = "Restored last closed"; }
+          else { statusMessage = "Nothing to restore"; }
+        } else { statusMessage = "No recently closed tabs"; }
+        acted = true;
+        break;
+      }
+      case "freeze":
+        if (tabIds.length > 0) { await discardTabs(tabIds); statusMessage = `Froze ${tabIds.length} tab(s)`; acted = true; }
+        else if (!searchQuery) {
+          const inactiveTabs = (await chrome.tabs.query({})).filter((t) => !t.active && !t.pinned && !t.audible && !t.discarded);
+          if (inactiveTabs.length > 0) { await discardTabs(inactiveTabs.map((t) => t.id!)); statusMessage = `Froze ${inactiveTabs.length} inactive tab(s)`; acted = true; }
+          else { statusMessage = "No tabs to freeze"; acted = true; }
+        }
+        break;
+      case "aigroup": {
+        await snapshotBeforeGroup();
+        chrome.runtime.sendMessage({ type: "aigroup-start" });
+        statusMessage = "AI grouping started in background...";
+        startAIPoll();
+        activeSection = "ai";
+        acted = true;
+        break;
+      }
     }
     if (acted) {
       query = "";
@@ -825,6 +963,13 @@
     }
     hasWorkspace = await hasSavedWorkspace();
     archiveCount = await getArchiveCount();
+    aiProgress = await getAIProgress();
+    if (aiProgress.status === "checking" || aiProgress.status === "prompting" || aiProgress.status === "grouping") {
+      startAIPoll();
+      activeSection = "ai";
+    } else if (aiProgress.status === "done" || aiProgress.status === "error") {
+      activeSection = "ai";
+    }
     if (config.collapsedGroups) collapsedGroups = new Set(config.collapsedGroups);
     if (Array.isArray(config.dashboardActionIds)) dashboardActionIds = config.dashboardActionIds;
     const ob = await chrome.storage.local.get("onboardingDismissed");
@@ -912,6 +1057,98 @@
     <PinsPanel />
   {:else if activeSection === "settings"}
     <SettingsPanel />
+  {:else if activeSection === "ai"}
+    <div class="flex-1 overflow-y-auto px-3 py-2 min-h-0">
+      <div class="text-xs font-semibold text-text mb-2">AI Grouping</div>
+
+      {#if aiProgress.status === "idle"}
+        <div class="text-[11px] text-text-muted mb-3">Use on-device AI (Gemini Nano) to intelligently group your tabs by topic. Runs entirely on your device — no data sent externally.</div>
+        <button
+          class="w-full px-3 py-2 rounded-lg bg-primary text-white text-xs font-medium hover:bg-primary-hover transition-colors"
+          onclick={() => { aiProgress = { ...aiProgress, status: "checking" }; snapshotBeforeGroup().catch(() => {}); chrome.runtime.sendMessage({ type: "aigroup-start" }); startAIPoll(); }}
+        >Group tabs with AI</button>
+      {:else if aiProgress.status === "checking"}
+        <div class="flex items-center gap-2 text-[11px] text-text-muted">
+          <span class="w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin"></span>
+          Checking AI availability...
+        </div>
+      {:else if aiProgress.status === "prompting"}
+        <div class="space-y-2">
+          <div class="flex items-center gap-2 text-[11px] text-accent-cyan">
+            <span class="w-3 h-3 border-2 border-accent-cyan border-t-transparent rounded-full animate-spin"></span>
+            Analyzing {aiProgress.total} tabs with AI...
+          </div>
+          <div class="text-[10px] text-text-muted">{aiProgress.currentTab}</div>
+          <div class="h-1 rounded-full bg-surface-active overflow-hidden">
+            <div class="h-full bg-accent-cyan rounded-full transition-all" style="width: 50%"></div>
+          </div>
+        </div>
+      {:else if aiProgress.status === "grouping"}
+        <div class="space-y-2">
+          <div class="flex items-center gap-2 text-[11px] text-accent-green">
+            <span class="w-3 h-3 border-2 border-accent-green border-t-transparent rounded-full animate-spin"></span>
+            Creating groups...
+          </div>
+          <div class="text-[10px] text-text-muted">{aiProgress.currentTab}</div>
+          <div class="h-1 rounded-full bg-surface-active overflow-hidden">
+            <div class="h-full bg-accent-green rounded-full transition-all" style="width: {aiProgress.groupCount > 0 ? Math.round((aiProgress.grouped / aiProgress.total) * 100) : 75}%"></div>
+          </div>
+          <div class="text-[10px] text-text-muted">{aiProgress.grouped} tabs grouped into {aiProgress.groupCount} groups</div>
+        </div>
+      {:else if aiProgress.status === "done"}
+        <div class="space-y-2">
+          <div class="flex items-center gap-2 text-[11px] text-accent-green">
+            <svg class="w-3.5 h-3.5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/></svg>
+            Done
+          </div>
+          <div class="text-[10px] text-text-muted">{aiProgress.currentTab}</div>
+          {#if aiProgress.grouped > 0}
+            <div class="mt-1 px-2 py-1.5 rounded-md bg-accent-green/10 border border-accent-green/20 text-[10px] text-accent-green">
+              {aiProgress.grouped} tabs organized into {aiProgress.groupCount} groups
+            </div>
+          {:else}
+            <div class="mt-1 px-2 py-1.5 rounded-md bg-surface-hover border border-border text-[10px] text-text-muted">
+              No groups suggested — tabs may already be well-organized
+            </div>
+          {/if}
+          <div class="flex gap-2 mt-2">
+            <button
+              class="flex-1 px-3 py-2 rounded-lg bg-primary text-white text-xs font-medium hover:bg-primary-hover transition-colors"
+              onclick={() => { aiProgress = { ...defaultProgress(), status: "checking" }; snapshotBeforeGroup().catch(() => {}); chrome.runtime.sendMessage({ type: "aigroup-start" }); startAIPoll(); }}
+            >Run again</button>
+            <button
+              class="px-3 py-2 rounded-lg bg-surface-hover text-text-muted text-xs border border-border hover:text-text transition-colors"
+              onclick={async () => { aiProgress = defaultProgress(); await setAIProgress(aiProgress); activeSection = "dashboard"; }}
+            >Dismiss</button>
+          </div>
+        </div>
+      {:else if aiProgress.status === "error"}
+        <div class="space-y-2">
+          <div class="flex items-center gap-2 text-[11px] text-accent-red">
+            <svg class="w-3.5 h-3.5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" x2="9" y1="9" y2="15"/><line x1="9" x2="15" y1="9" y2="15"/></svg>
+            Error
+          </div>
+          <div class="px-2 py-1.5 rounded-md bg-accent-red/10 border border-accent-red/20 text-[10px] text-accent-red break-words">{aiProgress.error}</div>
+          <div class="flex gap-2 mt-2">
+            <button
+              class="flex-1 px-3 py-1.5 rounded-lg bg-surface-hover text-text text-xs hover:bg-surface-active transition-colors border border-border"
+              onclick={() => { aiProgress = { ...defaultProgress(), status: "checking" }; chrome.runtime.sendMessage({ type: "aigroup-start" }); startAIPoll(); }}
+            >Retry</button>
+            <button
+              class="px-3 py-1.5 rounded-lg bg-surface-hover text-text-muted text-xs border border-border hover:text-text transition-colors"
+              onclick={async () => { aiProgress = defaultProgress(); await setAIProgress(aiProgress); activeSection = "dashboard"; }}
+            >Dismiss</button>
+          </div>
+        </div>
+      {/if}
+
+      <div class="mt-4 pt-3 border-t border-border/50">
+        <div class="text-[9px] text-text-muted/60 space-y-1">
+          <div>Powered by Gemini Nano (on-device, private)</div>
+          <div>Requires chrome://flags → #prompt-api-for-gemini-nano</div>
+        </div>
+      </div>
+    </div>
   {:else if activeSection === "more"}
     <div class="flex-1 overflow-y-auto px-2 py-2 min-h-0">
       <div class="px-2 pb-1.5 text-[9px] text-text-muted/60">Click ★ to add/remove actions from dashboard</div>
@@ -940,6 +1177,12 @@
           { action: "closeold", label: "Close Old", tip: "Tabs older than 7 days" },
           { action: "closesite", label: "Close Same Site", tip: "Other tabs from this domain" },
         ]},
+        { title: "Smart", items: [
+          { action: "aigroup", label: "AI Group", tip: "Group tabs with on-device AI" },
+          { action: "readlater", label: "Read Later", tip: "Save tab to Reading List" },
+          { action: "recent", label: "Recently Closed", tip: "Restore closed tabs" },
+          { action: "sidepanel", label: "Side Panel", tip: "Open persistent sidebar" },
+        ]},
         { title: "Workspace", items: [
           { action: "focus", label: hasWorkspace ? "Unfocus" : "Focus", tip: hasWorkspace ? "Restore saved tabs" : "Save tabs & start fresh" },
           { action: "save", label: "Save to File", tip: "Export as text" },
@@ -955,7 +1198,7 @@
           {#each section.items as item}
             {@const poolEntry = ACTION_POOL_MAP.get(item.action)}
             <div
-              class="w-full text-left flex items-start gap-2.5 px-2 py-1.5 rounded-md hover:bg-surface-hover active:bg-surface-active transition-all group cursor-pointer"
+              class="w-full text-left flex items-start gap-2.5 px-2 py-1.5 rounded-md hover:bg-surface-hover active:bg-surface-active transition-colors group cursor-pointer"
               role="button" tabindex="0"
               onclick={() => handleOverflowAction(item.action)}
               onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleOverflowAction(item.action); } }}
@@ -968,7 +1211,7 @@
                 <div class="text-[10px] text-text-muted/70 leading-tight">{item.action === "pin" ? pinDisplay.tooltip : item.tip}</div>
               </div>
               <button
-                class="shrink-0 self-center text-sm leading-none transition-all hover:scale-110 {dashboardActionIds.includes(item.action) ? 'text-primary' : 'text-text-muted/30 opacity-0 group-hover:opacity-100'}"
+                class="shrink-0 self-center text-sm leading-none transition-[color,opacity] hover:scale-110 {dashboardActionIds.includes(item.action) ? 'text-primary' : 'text-text-muted/30 opacity-0 group-hover:opacity-100'}"
                 onclick={(e) => { e.stopPropagation(); toggleDashboardAction(item.action); }}
                 title={dashboardActionIds.includes(item.action) ? "Remove from dashboard" : "Add to dashboard"}
               >{dashboardActionIds.includes(item.action) ? "★" : "☆"}</button>
@@ -1029,18 +1272,26 @@
         <span>{groupCount} groups</span>
         {#if audioCount > 0}
           <span class="text-border">·</span>
-          <span>{audioCount} 🔊</span>
+          <span class="inline-flex items-center gap-0.5">{audioCount} <svg class="w-3 h-3 inline" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg></span>
         {/if}
         {#if dupeCount > 0}
           <span class="text-border">·</span>
           <span>{dupeCount} dupes</span>
+        {/if}
+        {#if frozenCount > 0}
+          <span class="text-border">·</span>
+          <span class="inline-flex items-center gap-0.5 text-accent-cyan">{frozenCount} <svg class="w-3 h-3 inline" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20"/><path d="m4.93 4.93 4.24 4.24"/><path d="m14.83 14.83 4.24 4.24"/><path d="m4.93 19.07 4.24-4.24"/><path d="m14.83 9.17 4.24-4.24"/><path d="M2 12h20"/></svg></span>
+        {/if}
+        {#if suspendedCount > 0}
+          <span class="text-border">·</span>
+          <span>{suspendedCount} suspended</span>
         {/if}
       </div>
 
       <!-- Onboarding hint -->
       {#if !onboardingDismissed && allTabs.length <= 5}
         <div class="mx-3 mb-2 flex items-center gap-2 px-2.5 py-2 rounded-lg border border-primary/20 bg-primary/5 text-[11px] text-text-muted">
-          <span class="text-primary">💡</span>
+          <svg class="w-3.5 h-3.5 shrink-0 text-primary" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/></svg>
           <span>Type <kbd class="px-1 py-0.5 rounded bg-surface-hover text-[10px] font-mono">/</kbd> for commands, <kbd class="px-1 py-0.5 rounded bg-surface-hover text-[10px] font-mono">@</kbd> for triage. Try <span class="text-primary font-medium">/sort</span> to organize tabs.</span>
           <button class="ml-auto shrink-0 text-text-muted hover:text-text transition-colors" onclick={() => { onboardingDismissed = true; chrome.storage.local.set({ onboardingDismissed: true }); }}>✕</button>
         </div>
@@ -1144,7 +1395,7 @@
           onclick={() => { query = "@a "; paletteMode = "search"; updateResults(); }}
           title="Click to view all tabs playing audio"
         >
-          <span class="text-accent-red text-xs">🔊</span>
+          <svg class="w-3.5 h-3.5 shrink-0 text-accent-red" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
           <span class="text-xs font-medium text-accent-red">{audioTabs.length} playing audio</span>
           <span class="text-[10px] text-text-muted truncate ml-1">{audioTabs.map((t) => t.title || t.url).join(", ")}</span>
         </button>

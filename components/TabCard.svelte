@@ -34,7 +34,7 @@
 </script>
 
 <div
-  class="flex items-center gap-2 px-2 py-1.5 rounded-md group transition-all overflow-hidden
+  class="flex items-center gap-2 px-2 py-1.5 rounded-md group transition-colors overflow-hidden
     {selected ? 'bg-primary/10 border border-primary/30' : 'hover:bg-surface-hover border border-transparent active:bg-surface-active'}"
 >
   <input
@@ -63,19 +63,21 @@
   >
     <div class="flex items-center gap-1 min-w-0">
       {#if tab.pinned}
-        <span class="text-[10px]">📌</span>
+        <svg class="w-2.5 h-2.5 shrink-0 text-text-muted" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 2-2H6a2 2 0 0 0 2 2 1 1 0 0 1 1 1z"/></svg>
       {/if}
       {#if positionPinned}
-        <span class="text-[10px] text-accent-yellow" title="Pinned to position in group">⊙</span>
+        <svg class="w-2.5 h-2.5 shrink-0 text-accent-yellow" title="Pinned to position in group" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="12" r="5"/></svg>
       {/if}
       {#if tab.audible && !tab.mutedInfo?.muted}
-        <span class="text-[10px]">🔊</span>
+        <svg class="w-2.5 h-2.5 shrink-0 text-text-muted" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
       {/if}
       {#if tab.mutedInfo?.muted}
-        <span class="text-[10px]">🔇</span>
+        <svg class="w-2.5 h-2.5 shrink-0 text-text-muted" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4V5Z"/><line x1="23" x2="17" y1="9" y2="15"/><line x1="17" x2="23" y1="9" y2="15"/></svg>
       {/if}
-      {#if tab.discarded}
-        <span class="text-[10px]">💤</span>
+      {#if tab.frozen}
+        <svg class="w-2.5 h-2.5 shrink-0 text-accent-cyan" title="Frozen" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20"/><path d="m4.93 4.93 4.24 4.24"/><path d="m14.83 14.83 4.24 4.24"/><path d="m4.93 19.07 4.24-4.24"/><path d="m14.83 9.17 4.24-4.24"/><path d="M2 12h20"/></svg>
+      {:else if tab.discarded}
+        <svg class="w-2.5 h-2.5 shrink-0 text-text-muted" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
       {/if}
       <span class="truncate text-sm text-text">{tab.title || "Untitled"}</span>
     </div>
@@ -99,7 +101,7 @@
 
   {#if tab.audible || tab.mutedInfo?.muted}
     <button
-      class="shrink-0 p-1 rounded hover:bg-accent-purple/20 text-text-muted transition-all
+      class="shrink-0 p-1 rounded hover:bg-accent-purple/20 text-text-muted transition-colors
         {showVolume ? 'bg-accent-purple/15 text-accent-purple' : 'hover:text-accent-purple'}"
       onclick={(e) => { e.stopPropagation(); showVolume = !showVolume; }}
       title="Adjust volume"
@@ -115,16 +117,20 @@
       {/if}
     </button>
     <button
-      class="shrink-0 p-1 rounded hover:bg-accent-purple/20 hover:text-accent-purple text-text-muted transition-all text-[10px]"
+      class="shrink-0 p-1 rounded hover:bg-accent-purple/20 hover:text-accent-purple text-text-muted transition-colors"
       onclick={(e) => { e.stopPropagation(); toggleMute(); }}
       title={tab.mutedInfo?.muted ? "Unmute" : "Mute"}
     >
-      {tab.mutedInfo?.muted ? "🔈" : "🔇"}
+      {#if tab.mutedInfo?.muted}
+        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+      {:else}
+        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4V5Z"/><line x1="23" x2="17" y1="9" y2="15"/><line x1="17" x2="23" y1="9" y2="15"/></svg>
+      {/if}
     </button>
   {/if}
 
   <button
-    class="shrink-0 p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-accent-red/20 hover:text-accent-red text-text-muted transition-all"
+    class="shrink-0 p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-accent-red/20 hover:text-accent-red text-text-muted transition-[color,background-color,opacity]"
     onclick={(e) => { e.stopPropagation(); onclose(); }}
     title="Close tab"
   >

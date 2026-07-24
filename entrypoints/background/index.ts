@@ -3,6 +3,8 @@ import { getFullHostname, getDomain, sortTabsInWindow, GROUP_COLORS, hashCode } 
 import { syncPinUrl } from "../../lib/pin.ts";
 import { findBounceTarget } from "../../lib/bounce.ts";
 import { logAction } from "../../lib/actionLog.ts";
+import { addToReadingList } from "../../lib/readinglist.ts";
+import { checkAIAvailability, suggestGroups, setAIProgress, getAIProgress, defaultProgress } from "../../lib/ai.ts";
 let pinSyncInProgress = false;
 const ungroupTimers = new Map<number, ReturnType<typeof setTimeout>>();
 
@@ -51,6 +53,7 @@ async function autoUngroupSingleTabGroups(windowId: number): Promise<void> {
       chrome.tabGroups.query({ windowId }),
     ]);
     const groupTitleMap = new Map(allGroups.map((g) => [g.id, g.title || ""]));
+    const sharedGroupIds = new Set(allGroups.filter(isSharedGroup).map((g) => g.id));
     const groupCounts = new Map<number, chrome.tabs.Tab[]>();
     for (const tab of allTabs) {
       if (tab.groupId !== -1) {
@@ -60,6 +63,7 @@ async function autoUngroupSingleTabGroups(windowId: number): Promise<void> {
     }
     for (const [groupId, tabs] of groupCounts) {
       if (tabs.length !== 1 || !tabs[0].id) continue;
+      if (sharedGroupIds.has(groupId)) continue;
       const createdAt = groupCreatedAt.get(groupId);
       if (createdAt !== undefined) {
         const age = Date.now() - createdAt;
@@ -81,7 +85,28 @@ async function autoUngroupSingleTabGroups(windowId: number): Promise<void> {
   }
 }
 
+function isSharedGroup(group: chrome.tabGroups.TabGroup): boolean {
+  return (group as any).shared === true;
+}
+
+async function safeGroupUpdate(groupId: number, props: chrome.tabGroups.UpdateProperties): Promise<void> {
+  try {
+    await chrome.tabGroups.update(groupId, props);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg.includes("Saved groups") || msg.includes("not editable")) {
+      console.warn("[TabOrdo] skipped update on saved/uneditable group", groupId);
+      return;
+    }
+    throw e;
+  }
+}
+
 async function tryGroupTab(tabId: number, groupId: number, title: string, color: chrome.tabGroups.ColorEnum): Promise<void> {
+  try {
+    const group = await chrome.tabGroups.get(groupId).catch(() => null);
+    if (group && isSharedGroup(group)) return;
+  } catch {}
   markSelfWrite([tabId]);
   try {
     await chrome.tabs.group({ tabIds: [tabId], groupId });
@@ -90,7 +115,7 @@ async function tryGroupTab(tabId: number, groupId: number, title: string, color:
     console.warn("[TabOrdo] stale group", groupId, "- creating new:", e);
     const newGroupId = await chrome.tabs.group({ tabIds: [tabId] }).catch((e2) => { console.error("[TabOrdo] fallback group create:", e2); return null; });
     if (newGroupId) {
-      await chrome.tabGroups.update(newGroupId, { title, color }).catch((e2) => console.error("[TabOrdo] fallback group update:", e2));
+      await safeGroupUpdate(newGroupId, { title, color });
       await logAction("Created group", `"${title}"`);
     }
   }
@@ -228,14 +253,14 @@ export default defineBackground(() => {
               const rule = matchDomainToRule(hostname, config.rules);
               if (rule) {
                 const existingGroups = await chrome.tabGroups.query({ windowId: tab.windowId });
-                const match = existingGroups.find((g) => g.title === rule.name);
+                const match = existingGroups.find((g) => g.title === rule.name && !isSharedGroup(g));
                 if (match) {
                   await tryGroupTab(tabId, match.id, rule.name, rule.color);
                 } else {
                   markSelfWrite([tabId]);
                   const groupId = await chrome.tabs.group({ tabIds: [tabId] }).catch((e) => { console.error("[TabOrdo] rule group create:", e); return null; });
                   if (groupId) {
-                    await chrome.tabGroups.update(groupId, { title: rule.name, color: rule.color }).catch((e) => console.error("[TabOrdo] rule group update:", e));
+                    await safeGroupUpdate(groupId, { title: rule.name, color: rule.color });
                     await logAction("Created group", `"${rule.name}" (rule)`);
                   }
                 }
@@ -246,7 +271,7 @@ export default defineBackground(() => {
               const domain = getDomain(url);
               if (domain) {
                 const existingGroups = await chrome.tabGroups.query({ windowId: tab.windowId });
-                const match = existingGroups.find((g) => g.title === domain);
+                const match = existingGroups.find((g) => g.title === domain && !isSharedGroup(g));
                 if (match) {
                   await tryGroupTab(tabId, match.id, domain, GROUP_COLORS[Math.abs(hashCode(domain)) % GROUP_COLORS.length]);
                 } else {
@@ -257,7 +282,7 @@ export default defineBackground(() => {
                     markSelfWrite(memberIds);
                     const groupId = await chrome.tabs.group({ tabIds: memberIds }).catch((e) => { console.error("[TabOrdo] domain group create:", e); return null; });
                     if (groupId) {
-                      await chrome.tabGroups.update(groupId, { title: domain, color: GROUP_COLORS[Math.abs(hashCode(domain)) % GROUP_COLORS.length] }).catch((e) => console.error("[TabOrdo] domain group update:", e));
+                      await safeGroupUpdate(groupId, { title: domain, color: GROUP_COLORS[Math.abs(hashCode(domain)) % GROUP_COLORS.length] });
                       await logAction("Created group", `"${domain}" (${memberIds.length} tabs)`);
                     }
                   }
@@ -302,7 +327,148 @@ export default defineBackground(() => {
 
   chrome.runtime.onInstalled.addListener(() => {
     chrome.alarms.create(DISCARD_ALARM, { periodInMinutes: 5 });
+
+    if (chrome.contextMenus) {
+      chrome.contextMenus.removeAll(() => {
+        chrome.contextMenus.create({ id: "tabOrdo-group-domain", title: "Group tabs by domain", contexts: ["action"] });
+        chrome.contextMenus.create({ id: "tabOrdo-dedup", title: "Remove duplicate tabs", contexts: ["action"] });
+        chrome.contextMenus.create({ id: "tabOrdo-sort", title: "Sort tabs by domain", contexts: ["action"] });
+        chrome.contextMenus.create({ type: "separator", id: "tabOrdo-sep1", contexts: ["action"] });
+        if (chrome.readingList) {
+          chrome.contextMenus.create({ id: "tabOrdo-readlater", title: "Save to Reading List", contexts: ["action"] });
+        }
+        chrome.contextMenus.create({ id: "tabOrdo-discard", title: "Discard inactive tabs", contexts: ["action"] });
+        if (chrome.sidePanel) {
+          chrome.contextMenus.create({ type: "separator", id: "tabOrdo-sep2", contexts: ["action"] });
+          chrome.contextMenus.create({ id: "tabOrdo-sidepanel", title: "Open in Side Panel", contexts: ["action"] });
+        }
+      });
+    }
   });
+
+  if (chrome.contextMenus) {
+    chrome.contextMenus.onClicked.addListener(async (info) => {
+      try {
+        switch (info.menuItemId) {
+          case "tabOrdo-group-domain": {
+            const { groupTabsByDomain } = await import("../../lib/tabs.ts");
+            await groupTabsByDomain("additive");
+            break;
+          }
+          case "tabOrdo-dedup": {
+            const { removeDuplicates } = await import("../../lib/tabs.ts");
+            await removeDuplicates();
+            break;
+          }
+          case "tabOrdo-sort": {
+            const win = await chrome.windows.getCurrent();
+            await sortTabsInWindow(win.id!);
+            break;
+          }
+          case "tabOrdo-readlater": {
+            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            if (tab?.url && tab.title) await addToReadingList(tab.url, tab.title);
+            break;
+          }
+          case "tabOrdo-discard": {
+            const tabs = await chrome.tabs.query({});
+            for (const tab of tabs) {
+              if (!tab.active && !tab.pinned && !tab.audible && !tab.discarded) {
+                await chrome.tabs.discard(tab.id!).catch(() => {});
+              }
+            }
+            break;
+          }
+          case "tabOrdo-sidepanel":
+            if (chrome.sidePanel) {
+              await chrome.sidePanel.open({ windowId: (await chrome.windows.getCurrent()).id! });
+            }
+            break;
+        }
+      } catch (e) {
+        console.error("[TabOrdo] context menu error:", e);
+      }
+    });
+  }
+
+  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    if (msg.type === "aigroup-start") {
+      runAIGroup().then((result) => sendResponse(result));
+      return true;
+    }
+    if (msg.type === "aigroup-status") {
+      getAIProgress().then((p) => sendResponse(p));
+      return true;
+    }
+  });
+
+  async function runAIGroup(): Promise<{ ok: boolean; message: string }> {
+    const current = await getAIProgress();
+    if (current.status === "checking" || current.status === "prompting" || current.status === "grouping") {
+      return { ok: false, message: "AI grouping already in progress" };
+    }
+
+    await setAIProgress({ ...defaultProgress(), status: "checking" });
+    const ai = await checkAIAvailability();
+    if (!ai.available) {
+      await setAIProgress({ ...defaultProgress(), status: "error", error: ai.reason });
+      return { ok: false, message: ai.reason };
+    }
+
+    const ungroupedTabs = (await chrome.tabs.query({})).filter(
+      (t) => t.groupId === -1 && !t.pinned && t.url && !t.url.startsWith("chrome://")
+    );
+    if (ungroupedTabs.length < 2) {
+      await setAIProgress({ ...defaultProgress(), status: "error", error: "Need 2+ ungrouped tabs" });
+      return { ok: false, message: "Need 2+ ungrouped tabs" };
+    }
+
+    const tabData = ungroupedTabs.map((t) => ({ id: t.id!, title: t.title || "", url: t.url || "" }));
+    await setAIProgress({
+      status: "prompting", total: tabData.length, processed: 0,
+      currentTab: `Sending ${tabData.length} tabs to on-device AI...`,
+      grouped: 0, groupCount: 0, error: "",
+    });
+
+    try {
+      const suggestions = await suggestGroups(tabData);
+      if (suggestions.length === 0) {
+        await setAIProgress({ ...defaultProgress(), status: "done", total: tabData.length, processed: tabData.length });
+        return { ok: true, message: "AI found no groups to suggest" };
+      }
+
+      await setAIProgress({
+        status: "grouping", total: tabData.length, processed: tabData.length,
+        currentTab: `Creating ${suggestions.length} groups...`,
+        grouped: 0, groupCount: suggestions.length, error: "",
+      });
+
+      let grouped = 0;
+      for (let i = 0; i < suggestions.length; i++) {
+        const s = suggestions[i];
+        if (s.tabIds.length < 1) continue;
+        await setAIProgress({
+          status: "grouping", total: tabData.length, processed: tabData.length,
+          currentTab: `Creating group "${s.groupName}" (${i + 1}/${suggestions.length})`,
+          grouped, groupCount: suggestions.length, error: "",
+        });
+        const gid = await chrome.tabs.group({ tabIds: s.tabIds });
+        await safeGroupUpdate(gid, { title: s.groupName, color: s.color as chrome.tabGroups.ColorEnum });
+        grouped += s.tabIds.length;
+      }
+
+      const msg = `AI grouped ${grouped} tab(s) into ${suggestions.length} group(s)`;
+      await setAIProgress({
+        status: "done", total: tabData.length, processed: tabData.length,
+        currentTab: msg, grouped, groupCount: suggestions.length, error: "",
+      });
+      return { ok: true, message: msg };
+    } catch (e) {
+      const err = e instanceof Error ? e.message : "AI grouping failed";
+      await setAIProgress({ ...defaultProgress(), status: "error", error: err });
+      return { ok: false, message: err };
+    }
+  }
 
   chrome.runtime.onStartup.addListener(async () => {
     const alarm = await chrome.alarms.get(DISCARD_ALARM);
@@ -318,7 +484,7 @@ export default defineBackground(() => {
     const cutoff = Date.now() - 45 * 60 * 1000;
     const tabs = await chrome.tabs.query({});
     for (const tab of tabs) {
-      if (tab.active || tab.pinned || tab.audible || tab.discarded) continue;
+      if (tab.active || tab.pinned || tab.audible || tab.discarded || (tab as any).frozen) continue;
       if ((tab.lastAccessed || 0) < cutoff) {
         await chrome.tabs.discard(tab.id!).catch(() => {});
       }

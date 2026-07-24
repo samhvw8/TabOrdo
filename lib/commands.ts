@@ -21,6 +21,8 @@ export const SEARCH_COMMANDS: CommandDefinition[] = [
   { prefix: "p", label: "/p", description: "Pinned tabs only", category: "search", color: "text-accent-yellow" },
   { prefix: "g", label: "/g", description: "Current group tabs", category: "search", color: "text-accent-green" },
   { prefix: "re", label: "/re", description: "Regex search tabs", category: "search", color: "text-accent-purple" },
+  { prefix: "rl", label: "/rl", description: "Search Reading List", category: "search", color: "text-accent-green" },
+  { prefix: "rc", label: "/rc", description: "Search recently closed tabs", category: "search", color: "text-accent-blue" },
 ];
 
 export const ACTION_COMMANDS: CommandDefinition[] = [
@@ -61,6 +63,12 @@ export const ACTION_COMMANDS: CommandDefinition[] = [
   { prefix: "unpin", label: "/unpin", description: "Unpin tab from fixed position in group", category: "action", color: "text-accent-yellow" },
   { prefix: "pingroup", label: "/pingroup", description: "Pin group at position in window (^ $ or number)", category: "action", color: "text-accent-yellow" },
   { prefix: "unpingroup", label: "/unpingroup", description: "Unpin group from fixed position in window", category: "action", color: "text-accent-yellow" },
+  { prefix: "readlater", label: "/readlater", description: "Save matching tabs to Reading List", category: "action", color: "text-accent-green" },
+  { prefix: "recent", label: "/recent", description: "Show recently closed tabs", category: "action", color: "text-accent-blue" },
+  { prefix: "restore", label: "/restore", description: "Restore last closed tab(s)", category: "action", color: "text-accent-blue" },
+  { prefix: "aigroup", label: "/aigroup", description: "AI-powered smart grouping (on-device)", category: "action", color: "text-accent-cyan" },
+  { prefix: "sidepanel", label: "/sidepanel", description: "Open TabOrdo in Side Panel", category: "action", color: "text-accent-blue" },
+  { prefix: "freeze", label: "/freeze", description: "Freeze (suspend) matching tabs", category: "action", color: "text-accent-cyan" },
 ];
 
 export const VIEW_COMMANDS: CommandDefinition[] = [
@@ -74,6 +82,8 @@ export const TRIAGE_COMMANDS: CommandDefinition[] = [
   { prefix: "@r", label: "@r", description: "Recently active tabs", category: "view", color: "text-accent-blue" },
   { prefix: "@s", label: "@s", description: "Suspended tabs", category: "view", color: "text-accent-pink" },
   { prefix: "@u", label: "@u", description: "Ungrouped tabs", category: "view", color: "text-accent-orange" },
+  { prefix: "@f", label: "@f", description: "Frozen tabs (memory-suspended)", category: "view", color: "text-accent-cyan" },
+  { prefix: "@shared", label: "@shared", description: "Tabs in shared groups", category: "view", color: "text-accent-green" },
 ];
 
 export const ALL_COMMANDS = [...SEARCH_COMMANDS, ...ACTION_COMMANDS, ...VIEW_COMMANDS];

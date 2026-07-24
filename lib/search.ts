@@ -17,6 +17,7 @@ export interface SearchResult {
   audible?: boolean;
   lastAccessed?: number;
   discarded?: boolean;
+  frozen?: boolean;
   muted?: boolean;
 }
 
@@ -225,6 +226,7 @@ export function tabsToSearchItems(tabs: TabInfo[]): SearchResult[] {
     audible: tab.audible,
     lastAccessed: tab.lastAccessed,
     discarded: tab.discarded,
+    frozen: tab.frozen,
     muted: tab.mutedInfo?.muted,
   }));
 }

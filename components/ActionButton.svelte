@@ -56,7 +56,7 @@
     onmouseleave={hideTip}
     onfocus={showTip}
     onblur={hideTip}
-    class="relative overflow-hidden w-full flex flex-col items-center gap-1 px-3 py-2.5 rounded-lg border transition-all text-sm
+    class="relative overflow-hidden w-full flex flex-col items-center gap-1 px-3 py-2.5 rounded-lg border transition-[color,background-color,border-color,box-shadow] text-sm
       focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface
       {confirming ? 'ring-2 ring-accent-red/60 border-accent-red/50' : ''}
       {disabled ? 'opacity-40 cursor-not-allowed border-border bg-surface' :

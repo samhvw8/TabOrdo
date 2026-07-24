@@ -37,6 +37,12 @@
       { action: "save", label: "Save to File" },
       { action: "load", label: "Load from File" },
     ]},
+    { title: "Smart", items: [
+      { action: "aigroup", label: "AI Group" },
+      { action: "readlater", label: "Read Later" },
+      { action: "recent", label: "Recently Closed" },
+      { action: "sidepanel", label: "Side Panel" },
+    ]},
     { title: "Other", items: [
       { action: "feedback", label: "Feedback" },
     ]},

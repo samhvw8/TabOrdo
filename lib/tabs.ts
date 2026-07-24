@@ -17,6 +17,7 @@ export interface TabInfo {
   audible?: boolean;
   mutedInfo?: chrome.tabs.MutedInfo;
   discarded?: boolean;
+  frozen?: boolean;
   lastAccessed?: number;
 }
 
@@ -53,6 +54,7 @@ export async function getAllTabs(): Promise<TabInfo[]> {
       audible: tab.audible,
       mutedInfo: tab.mutedInfo,
       discarded: tab.discarded,
+      frozen: (tab as any).frozen,
       lastAccessed: tab.lastAccessed,
     };
   });
