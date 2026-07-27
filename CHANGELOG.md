@@ -1,15 +1,30 @@
 # Changelog
 
-## 0.6.0 — 2026-07-25
+## 0.6.0 — 2026-07-27
+
+### Renamed
+
+- **Position pins are now "locks"** (`/lock`, `/unlock`, `/lockgroup`, `/unlockgroup`) — "pin" collided head-on with Chrome's own tab pinning, so `/pin` did something other than what people typing it expected. `/pin`, `/unpin`, `/pingroup` and `/unpingroup` keep working as unadvertised aliases; the Pins panel is now "Locks", and `/p` is described as "Chrome-pinned tabs only" to settle which pin it means
+- **`@s` is "Unloaded", `@f` is "Paused by Chrome"** — the two views were labelled "Suspended" and "Frozen", which nothing distinguishes. `@s` lists tabs dropped from memory that reload when you return to them (what `/discard` produces); `@f` lists tabs Chrome's own memory saver paused, which TabOrdo never sets
+- **`/freeze` is no longer listed as its own command** — it called the same code as `/discard` and reported "Froze", implying a capability that was never implemented. It still works, as a hidden alias
 
 ### New Features
 
+- **Abbreviation search** — `yt` now finds YouTube and `gh` finds GitHub. Matching added an in-order character tier, ranked by the tightest window containing the query, so a real match still outranks a scattered coincidence
+- **Rule tester** — the Rules editor can now test a URL against your rules and reports which one claims it and via which pattern. It also names rules that match but sit later in the list, which can never fire: rule order decides the winner, and nothing in the editor showed that before
+- **Automation activity on the dashboard** — the most recent background group/ungroup now appears directly beneath the toggles that caused it, so "why did my tab move" has an answer next to the switch rather than only in Settings
 - **Chrome API integrations** — Reading List (`/readlater`, `/rl`), Side Panel (`/sidepanel`), recently-closed sessions (`/rc`, `/recent`, `/restore`), on-device AI grouping via Gemini Nano (`/aigroup`), and action-menu context menu entries
 - **Coexistence guards** — group-settle window, self-write tracking, and shared/saved-group detection so TabOrdo stops fighting other tab extensions
 - **Automation activity log** — Settings now shows the last 20 automatic group/ungroup actions, for diagnosing conflicts with other extensions
 
 ### Bug Fixes
 
+- **Fix undo after AI grouping stranding tabs in the wrong window** — `/aigroup` consolidates tabs across windows before grouping them, but the undo snapshot recorded only group membership, so undoing restored the groups and left every moved tab wherever the AI had put it. Snapshots now record the window and position too, and undo moves tabs back before regrouping
+- **Fix `Cmd+E` then `Enter` doing nothing** — the empty-query result list was never populated on open, so the intended "jump back to the previous tab" gesture silently did nothing at all. The dashboard now also shows which tab `Enter` will jump to
+- **Fix fuzzy matches never appearing on common searches** — all five ranking tiers shared one result budget, so prefix and substring matches filled every slot and the fuzzy results were computed and then discarded. Approximate matches now have reserved space
+- **Fix the Side Panel rendering at a fixed popup size** — the panel is resizable but mounted a hard-coded 450×600 layout, so it clipped when narrow and left dead space when wide. It now fills the panel, and no longer grabs keyboard focus from the page when opened
+- **Fix the getting-started hint showing only to people who don't need it** — it appeared at five tabs or fewer, which is nobody who just installed a tab manager; it now appears once you have enough tabs for the advice to mean something
+- **Fix AI grouping's Retry button skipping the undo snapshot** — retrying after a failure left the run unundoable, unlike every other way of starting it
 - **Fix Merge dissolving groups from other windows** — Chrome ungroups a tab when it crosses windows, so merging flattened every group outside the current window into loose tabs; groups are now rebuilt after the move, folding into a same-titled group already present instead of creating a duplicate. Note that folding is one-way: two separate groups sharing a title and colour become one, and undo cannot split them again
 - **Fix Unite, Isolate, Split V/H and Split by Domain dissolving groups** — the same cross-window defect as Merge; all four now preserve groups, including the first tab, which Chrome detaches when it opens the new window
 - **Stop leaking archived URLs** — the archive page preferred each entry's stored favicon URL, so opening it fired a request to every archived site's own server for tabs closed weeks ago (and fell back to `google.com/s2/favicons`); icons now come from Chrome's local favicon cache only, and the URL is no longer stored (adds the `favicon` permission)
@@ -33,6 +48,10 @@
 
 ### Improvements
 
+- **Destructive buttons ask twice** — Merge, Dedup, Close Left/Right/Old/Same-Site and Focus now need a second click, since one stray click on a dashboard tile could close a lot of tabs. Typing the equivalent slash command still runs immediately: typing it is already deliberate
+- **Window commands say what they actually do** — the nine of them read almost identically before. Descriptions now separate pulling tabs here (`/merge`, `/unite`) from sending them out (`/split`, `/extract`, `/isolate`, `/splitdomain`) from merely arranging windows on screen without moving any tabs (`/splitv`, `/splith`, `/stack`)
+- **The command list is grouped** — forty-odd actions now cluster under Organize, Windows, Order, Close, Memory, Session and Audio headings in both the `/` list and the command guide, instead of one flat run
+- **Navigation separates panels from everything else** — Help now lives in the sidebar rather than a lone button beside the search box, and Archive is marked as opening a new tab, so the rail no longer mixes in-place panels with things that navigate away
 - **Config caching** — the service worker no longer makes several storage round-trips per tab event, and rapid settings toggles no longer race each other
 - **CI runs the test suite** and the typecheck is green again; the publish workflow now runs both before submitting, instead of trusting a separate workflow it never waited for
 - **Pin auto-follow moved to its own listener**, so toggling a pin no longer runs the grouping automations' prologue first
