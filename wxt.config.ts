@@ -23,7 +23,7 @@ export default defineConfig({
       48: "assets/icon-48.png",
       128: "assets/icon-128.png",
     },
-    permissions: ["tabs", "tabGroups", "bookmarks", "history", "storage", "alarms", "scripting", "activeTab", "readingList", "contextMenus", "sessions"],
+    permissions: ["tabs", "tabGroups", "bookmarks", "history", "storage", "alarms", "scripting", "activeTab", "readingList", "contextMenus", "sessions", "favicon"],
     side_panel: {
       default_path: "sidepanel.html",
     },

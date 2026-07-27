@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { getPinnedTabs, getPinnedGroups, savePinnedTabs, unpinTab, unpinGroup, reorderPins, applyPinsToGroup, type PinnedTabEntry, type PinnedGroupEntry } from "../lib/pin.ts";
   import { switchToTab } from "../lib/tabs.ts";
+  import { faviconCacheUrl } from "../lib/favicon.ts";
 
   let pinnedTabs = $state<PinnedTabEntry[]>([]);
   let pinnedGroups = $state<PinnedGroupEntry[]>([]);
@@ -173,13 +174,13 @@
 
 <div class="flex-1 overflow-y-auto px-3 py-2 min-h-0">
   <div class="flex items-center justify-between mb-3">
-    <span class="text-xs font-semibold text-text">Pinned Tabs & Groups</span>
+    <span class="text-xs font-semibold text-text">Locked Tabs & Groups</span>
     <div class="flex items-center gap-2">
       {#if closedPinCount > 0}
         <button
           class="text-[10px] text-accent-red hover:text-accent-red/80 transition-colors"
           onclick={cleanupClosedPins}
-          title="Remove {closedPinCount} pin(s) for tabs that are no longer open"
+          title="Remove {closedPinCount} lock(s) for tabs that are no longer open"
         >Clean {closedPinCount} closed</button>
       {/if}
       <button
@@ -189,10 +190,10 @@
     </div>
   </div>
 
-  <!-- Pinned Groups (window-level) -->
+  <!-- Locked Groups (window-level) -->
   <div class="mb-3">
     <div class="flex items-center gap-2 mb-1.5">
-      <span class="text-[10px] font-semibold uppercase tracking-wider text-accent-yellow">Pinned Groups</span>
+      <span class="text-[10px] font-semibold uppercase tracking-wider text-accent-yellow">Locked Groups</span>
       <div class="flex-1 h-px bg-border/50"></div>
       <span class="text-[10px] text-text-muted">{pinnedGroups.length}</span>
     </div>
@@ -215,10 +216,10 @@
     {/if}
   </div>
 
-  <!-- Pinned Tabs (by group) -->
+  <!-- Locked Tabs (by group) -->
   <div>
     <div class="flex items-center gap-2 mb-1.5">
-      <span class="text-[10px] font-semibold uppercase tracking-wider text-accent-cyan">Pinned Tabs</span>
+      <span class="text-[10px] font-semibold uppercase tracking-wider text-accent-cyan">Locked Tabs</span>
       <div class="flex-1 h-px bg-border/50"></div>
       <span class="text-[10px] text-text-muted">{pinnedTabs.length}</span>
     </div>
@@ -274,7 +275,7 @@
 
                 <!-- Favicon -->
                 <img
-                  src="chrome-extension://{chrome.runtime.id}/_favicon/?pageUrl={encodeURIComponent(pin.url)}&size=16"
+                  src={faviconCacheUrl(pin.url)}
                   alt=""
                   class="w-3.5 h-3.5 shrink-0 rounded-sm mx-1"
                   onerror={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
@@ -302,14 +303,5 @@
         </div>
       {/each}
     {/if}
-  </div>
-
-  <!-- Raw storage data for debugging -->
-  <div class="mt-4 pt-3 border-t border-border">
-    <div class="flex items-center gap-2 mb-1.5">
-      <span class="text-[10px] font-semibold uppercase tracking-wider text-text-muted">Raw Storage</span>
-      <div class="flex-1 h-px bg-border/50"></div>
-    </div>
-    <pre class="text-[9px] text-text-muted bg-surface-hover rounded-md p-2 overflow-x-auto whitespace-pre-wrap break-all max-h-40 overflow-y-auto">{JSON.stringify({ pinnedTabs, pinnedGroups }, null, 2)}</pre>
   </div>
 </div>

@@ -1,7 +1,10 @@
-import { getDomain as tldtsDomain } from "tldts";
 import { getRules, getUseRules, matchDomainToRule } from "./rules.ts";
+import { getDomain, getFullHostname, hashCode } from "./url.ts";
 import { snapshotClosedTabs } from "./undo.ts";
-import { pinTab, unpinTab, getPinnedTabs, applyPinsToGroup, applyAllPins, pinGroup, unpinGroup, applyGroupPinsToWindow, applyAllGroupPins, buildGroupOrder } from "./pin.ts";
+import { pinTab, unpinTab, getPinnedTabs, applyPinsToGroup, applyAllPins, pinGroup, unpinGroup, applyGroupPinsToWindow, applyAllGroupPins, buildGroupOrder, groupStartIndex } from "./pin.ts";
+
+// Re-exported so existing importers keep their import site; the definitions live in url.ts.
+export { getDomain, getFullHostname, hashCode };
 
 export interface TabInfo {
   id: number;
@@ -326,7 +329,7 @@ export async function groupTabsByDomain(
   await applyAllGroupPins();
 }
 
-function pickMajorityWindow(tabs: chrome.tabs.Tab[]): number {
+export function pickMajorityWindow(tabs: chrome.tabs.Tab[]): number {
   const counts = new Map<number, number>();
   for (const tab of tabs) {
     counts.set(tab.windowId, (counts.get(tab.windowId) || 0) + 1);
@@ -394,19 +397,145 @@ export async function removeDuplicates(): Promise<number> {
   return toClose.length;
 }
 
-export async function mergeAllWindows(): Promise<void> {
+interface CarriedGroup {
+  title?: string;
+  color?: chrome.tabGroups.ColorEnum;
+  collapsed?: boolean;
+  tabIds: number[];
+}
+
+// Chrome ungroups a tab the moment it crosses into another window, so a plain move loses
+// every group from the windows being merged. Record what each tab belonged to first, then
+// rebuild those groups on the far side.
+function carryGroups(tabs: chrome.tabs.Tab[], groups: chrome.tabGroups.TabGroup[]): CarriedGroup[] {
+  const groupById = new Map(groups.map((g) => [g.id, g]));
+  const carried = new Map<string, CarriedGroup>();
+
+  // Sort by (windowId, index), not index alone: tab.index restarts at 0 in every window, so
+  // a flat numeric sort round-robins across windows and interleaves the tabs of two
+  // same-titled groups that are about to fold into one.
+  const ordered = [...tabs].sort((a, b) => a.windowId - b.windowId || a.index - b.index);
+  for (const tab of ordered) {
+    if (tab.groupId === -1 || tab.id === undefined) continue;
+    const group = groupById.get(tab.groupId);
+    if (!group) continue;
+    // Same-titled groups from different windows fold into one; untitled groups can't be
+    // matched by name, so they stay distinct.
+    const key = group.title ? `title:${group.title} ${group.color}` : `id:${group.id}`;
+    let entry = carried.get(key);
+    if (!entry) {
+      entry = { title: group.title, color: group.color, collapsed: group.collapsed, tabIds: [] };
+      carried.set(key, entry);
+    }
+    entry.tabIds.push(tab.id);
+  }
+  return [...carried.values()];
+}
+
+async function restoreGroup(
+  entry: CarriedGroup,
+  windowId: number,
+  existing: chrome.tabGroups.TabGroup[],
+  mergeByTitle: boolean
+): Promise<boolean> {
+  if (entry.tabIds.length === 0) return true;
+  // Re-join a matching group already in the target window, so merging twice doesn't leave
+  // two "Work" groups sitting next to each other.
+  const match = mergeByTitle && entry.title
+    ? existing.find((g) => g.title === entry.title && g.color === entry.color)
+    : undefined;
+  try {
+    if (match) {
+      await chrome.tabs.group({ tabIds: entry.tabIds, groupId: match.id });
+      return true;
+    }
+    const groupId = await chrome.tabs.group({ tabIds: entry.tabIds, createProperties: { windowId } });
+    const props: chrome.tabGroups.UpdateProperties = { collapsed: entry.collapsed };
+    if (entry.title !== undefined) props.title = entry.title;
+    if (entry.color !== undefined) props.color = entry.color;
+    await chrome.tabGroups.update(groupId, props);
+    return true;
+  } catch (e) {
+    console.warn("[TabOrdo] could not restore group", entry.title, e);
+    return false;
+  }
+}
+
+export interface MoveGroupsResult {
+  moved: number;
+  /** Groups that could not be rebuilt; their tabs are sitting loose or untitled. */
+  groupsFailed: number;
+}
+
+async function restoreCarried(
+  carried: CarriedGroup[],
+  windowId: number,
+  mergeByTitle: boolean
+): Promise<number> {
+  const existing = mergeByTitle ? await chrome.tabGroups.query({ windowId }) : [];
+  let failed = 0;
+  for (const entry of carried) {
+    if (!(await restoreGroup(entry, windowId, existing, mergeByTitle))) failed++;
+  }
+  return failed;
+}
+
+/**
+ * Move tabs into an existing window without losing their groups. Chrome silently ungroups
+ * a tab the moment it crosses a window boundary, so every caller that moves tabs between
+ * windows has to capture group membership first and rebuild it afterwards.
+ */
+export async function moveTabsPreservingGroups(
+  tabs: chrome.tabs.Tab[],
+  targetWindowId: number,
+  opts: { index?: number; mergeByTitle?: boolean } = {}
+): Promise<MoveGroupsResult> {
+  const { index = -1, mergeByTitle = true } = opts;
+  const ids = tabs.map((t) => t.id).filter((id): id is number => id !== undefined);
+  if (ids.length === 0) return { moved: 0, groupsFailed: 0 };
+
+  const carried = carryGroups(tabs, await getAllGroups());
+  await chrome.tabs.move(ids, { windowId: targetWindowId, index });
+  const groupsFailed = await restoreCarried(carried, targetWindowId, mergeByTitle);
+  return { moved: ids.length, groupsFailed };
+}
+
+/**
+ * Move tabs into a brand-new window without losing their groups. Split out from
+ * moveTabsPreservingGroups because windows.create({tabId}) detaches that first tab too —
+ * a move-only primitive would leave the first tab ungrouped.
+ */
+export async function moveTabsToNewWindow(
+  tabs: chrome.tabs.Tab[],
+  opts: { mergeByTitle?: boolean } = {}
+): Promise<{ windowId: number; result: MoveGroupsResult } | null> {
+  const { mergeByTitle = false } = opts;
+  const withIds = tabs.filter((t) => t.id !== undefined);
+  if (withIds.length === 0) return null;
+
+  // Capture before creating the window — the first tab loses its group on create().
+  const carried = carryGroups(withIds, await getAllGroups());
+
+  const [first, ...rest] = withIds;
+  const win = await chrome.windows.create({ tabId: first.id! });
+  const windowId = win.id!;
+  if (rest.length > 0) {
+    await chrome.tabs.move(rest.map((t) => t.id!), { windowId, index: -1 });
+  }
+  const groupsFailed = await restoreCarried(carried, windowId, mergeByTitle);
+  return { windowId, result: { moved: withIds.length, groupsFailed } };
+}
+
+export async function mergeAllWindows(): Promise<MoveGroupsResult> {
   const currentWindow = await chrome.windows.getCurrent();
+  const targetWindowId = currentWindow.id!;
   const allTabs = await chrome.tabs.query({});
   const otherTabs = allTabs.filter(
-    (t) => t.windowId !== currentWindow.id && !t.pinned
+    (t) => t.windowId !== targetWindowId && !t.pinned
   );
+  if (otherTabs.length === 0) return { moved: 0, groupsFailed: 0 };
 
-  if (otherTabs.length > 0) {
-    await chrome.tabs.move(otherTabs.map((t) => t.id!), {
-      windowId: currentWindow.id!,
-      index: -1,
-    });
-  }
+  return moveTabsPreservingGroups(otherTabs, targetWindowId);
 }
 
 export async function splitTabToWindow(tabId: number): Promise<void> {
@@ -493,7 +622,10 @@ export async function muteTab(tabId: number, muted: boolean): Promise<void> {
   await chrome.tabs.update(tabId, { muted });
 }
 
-export async function setTabVolume(tabId: number, volume: number): Promise<void> {
+// Returns false when the script could not be injected — TabOrdo declares no host
+// permissions, so only the tab the user just acted on (activeTab) is reachable.
+// Callers must report that instead of leaving the user with a silent no-op.
+export async function setTabVolume(tabId: number, volume: number): Promise<boolean> {
   try {
     await chrome.scripting.executeScript({
       target: { tabId },
@@ -510,26 +642,14 @@ export async function setTabVolume(tabId: number, volume: number): Promise<void>
       },
       args: [Math.max(0, Math.min(1, volume))],
     });
+    return true;
   } catch (e) {
     console.error("[TabOrdo] Failed to set volume for tab", tabId, e);
+    return false;
   }
 }
 
-export function getDomain(url: string): string {
-  try {
-    return tldtsDomain(url, { allowPrivateDomains: false }) || new URL(url).hostname;
-  } catch {
-    return url;
-  }
-}
 
-export function getFullHostname(url: string): string {
-  try {
-    return new URL(url).hostname.replace(/^www\./, "");
-  } catch {
-    return "";
-  }
-}
 
 function normalizeUrl(url: string): string | null {
   try {
@@ -563,10 +683,8 @@ export async function uniteDomain(): Promise<number> {
   const toMove = allTabs.filter(
     (t) => !t.pinned && t.windowId !== currentWin.id && getDomain(t.url || "") === domain
   );
-  for (const tab of toMove) {
-    await chrome.tabs.move(tab.id!, { windowId: currentWin.id!, index: -1 });
-  }
-  return toMove.length;
+  const { moved } = await moveTabsPreservingGroups(toMove, currentWin.id!);
+  return moved;
 }
 
 export async function isolateDomain(): Promise<number> {
@@ -577,12 +695,8 @@ export async function isolateDomain(): Promise<number> {
   const tabs = await chrome.tabs.query({ currentWindow: true });
   const sameDomain = tabs.filter((t) => !t.pinned && getDomain(t.url || "") === domain);
   if (sameDomain.length < 1) return 0;
-  const [first, ...rest] = sameDomain;
-  const win = await chrome.windows.create({ tabId: first.id! });
-  if (rest.length > 0) {
-    await chrome.tabs.move(rest.map((t) => t.id!), { windowId: win.id!, index: -1 });
-  }
-  return sameDomain.length;
+  const outcome = await moveTabsToNewWindow(sameDomain);
+  return outcome?.result.moved ?? 0;
 }
 
 export async function splitWindow(direction: "vertical" | "horizontal"): Promise<void> {
@@ -593,11 +707,9 @@ export async function splitWindow(direction: "vertical" | "horizontal"): Promise
   const rightHalf = unpinned.slice(mid);
   if (rightHalf.length === 0) return;
 
-  const [first, ...rest] = rightHalf;
-  const newWin = await chrome.windows.create({ tabId: first.id! });
-  if (rest.length > 0) {
-    await chrome.tabs.move(rest.map((t) => t.id!), { windowId: newWin.id!, index: -1 });
-  }
+  const outcome = await moveTabsToNewWindow(rightHalf);
+  if (!outcome) return;
+  const newWin = { id: outcome.windowId };
 
   const w = win.width || 1280;
   const h = win.height || 800;
@@ -632,12 +744,7 @@ export async function splitByDomain(): Promise<number> {
 
   let created = 0;
   for (let i = 1; i < groups.length; i++) {
-    const [first, ...rest] = groups[i];
-    const win = await chrome.windows.create({ tabId: first.id! });
-    if (rest.length > 0) {
-      await chrome.tabs.move(rest.map((t) => t.id!), { windowId: win.id!, index: -1 });
-    }
-    created++;
+    if (await moveTabsToNewWindow(groups[i])) created++;
   }
   return created;
 }
@@ -723,23 +830,8 @@ export async function moveGroup(posStr: string): Promise<string> {
   else if (position === "last") targetIndex = -1;
   else {
     const groups = await chrome.tabGroups.query({ windowId: active.windowId });
-    const nonPinnedStart = pinnedCount;
-    const maxGroups = groups.length;
-    const groupPos = Math.min(position, maxGroups);
-    const sortedTabs = tabs.filter((t) => !t.pinned).sort((a, b) => a.index - b.index);
-    let currentGroupIdx = 0;
-    targetIndex = nonPinnedStart;
-    let lastGroupId = -1;
-    for (const t of sortedTabs) {
-      if (t.groupId !== -1 && t.groupId !== lastGroupId && t.groupId !== groupId) {
-        currentGroupIdx++;
-        if (currentGroupIdx >= groupPos) break;
-        lastGroupId = t.groupId;
-      } else if (t.groupId === -1 && lastGroupId !== -1) {
-        lastGroupId = -1;
-      }
-      if (t.groupId !== groupId) targetIndex = t.index + 1;
-    }
+    // position is 1-based user input; groupStartIndex takes a 0-based slot.
+    targetIndex = groupStartIndex(tabs, groupId, Math.min(position, groups.length) - 1, pinnedCount);
   }
 
   await chrome.tabs.move(groupTabIds, { index: targetIndex });
@@ -747,13 +839,6 @@ export async function moveGroup(posStr: string): Promise<string> {
   return `Moved group to position ${position === "first" ? "first" : position === "last" ? "last" : position}`;
 }
 
-export function hashCode(str: string): number {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    hash = ((hash << 5) - hash + str.charCodeAt(i)) | 0;
-  }
-  return hash;
-}
 
 const PIN_BADGE = "📌 ";
 
@@ -803,7 +888,6 @@ export async function pinCurrentTab(posStr: string): Promise<string> {
   if (!group?.title) return "Group has no title";
 
   const groupTabs = (await chrome.tabs.query({ groupId: active.groupId })).sort((a, b) => a.index - b.index);
-  const baseIndex = groupTabs[0]?.index ?? 0;
 
   const existingPins = (await getPinnedTabs()).filter((p) => p.groupName === group.title);
 

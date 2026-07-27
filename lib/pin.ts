@@ -85,21 +85,23 @@ export async function applyPinsToGroup(
   const groupPins = pins.filter((p) => p.groupName === groupTitle);
   if (groupPins.length === 0) return 0;
 
-  const tabs = await chrome.tabs.query({ groupId });
+  let tabs = (await chrome.tabs.query({ groupId })).sort((a, b) => a.index - b.index);
   if (tabs.length === 0) return 0;
-  tabs.sort((a, b) => a.index - b.index);
 
-  const baseIndex = tabs[0].index;
   let moved = 0;
 
   const sorted = [...groupPins].sort((a, b) => a.position - b.position);
   for (const pin of sorted) {
     const tab = (pin.tabId && tabs.find((t) => t.id === pin.tabId)) || tabs.find((t) => t.url === pin.url);
     if (!tab) continue;
+    const baseIndex = tabs[0].index;
     const targetIndex = Math.min(baseIndex + pin.position, baseIndex + tabs.length - 1);
     if (tab.index !== targetIndex) {
       await chrome.tabs.move(tab.id!, { index: targetIndex });
       moved++;
+      // Moving a tab shifts every index after it. Re-read before placing the next pin,
+      // otherwise pins 2..n are positioned against indices that no longer exist.
+      tabs = (await chrome.tabs.query({ groupId })).sort((a, b) => a.index - b.index);
     }
   }
 
@@ -171,6 +173,33 @@ export async function unpinGroup(groupTitle: string): Promise<boolean> {
   return true;
 }
 
+// Tab-strip index at which a group must start to end up at `targetPos` (0-based) among the
+// window's groups. Walks the strip counting group boundaries and skipping the group being
+// moved. Shared by /movegroup and the group-pin applier, which used to carry separate copies.
+export function groupStartIndex(
+  tabs: chrome.tabs.Tab[],
+  groupId: number,
+  targetPos: number,
+  pinnedCount: number
+): number {
+  if (targetPos <= 0) return pinnedCount;
+  const strip = [...tabs].filter((t) => !t.pinned).sort((a, b) => a.index - b.index);
+  let seenGroups = 0;
+  let lastGroupId = -1;
+  let targetIndex = pinnedCount;
+  for (const t of strip) {
+    if (t.groupId !== -1 && t.groupId !== lastGroupId && t.groupId !== groupId) {
+      seenGroups++;
+      if (seenGroups > targetPos) break;
+      lastGroupId = t.groupId;
+    } else if (t.groupId === -1) {
+      lastGroupId = -1;
+    }
+    if (t.groupId !== groupId) targetIndex = t.index + 1;
+  }
+  return targetIndex;
+}
+
 export function buildGroupOrder(tabs: chrome.tabs.Tab[]): number[] {
   const seen = new Set<number>();
   const order: number[] = [];
@@ -201,31 +230,13 @@ export async function applyGroupPinsToWindow(windowId: number): Promise<number> 
     const groupTabIds = tabs.filter((t) => t.groupId === group.id).sort((a, b) => a.index - b.index).map((t) => t.id!);
     if (groupTabIds.length === 0) continue;
 
-    const nonPinnedTabs = tabs.filter((t) => !t.pinned).sort((a, b) => a.index - b.index);
     const groupOrder = buildGroupOrder(tabs);
 
     const currentPos = groupOrder.indexOf(group.id);
     const targetPos = Math.min(pin.position, groupOrder.length - 1);
     if (currentPos === targetPos) continue;
 
-    let targetIndex: number;
-    if (targetPos === 0) {
-      targetIndex = pinnedCount;
-    } else {
-      let gIdx = 0;
-      let lastSeenGroupId = -1;
-      targetIndex = pinnedCount;
-      for (const t of nonPinnedTabs) {
-        if (t.groupId !== -1 && t.groupId !== lastSeenGroupId && t.groupId !== group.id) {
-          gIdx++;
-          if (gIdx > targetPos) break;
-          lastSeenGroupId = t.groupId;
-        } else if (t.groupId === -1) {
-          lastSeenGroupId = -1;
-        }
-        if (t.groupId !== group.id) targetIndex = t.index + 1;
-      }
-    }
+    const targetIndex = groupStartIndex(tabs, group.id, targetPos, pinnedCount);
 
     await chrome.tabs.move(groupTabIds, { index: targetIndex });
     await chrome.tabs.group({ tabIds: groupTabIds, groupId: group.id });

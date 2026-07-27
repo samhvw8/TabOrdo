@@ -18,6 +18,13 @@ jobs:
 
       - run: npm ci
 
+      # Gate the submission on its own checks. build.yml runs these too, but it triggers on
+      # push to main and nothing makes a release wait for it — without this, publishing can
+      # ship a build that build.yml is about to fail.
+      - run: npm run check
+
+      - run: npm test
+
       - run: npm run zip
 
       - name: Submit to Chrome Web Store

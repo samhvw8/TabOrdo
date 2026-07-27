@@ -1,6 +1,6 @@
 # Privacy Policy — TabOrdo
 
-**Last updated:** May 25, 2026
+**Last updated:** July 25, 2026
 
 ## Data Collection
 
@@ -13,16 +13,22 @@ TabOrdo does **not** collect, transmit, or store any personal data. All data rem
 | Tab titles and URLs | Display in command palette, search, sort, group, deduplicate | No (in-memory only) | No |
 | Bookmarks | Search via /b command | No | No |
 | Browsing history | Search via /h command | No | No |
-| Favicon URLs | Display site icons in tab list | No | No |
-| User preferences | Persist settings, auto-group rules, archived tabs | Yes (local storage only) | No |
+| Reading List entries | Read and add entries via /rl and /readlater | No | No |
+| Recently closed tabs | Restore via /rc, /recent and /restore | No | No |
+| Favicons | Display site icons. Open tabs use the icon the browser has already loaded; the archive and pins panel read Chrome's local favicon cache | No | No |
+| User preferences | Persist settings, auto-group rules, archived tabs, activity log | Yes (local storage only) | No |
 
 ## Permissions
 
 TabOrdo requests browser permissions solely to provide tab management features. No data is sent to any external server, analytics service, or third party.
 
+## On-Device AI
+
+The optional `/aigroup` command sends tab titles and URLs to **Gemini Nano, which runs entirely inside your own browser**. Nothing leaves your device, and the feature is off unless you invoke it. If the on-device model is unavailable, the command reports an error rather than falling back to any remote service.
+
 ## Third-Party Services
 
-TabOrdo uses **no** third-party services, analytics, tracking, or remote code.
+TabOrdo uses **no** third-party services, analytics, tracking, remote code, or remote favicon services.
 
 ## Changes
 

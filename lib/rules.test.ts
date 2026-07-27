@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { domainMatches, ruleMatches, ruleToRegex, longestCommonSubstring, generalizePatterns, isIgnoredGroupName, type IgnoreRule } from "./rules.ts";
+import { domainMatches, matchDomainToRule, ruleMatches, ruleToRegex, longestCommonSubstring, generalizePatterns, isIgnoredGroupName, isCompiledPattern, MAX_PATTERN_LENGTH, type IgnoreRule, type GroupRule } from "./rules.ts";
 
 describe("domainMatches", () => {
   it("exact match", () => {
@@ -251,5 +251,72 @@ describe("generalizePatterns", () => {
     ];
     const result = generalizePatterns(rules);
     expect(result).toBe(".*file\\.txt.*");
+  });
+});
+
+describe("pattern length cap", () => {
+  const long = "a".repeat(MAX_PATTERN_LENGTH + 1);
+
+  // The cap guards against catastrophic regex backtracking. Applying it to plain literals
+  // silently disabled valid rules for long URLs: the UI accepted the rule, listed it, and it
+  // never fired — and for an ignore rule "no match" means the tab gets grouped anyway.
+  it("still matches a literal pattern longer than the cap", () => {
+    expect(ruleMatches(long, { pattern: long, enabled: true, isRegex: false })).toBe(true);
+  });
+
+  it("matches a long literal case-insensitively", () => {
+    const upper = long.toUpperCase();
+    expect(ruleMatches(upper, { pattern: long, enabled: true, isRegex: false })).toBe(true);
+  });
+
+  it("rejects a regex pattern longer than the cap", () => {
+    expect(ruleMatches("aaa", { pattern: long, enabled: true, isRegex: true })).toBe(false);
+  });
+
+  it("rejects a wildcard pattern longer than the cap", () => {
+    const wild = "a".repeat(MAX_PATTERN_LENGTH) + "*";
+    expect(ruleMatches("aaa", { pattern: wild, enabled: true, isRegex: false })).toBe(false);
+  });
+
+  it("matches a long literal domain, but not a long wildcard one", () => {
+    expect(domainMatches(long, long)).toBe(true);
+    expect(domainMatches("x.com", "*" + "a".repeat(MAX_PATTERN_LENGTH))).toBe(false);
+  });
+
+  it("classifies which patterns are subject to the cap", () => {
+    expect(isCompiledPattern({ pattern: "abc", isRegex: false })).toBe(false);
+    expect(isCompiledPattern({ pattern: "a*c", isRegex: false })).toBe(true);
+    expect(isCompiledPattern({ pattern: "abc", isRegex: true })).toBe(true);
+  });
+});
+
+describe("matchDomainToRule", () => {
+  const rule = (id: string, patterns: string[]): GroupRule =>
+    ({ id, name: id, color: "blue", patterns }) as GroupRule;
+
+  it("returns null when nothing matches", () => {
+    expect(matchDomainToRule("example.com", [rule("work", ["github.com"])])).toBeNull();
+  });
+
+  it("matches a bare domain and its subdomains", () => {
+    const rules = [rule("work", ["github.com"])];
+    expect(matchDomainToRule("github.com", rules)?.id).toBe("work");
+    expect(matchDomainToRule("gist.github.com", rules)?.id).toBe("work");
+  });
+
+  it("first rule in list order wins when several match", () => {
+    const rules = [rule("first", ["github.com"]), rule("second", ["github.com"])];
+    expect(matchDomainToRule("github.com", rules)?.id).toBe("first");
+  });
+
+  it("a broad earlier pattern permanently shadows a specific later one", () => {
+    // What the Rules tester surfaces: "gist" can never fire behind a "*.github.com" rule.
+    const rules = [rule("catchall", ["*.github.com"]), rule("gist", ["gist.github.com"])];
+    expect(matchDomainToRule("gist.github.com", rules)?.id).toBe("catchall");
+  });
+
+  it("skips rules whose patterns array is missing", () => {
+    const broken = { id: "x", name: "x", color: "blue" } as unknown as GroupRule;
+    expect(matchDomainToRule("github.com", [broken, rule("ok", ["github.com"])])?.id).toBe("ok");
   });
 });

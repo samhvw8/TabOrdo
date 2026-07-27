@@ -1,10 +1,11 @@
 import { getConfig, matchDomainToRule, isIgnoredUrl, isIgnoredGroupName } from "../../lib/rules.ts";
-import { getFullHostname, getDomain, sortTabsInWindow, GROUP_COLORS, hashCode } from "../../lib/tabs.ts";
+import { getFullHostname, getDomain, sortTabsInWindow, pickMajorityWindow, GROUP_COLORS, hashCode } from "../../lib/tabs.ts";
 import { syncPinUrl } from "../../lib/pin.ts";
 import { findBounceTarget } from "../../lib/bounce.ts";
 import { logAction } from "../../lib/actionLog.ts";
 import { addToReadingList } from "../../lib/readinglist.ts";
 import { checkAIAvailability, suggestGroups, setAIProgress, getAIProgress, defaultProgress } from "../../lib/ai.ts";
+import { isBulkLocked, acquireBulkLock, releaseBulkLock, newLockOwner, AI_LEASE_MS } from "../../lib/bulklock.ts";
 let pinSyncInProgress = false;
 const ungroupTimers = new Map<number, ReturnType<typeof setTimeout>>();
 
@@ -44,8 +45,7 @@ function scheduleAutoUngroup(windowId: number, delayMs = 150): void {
 
 async function autoUngroupSingleTabGroups(windowId: number): Promise<void> {
   try {
-    const session = await chrome.storage.session.get("bulkOpInProgress").catch((): Record<string, unknown> => ({}));
-    if (session.bulkOpInProgress) return;
+    if (await isBulkLocked()) return;
     const config = await getConfig();
     const ruleNames = config.useRules ? new Set(config.rules.map((r) => r.name)) : null;
     const [allTabs, allGroups] = await Promise.all([
@@ -166,8 +166,7 @@ export default defineBackground(() => {
     try {
       const config = await getConfig();
       if (!config.switchToExisting) return;
-      const session = await chrome.storage.session.get("bulkOpInProgress").catch((): Record<string, unknown> => ({}));
-      if (session.bulkOpInProgress) return;
+      if (await isBulkLocked()) return;
       const allTabs = await chrome.tabs.query({});
       const target = findBounceTarget(allTabs, tabId, changeInfo.url, tab.openerTabId);
       if (!target) return;
@@ -233,8 +232,7 @@ export default defineBackground(() => {
     const config = await getConfig();
 
     // Auto-group by domain (or rules if enabled) — trigger on URL change for responsiveness
-    const session = await chrome.storage.session.get("bulkOpInProgress").catch((): Record<string, unknown> => ({}));
-    if (isUrlChange && config.autoGroup && !tab.pinned && !session.bulkOpInProgress) {
+    if (isUrlChange && config.autoGroup && !tab.pinned && !(await isBulkLocked())) {
       try {
         // For recently created tabs, wait so other extensions can group them first
         const createdAt = recentTabs.get(tabId);
@@ -299,26 +297,34 @@ export default defineBackground(() => {
       }
     }
 
-    // Auto-sort on tab load
-    const freshSession = await chrome.storage.session.get("bulkOpInProgress").catch((): Record<string, unknown> => ({}));
-    if (config.autoSort && changeInfo.status === "complete" && !freshSession.bulkOpInProgress) {
+    // Auto-sort on tab load.
+    // Kept in this listener rather than its own: it is ordering-coupled to auto-group above,
+    // which is awaited first so the sort sees the group that was just created. Chrome does
+    // not await listeners, so splitting them would let the two interleave.
+    if (config.autoSort && changeInfo.status === "complete" && !(await isBulkLocked())) {
       await sortTabsInWindow(tab.windowId);
     }
+  });
 
-    // Auto pin follow
-    if (changeInfo.pinned !== undefined && config.autoPinFollow && !pinSyncInProgress) {
-      pinSyncInProgress = true;
-      try {
-        const allTabs = await chrome.tabs.query({});
-        const sameUrl = allTabs.filter((t) => t.id !== tabId && t.url === tab.url);
-        for (const t of sameUrl) {
-          if (t.pinned !== changeInfo.pinned) {
-            await chrome.tabs.update(t.id!, { pinned: changeInfo.pinned });
-          }
+  // Auto pin follow — its own listener. It shares no state with the grouping automations,
+  // and folding it into their guard made every pin toggle run their prologue first, paying
+  // two storage round-trips to reach a branch that needs neither.
+  chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+    if (changeInfo.pinned === undefined || !tab.url) return;
+    if (pinSyncInProgress) return;
+    if (!(await getConfig()).autoPinFollow) return;
+
+    pinSyncInProgress = true;
+    try {
+      const allTabs = await chrome.tabs.query({});
+      const sameUrl = allTabs.filter((t) => t.id !== tabId && t.url === tab.url);
+      for (const t of sameUrl) {
+        if (t.pinned !== changeInfo.pinned) {
+          await chrome.tabs.update(t.id!, { pinned: changeInfo.pinned });
         }
-      } finally {
-        pinSyncInProgress = false;
       }
+    } finally {
+      pinSyncInProgress = false;
     }
   });
 
@@ -430,6 +436,12 @@ export default defineBackground(() => {
       grouped: 0, groupCount: 0, error: "",
     });
 
+    // Hold the bulk lock for the whole run: the popup releases its own lock as soon as it
+    // fires the message, so without this the auto-group/sort/ungroup listeners fight the AI.
+    // The lease is ours alone — a popup finishing its own bulk action, or being reopened,
+    // can no longer clear a lock this run is still holding.
+    const lockOwner = newLockOwner();
+    await acquireBulkLock(lockOwner, AI_LEASE_MS);
     try {
       const suggestions = await suggestGroups(tabData);
       if (suggestions.length === 0) {
@@ -452,9 +464,21 @@ export default defineBackground(() => {
           currentTab: `Creating group "${s.groupName}" (${i + 1}/${suggestions.length})`,
           grouped, groupCount: suggestions.length, error: "",
         });
-        const gid = await chrome.tabs.group({ tabIds: s.tabIds });
+        // The AI groups by topic across every window, but chrome.tabs.group rejects tab ids
+        // that span windows — consolidate into the window holding most of them first.
+        const members = (await Promise.all(s.tabIds.map((id) => chrome.tabs.get(id).catch(() => null))))
+          .filter((t): t is chrome.tabs.Tab => t !== null);
+        if (members.length === 0) continue;
+        const targetWindowId = pickMajorityWindow(members);
+        const strays = members.filter((t) => t.windowId !== targetWindowId).map((t) => t.id!);
+        if (strays.length > 0) {
+          await chrome.tabs.move(strays, { windowId: targetWindowId, index: -1 });
+        }
+        const memberIds = members.map((t) => t.id!);
+        markSelfWrite(memberIds);
+        const gid = await chrome.tabs.group({ tabIds: memberIds, createProperties: { windowId: targetWindowId } });
         await safeGroupUpdate(gid, { title: s.groupName, color: s.color as chrome.tabGroups.ColorEnum });
-        grouped += s.tabIds.length;
+        grouped += memberIds.length;
       }
 
       const msg = `AI grouped ${grouped} tab(s) into ${suggestions.length} group(s)`;
@@ -467,6 +491,8 @@ export default defineBackground(() => {
       const err = e instanceof Error ? e.message : "AI grouping failed";
       await setAIProgress({ ...defaultProgress(), status: "error", error: err });
       return { ok: false, message: err };
+    } finally {
+      await releaseBulkLock(lockOwner);
     }
   }
 

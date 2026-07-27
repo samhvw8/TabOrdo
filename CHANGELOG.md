@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.6.0 — 2026-07-25
+
+### New Features
+
+- **Chrome API integrations** — Reading List (`/readlater`, `/rl`), Side Panel (`/sidepanel`), recently-closed sessions (`/rc`, `/recent`, `/restore`), on-device AI grouping via Gemini Nano (`/aigroup`), and action-menu context menu entries
+- **Coexistence guards** — group-settle window, self-write tracking, and shared/saved-group detection so TabOrdo stops fighting other tab extensions
+- **Automation activity log** — Settings now shows the last 20 automatic group/ungroup actions, for diagnosing conflicts with other extensions
+
+### Bug Fixes
+
+- **Fix Merge dissolving groups from other windows** — Chrome ungroups a tab when it crosses windows, so merging flattened every group outside the current window into loose tabs; groups are now rebuilt after the move, folding into a same-titled group already present instead of creating a duplicate. Note that folding is one-way: two separate groups sharing a title and colour become one, and undo cannot split them again
+- **Fix Unite, Isolate, Split V/H and Split by Domain dissolving groups** — the same cross-window defect as Merge; all four now preserve groups, including the first tab, which Chrome detaches when it opens the new window
+- **Stop leaking archived URLs** — the archive page preferred each entry's stored favicon URL, so opening it fired a request to every archived site's own server for tabs closed weeks ago (and fell back to `google.com/s2/favicons`); icons now come from Chrome's local favicon cache only, and the URL is no longer stored (adds the `favicon` permission)
+- **Fix a quick action cancelling AI grouping's safeguards** — the bulk-operation lock had no owner, so any popup action finishing, or merely reopening the popup, released the lock the background held for the whole AI run, letting auto-group and auto-sort fight it mid-run
+- **Fix `@a`, `@d`, `@m` and `@r` with an attached query** — the `@shared` fix made prefix matching greedy, so `@afoo` became an unknown command and silently returned garbage instead of audible tabs matching "foo"
+- **Fix long ignore rules never matching** — the 100-character pattern cap applied to plain text rules as well as regexes, so a long URL rule was accepted, listed, and silently never fired
+- **Fix Merge reporting success when it failed** — a group that could not be rebuilt left its tabs loose while the status bar still said "Merged"; it now reports how many groups failed
+- **Fix AI grouping on `{"groups": [...]}`** — a common Gemini Nano response shape was reported as "no groups found"
+- **Fix settings toggles reverting each other** — with the popup and side panel both open, one could overwrite the other's toggle; the config write path no longer reads from cache
+- **Fix a failed settings write being cached** — a rejected write left an unsaved config in memory that nothing would invalidate, and the next write persisted it
+- **Fix "Pin" auto-follow never running** — the listener returned early on pin-only events, so the toggle had no effect at all
+- **Fix `@shared`** — the command parser only captured one character after `@`, silently routing `@shared` to the suspended-tabs view
+- **Fix AI grouping across windows** — suggestions spanning multiple windows were rejected by Chrome and failed the whole run; tabs are now consolidated into the window holding most of them first
+- **Fix AI grouping on fenced JSON** — a ` ```json ` wrapper around the model's answer was reported as "no groups found"
+- **Fix position pins landing wrong** — pin placement compared against tab indices captured before earlier moves shifted them
+- **Fix `/vol` reporting false success** — volume changes on tabs other than the active one silently failed; the status bar now reports how many actually applied
+- **Fix "Recently Closed" opening empty** from the More Actions menu
+- **Fix `/movegroup 1`** placing the group after leading ungrouped tabs instead of matching `/movegroup ^`
+- **Fix the feedback link** pointing at the wrong repository
+- **Restore closed tabs to their original window** on undo, when that window still exists
+
+### Improvements
+
+- **Config caching** — the service worker no longer makes several storage round-trips per tab event, and rapid settings toggles no longer race each other
+- **CI runs the test suite** and the typecheck is green again; the publish workflow now runs both before submitting, instead of trusting a separate workflow it never waited for
+- **Pin auto-follow moved to its own listener**, so toggling a pin no longer runs the grouping automations' prologue first
+- **Cross-window tab moves share one implementation**, so a fix to group preservation reaches every command at once
+- Removed a leftover raw-storage debug dump from the Pins panel
+- Pattern length is capped in ignore rules, matching the palette's regex search
+
 ## 0.5.0 — 2026-07-17
 
 ### New Features

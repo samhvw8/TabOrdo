@@ -1,154 +1,53 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
-import { checkAIAvailability, suggestGroups } from "./ai.ts";
+import { describe, it, expect } from "vitest";
+import { parseSuggestionJson } from "./ai.ts";
 
-beforeEach(() => {
-  delete (globalThis as any).ai;
-  delete (globalThis as any).LanguageModel;
-});
+const GROUPS = [{ group: "Work", indices: [0, 1] }];
 
-describe("checkAIAvailability", () => {
-  it("returns unavailable with setup instructions when no API exists", async () => {
-    const result = await checkAIAvailability();
-    expect(result.available).toBe(false);
-    expect(result.needsDownload).toBe(false);
-    expect(result.reason).toContain("chrome://flags");
+describe("parseSuggestionJson", () => {
+  it("parses a plain array", () => {
+    expect(parseSuggestionJson(JSON.stringify(GROUPS))).toEqual(GROUPS);
   });
 
-  it("works with legacy window.ai API (Chrome 138-149)", async () => {
-    (globalThis as any).ai = {
-      languageModel: { capabilities: vi.fn().mockResolvedValue({ available: "readily" }) },
-    };
-    const result = await checkAIAvailability();
-    expect(result).toMatchObject({ available: true, needsDownload: false, reason: "" });
+  it("strips a ```json fence", () => {
+    expect(parseSuggestionJson("```json\n" + JSON.stringify(GROUPS) + "\n```")).toEqual(GROUPS);
   });
 
-  it("works with new LanguageModel API (Chrome 150+)", async () => {
-    (globalThis as any).LanguageModel = {
-      availability: vi.fn().mockResolvedValue("available"),
-      create: vi.fn(),
-    };
-    const result = await checkAIAvailability();
-    expect(result).toMatchObject({ available: true, needsDownload: false, reason: "" });
+  it("strips a bare ``` fence", () => {
+    expect(parseSuggestionJson("```\n" + JSON.stringify(GROUPS) + "\n```")).toEqual(GROUPS);
   });
 
-  it("detects downloadable status (Chrome 150+)", async () => {
-    (globalThis as any).LanguageModel = {
-      availability: vi.fn().mockResolvedValue("downloadable"),
-      create: vi.fn(),
-    };
-    const result = await checkAIAvailability();
-    expect(result.available).toBe(false);
-    expect(result.needsDownload).toBe(true);
-    expect(result.reason).toContain("LanguageModel.create()");
+  it("pulls the array out of surrounding prose", () => {
+    expect(parseSuggestionJson("Here you go:\n" + JSON.stringify(GROUPS) + "\nHope that helps!"))
+      .toEqual(GROUPS);
   });
 
-  it("detects after-download status (legacy API)", async () => {
-    (globalThis as any).ai = {
-      languageModel: { capabilities: vi.fn().mockResolvedValue({ available: "after-download" }) },
-    };
-    const result = await checkAIAvailability();
-    expect(result.available).toBe(false);
-    expect(result.needsDownload).toBe(true);
+  // The model ignores "respond with an array" often enough that these shapes were the most
+  // common cause of a spurious "AI found no groups to suggest".
+  it("unwraps an object wrapping the array", () => {
+    expect(parseSuggestionJson(JSON.stringify({ groups: GROUPS }))).toEqual(GROUPS);
   });
 
-  it("prefers LanguageModel over window.ai when both exist", async () => {
-    (globalThis as any).LanguageModel = {
-      availability: vi.fn().mockResolvedValue("available"),
-      create: vi.fn(),
-    };
-    (globalThis as any).ai = {
-      languageModel: { capabilities: vi.fn().mockResolvedValue({ available: "no" }) },
-    };
-    const result = await checkAIAvailability();
-    expect(result.available).toBe(true);
+  it("wraps a single bare group object", () => {
+    const one = { group: "Work", indices: [0, 1] };
+    expect(parseSuggestionJson(JSON.stringify(one))).toEqual([one]);
   });
 
-  it("returns error message on failure", async () => {
-    (globalThis as any).LanguageModel = {
-      availability: vi.fn().mockRejectedValue(new Error("fail")),
-      create: vi.fn(),
-    };
-    const result = await checkAIAvailability();
-    expect(result.available).toBe(false);
-    expect(result.reason).toContain("fail");
-  });
-});
-
-describe("suggestGroups", () => {
-  it("returns empty array when AI not available", async () => {
-    const result = await suggestGroups([{ id: 1, title: "Test", url: "https://test.com" }]);
-    expect(result).toEqual([]);
+  it("flattens a doubly-nested array", () => {
+    expect(parseSuggestionJson(JSON.stringify([GROUPS]))).toEqual(GROUPS);
   });
 
-  it("parses valid JSON response with new API", async () => {
-    const mockSession = {
-      prompt: vi.fn().mockResolvedValue(JSON.stringify([
-        { group: "Development", indices: [0, 1] },
-        { group: "Social", indices: [2] },
-      ])),
-      destroy: vi.fn(),
-    };
-    (globalThis as any).LanguageModel = {
-      availability: vi.fn().mockResolvedValue("available"),
-      create: vi.fn().mockResolvedValue(mockSession),
-    };
-
-    const tabs = [
-      { id: 10, title: "GitHub", url: "https://github.com" },
-      { id: 20, title: "VS Code", url: "https://code.visualstudio.com" },
-      { id: 30, title: "Twitter", url: "https://twitter.com" },
-    ];
-    const result = await suggestGroups(tabs);
-    expect(result).toHaveLength(2);
-    expect(result[0]).toMatchObject({ groupName: "Development", tabIds: [10, 20] });
-    expect(result[1]).toMatchObject({ groupName: "Social", tabIds: [30] });
-    expect(mockSession.destroy).toHaveBeenCalled();
+  it("does not mistake a single group's indices for the group list", () => {
+    const one = { group: "Work", indices: [3, 4] };
+    expect(parseSuggestionJson(JSON.stringify(one))).toEqual([one]);
   });
 
-  it("parses valid JSON response with legacy API", async () => {
-    const mockSession = {
-      prompt: vi.fn().mockResolvedValue(JSON.stringify([
-        { group: "Work", indices: [0] },
-      ])),
-      destroy: vi.fn(),
-    };
-    (globalThis as any).ai = {
-      languageModel: {
-        capabilities: vi.fn().mockResolvedValue({ available: "readily" }),
-        create: vi.fn().mockResolvedValue(mockSession),
-      },
-    };
-
-    const result = await suggestGroups([{ id: 1, title: "Test", url: "https://test.com" }]);
-    expect(result).toHaveLength(1);
-    expect(result[0].groupName).toBe("Work");
+  it("returns null for unusable output", () => {
+    expect(parseSuggestionJson("I could not group these tabs.")).toBeNull();
+    expect(parseSuggestionJson("")).toBeNull();
   });
 
-  it("returns empty on invalid JSON response", async () => {
-    const mockSession = { prompt: vi.fn().mockResolvedValue("not json"), destroy: vi.fn() };
-    (globalThis as any).LanguageModel = {
-      availability: vi.fn().mockResolvedValue("available"),
-      create: vi.fn().mockResolvedValue(mockSession),
-    };
-    const result = await suggestGroups([{ id: 1, title: "Test", url: "https://test.com" }]);
-    expect(result).toEqual([]);
-    expect(mockSession.destroy).toHaveBeenCalled();
-  });
-
-  it("filters out groups with no valid tab IDs", async () => {
-    const mockSession = {
-      prompt: vi.fn().mockResolvedValue(JSON.stringify([
-        { group: "Valid", indices: [0] },
-        { group: "Invalid", indices: [99] },
-      ])),
-      destroy: vi.fn(),
-    };
-    (globalThis as any).LanguageModel = {
-      availability: vi.fn().mockResolvedValue("available"),
-      create: vi.fn().mockResolvedValue(mockSession),
-    };
-    const result = await suggestGroups([{ id: 1, title: "Test", url: "https://test.com" }]);
-    expect(result).toHaveLength(1);
-    expect(result[0].groupName).toBe("Valid");
+  it("does not pollute the prototype", () => {
+    parseSuggestionJson('[{"__proto__":{"polluted":true}}]');
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
 });

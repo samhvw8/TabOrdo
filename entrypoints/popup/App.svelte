@@ -5,12 +5,14 @@
   import { archiveTabs, getArchiveCount } from "../../lib/archive.ts";
   import { search, rankedSearch, tabsToSearchItems, searchBookmarks, searchHistory, parseCommand, buildSearchHaystack, buildTitleHaystack, type SearchResult } from "../../lib/search.ts";
   import { getAutoGroup, setAutoGroup, getAutoUngroup, setAutoUngroup, getUseRules, setUseRules, getAutoSort, setAutoSort, getAutoPinFollow, setAutoPinFollow, getAutoDiscard, setAutoDiscard, setSwitchToExisting } from "../../lib/rules.ts";
-  import { matchCommands, ALL_COMMANDS, ACTION_COMMANDS, TRIAGE_COMMANDS, CATEGORY_STYLES, type CommandDefinition, type CommandCategory } from "../../lib/commands.ts";
+  import { matchCommands, ALL_COMMANDS, ACTION_COMMANDS, TRIAGE_COMMANDS, CATEGORY_STYLES, groupCommands, type CommandDefinition, type CommandCategory } from "../../lib/commands.ts";
   import { snapshotBeforeClose, snapshotBeforeGroup, executeUndo, peekUndo, loadUndoStack } from "../../lib/undo.ts";
   import { focusMode, unfocusMode, hasSavedWorkspace, exportTabsToFile, loadTabsFromText } from "../../lib/workspace.ts";
   import { addTabsToReadingList, isReadingListAvailable, getReadingList } from "../../lib/readinglist.ts";
   import { getRecentlyClosed, restoreSession } from "../../lib/sessions.ts";
+  import { withBulkLock } from "../../lib/bulklock.ts";
   import { checkAIAvailability, getAIProgress, setAIProgress, defaultProgress, type AIGroupProgress } from "../../lib/ai.ts";
+  import { getActionLog, ACTION_LOG_KEY, type ActionLogEntry } from "../../lib/actionLog.ts";
   import SearchInput from "../../components/SearchInput.svelte";
   import ResultList from "../../components/ResultList.svelte";
   import CommandHints from "../../components/CommandHints.svelte";
@@ -21,6 +23,10 @@
   import SettingsPanel from "../../components/SettingsPanel.svelte";
   import PinsPanel from "../../components/PinsPanel.svelte";
   import OverflowMenu from "../../components/OverflowMenu.svelte";
+
+  // Same component serves two surfaces: the popup is a fixed 450x600 sheet, the side panel is
+  // persistent and user-resizable. The caller says which, so the root can size accordingly.
+  let { fluid = false }: { fluid?: boolean } = $props();
 
   let query = $state("");
   let results = $state<SearchResult[]>([]);
@@ -42,8 +48,9 @@
   let autoDiscardEnabled = $state(false);
   let switchToExistingEnabled = $state(false);
   let hasWorkspace = $state(false);
-  let inputFocused = $state(true);
-  let searchAutofocus = $state(true);
+  let inputFocused = $state(!fluid);
+  // The panel persists, so grabbing focus on open would yank it off the page the user is reading.
+  let searchAutofocus = $state(!fluid);
   let canUndo = $state(false);
   let archiveCount = $state(0);
   let pinnedTabs = $state<PinnedTabEntry[]>([]);
@@ -54,9 +61,28 @@
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
   let pendingConfirm = $state<string | null>(null);
   let confirmTimer: ReturnType<typeof setTimeout> | undefined;
+  let actionLog = $state<ActionLogEntry[]>([]);
+  // The toggles below run background daemons that move tabs while the popup is shut. Until now
+  // the only record of that was buried in Settings, so "why did my tab move" had no answer
+  // anywhere near the switches that caused it.
+  let anyAutomationOn = $derived(
+    useRulesEnabled || autoGroupEnabled || autoUngroupEnabled || autoSortEnabled ||
+    autoPinFollowEnabled || autoDiscardEnabled || switchToExistingEnabled
+  );
+  let lastAutomation = $derived(actionLog[0] ?? null);
+
+  function relTime(ts: number): string {
+    const diff = Date.now() - ts;
+    if (diff < 60_000) return "just now";
+    if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+    return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+
   let onboardingDismissed = $state(true);
   let helpFilter = $state("");
   let altPressed = $state(false);
+
+  const FEEDBACK_URL = "https://github.com/samhvw8/TabOrdo/issues";
 
   const ICON = (d: string) => `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
   const UNPIN_ICON = ICON('<path d="M12 17v5"/><path d="M15 9.34V7a1 1 0 0 1 1-1 2 2 0 0 0 2-2H6a2 2 0 0 0 2 2 1 1 0 0 1 1 1v2.34"/><path d="m2 2 20 20"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76"/>');
@@ -69,7 +95,7 @@
     { id: "group", label: "Group+", icon: ICON('<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/><path d="M12 10v6"/><path d="M9 13h6"/>'), tooltip: "Group ungrouped tabs by domain." },
     { id: "dedup", label: "Dedup", icon: ICON('<rect width="8" height="14" x="2" y="6" rx="2"/><rect width="8" height="14" x="14" y="4" rx="2" opacity="0.5"/><path d="m15 2-3 3-3-3"/>'), tooltip: "Close duplicate tabs." },
     { id: "merge", label: "Merge", icon: ICON('<path d="m8 6 4-4 4 4"/><path d="M12 2v10.3a4 4 0 0 1-1.172 2.872L4 22"/><path d="m20 22-5-5"/>'), tooltip: "Move all tabs from other windows here." },
-    { id: "pin", label: "Pin Tab", icon: ICON('<path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 2-2H6a2 2 0 0 0 2 2 1 1 0 0 1 1 1z"/>'), tooltip: "Pin current tab at position." },
+    { id: "pin", label: "Lock Tab", icon: ICON('<path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 2-2H6a2 2 0 0 0 2 2 1 1 0 0 1 1 1z"/>'), tooltip: "Hold current tab at its position in the group." },
     { id: "regroup", label: "Regroup", icon: ICON('<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/>'), tooltip: "Ungroup all, then regroup from scratch." },
     { id: "ungroup", label: "Ungroup", icon: ICON('<path d="m18.84 12.25 1.72-1.71h-.02a5.004 5.004 0 0 0-.12-7.07 5.006 5.006 0 0 0-6.95 0l-1.72 1.71"/><path d="m5.17 11.75-1.71 1.71a5.004 5.004 0 0 0 .12 7.07 5.006 5.006 0 0 0 6.95 0l1.71-1.71"/><line x1="8" x2="8" y1="2" y2="5"/><line x1="2" x2="5" y1="8" y2="8"/><line x1="16" x2="16" y1="19" y2="22"/><line x1="19" x2="22" y1="16" y2="16"/>'), tooltip: "Remove all tab groups." },
     { id: "shuffle", label: "Shuffle", icon: ICON('<path d="M2 18h1.4c1.3 0 2.5-.6 3.3-1.7l6.1-8.6c.7-1.1 2-1.7 3.3-1.7H22"/><path d="m18 2 4 4-4 4"/><path d="M2 6h1.9c1.5 0 2.9.9 3.6 2.2"/><path d="M22 18h-5.9c-1.3 0-2.6-.7-3.3-1.8l-.5-.8"/><path d="m18 14 4 4-4 4"/>'), tooltip: "Randomly reorder tabs." },
@@ -106,12 +132,21 @@
 
   let pinDisplay = $derived.by(() => {
     if (altPressed) {
-      if (activeTabPin && activeTabPin.position === 0) return { label: "Unpin", icon: UNPIN_ICON, tooltip: "Unpin tab from fixed position." };
-      return { label: "Pin Top", icon: PIN_TOP_ICON, tooltip: "Pin tab at first position in group." };
+      if (activeTabPin && activeTabPin.position === 0) return { label: "Unlock", icon: UNPIN_ICON, tooltip: "Release this tab's held position." };
+      return { label: "Lock Top", icon: PIN_TOP_ICON, tooltip: "Hold tab at the first position in its group." };
     }
-    if (activeTabPin) return { label: "Unpin", icon: UNPIN_ICON, tooltip: "Unpin tab from fixed position." };
-    return { label: "Pin Tab", icon: ACTION_POOL_MAP.get("pin")!.icon, tooltip: "Pin current tab at position." };
+    if (activeTabPin) return { label: "Unlock", icon: UNPIN_ICON, tooltip: "Release this tab's held position." };
+    return { label: "Lock Tab", icon: ACTION_POOL_MAP.get("pin")!.icon, tooltip: "Hold current tab at its position in the group." };
   });
+
+  // Rebuilding a carried group can fail (Chrome refuses tab edits mid-drag, for one), which
+  // used to leave tabs loose or in a grey untitled group while the status bar still said
+  // "Merged". Say so instead.
+  function mergeStatus(r: { moved: number; groupsFailed: number }): string {
+    if (r.moved === 0) return "Nothing to merge";
+    if (r.groupsFailed > 0) return `Merged ${r.moved} tab(s) — ${r.groupsFailed} group(s) could not be rebuilt`;
+    return `Merged ${r.moved} tab(s)`;
+  }
 
   function smallIcon(svg: string): string {
     return svg.replace('width="16" height="16"', 'width="11" height="11"');
@@ -139,14 +174,8 @@
     }
   }
 
-  async function withBulkLock<T>(fn: () => Promise<T>): Promise<T> {
-    try { await chrome.storage.session.set({ bulkOpInProgress: true }); } catch {}
-    try {
-      return await fn();
-    } finally {
-      try { await chrome.storage.session.set({ bulkOpInProgress: false }); } catch {}
-    }
-  }
+  // Lock helper lives in lib/bulklock.ts — it releases only the lease this call took, so a
+  // quick popup action can no longer unlock a long-running background AI grouping run.
 
   async function handleUndo() {
     if (busy) return;
@@ -194,7 +223,14 @@
   let selectedTabs = $state<Set<number>>(new Set());
   let currentWindowId = $state(0);
 
+  // Strictly query-driven: the dashboard (and its action pad) stays put until you actually type.
+  // The empty-query MRU that Enter acts on is surfaced by the jump hint under the search bar
+  // instead, which doesn't cost the pad its screen.
   let showPalette = $derived(query.length > 0);
+
+  // What Cmd+E → Enter will do right now. loadTabs sinks the active tab to the bottom of the
+  // recency list, so results[0] on an empty query is the tab you were on before this one.
+  let jumpTarget = $derived(!query && results.length > 0 ? results[0] : null);
 
   const groupColors: Record<string, string> = {
     blue: "border-accent-blue/40", cyan: "border-accent-cyan/40", green: "border-accent-green/40",
@@ -307,6 +343,18 @@
   async function handlePrefixSearch(prefix: string, searchQuery: string) {
     loading = true;
     try {
+      // Triage views are table-driven: they only differ by which tabs they select, and the
+      // eight hand-copied switch arms this replaces are what let a broken "@shared" hide.
+      const view = TRIAGE_BY_PREFIX.get(prefix);
+      if (view) {
+        const viewTabs = await view.tabs();
+        results = searchQuery
+          ? rankedSearch(buildSearchHaystack(viewTabs), searchQuery).map((i) => viewTabs[i])
+          : viewTabs;
+        if (viewTabs.length === 0 && view.empty) statusMessage = view.empty;
+        return;
+      }
+
       switch (prefix) {
         case "b": {
           results = await searchBookmarks(searchQuery);
@@ -344,97 +392,20 @@
         }
         case "@": {
           const triageResults: SearchResult[] = [];
-          const audioTabs = allTabs.filter((t) => t.audible);
-          const mutedTabs = allTabs.filter((t) => t.muted);
-          const dupTabs = findDuplicateTabs(allTabs);
-          const recentTabs = [...allTabs].filter((t) => t.type === "tab").sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0)).slice(0, 15);
-          const suspendedTabs = allTabs.filter((t) => t.discarded);
-          const frozenTabs = allTabs.filter((t) => t.frozen);
-
-          if (searchQuery) {
-            const categories: { id: string; title: string; tabs: SearchResult[] }[] = [
-              { id: "div-triage-audio", title: "Playing Audio", tabs: audioTabs },
-              { id: "div-triage-muted", title: "Muted", tabs: mutedTabs },
-              { id: "div-triage-dupes", title: "Duplicates", tabs: dupTabs },
-              { id: "div-triage-recent", title: "Recently Active", tabs: recentTabs },
-              { id: "div-triage-suspended", title: "Suspended", tabs: suspendedTabs },
-              { id: "div-triage-frozen", title: "Frozen", tabs: frozenTabs },
-            ];
-            for (const cat of categories) {
-              if (cat.tabs.length === 0) continue;
-              const hay = buildSearchHaystack(cat.tabs);
-              const indices = rankedSearch(hay, searchQuery);
-              const matched = indices.map((i) => cat.tabs[i]);
-              if (matched.length > 0) {
-                triageResults.push({ type: "divider", id: cat.id, title: `${cat.title} (${matched.length})`, url: "" });
-                triageResults.push(...matched);
-              }
-            }
-            results = triageResults;
-            if (triageResults.length === 0) statusMessage = "No triage matches";
-          } else {
-            if (audioTabs.length > 0) { triageResults.push({ type: "divider", id: "div-triage-audio", title: `Playing Audio (${audioTabs.length})`, url: "" }); triageResults.push(...audioTabs); }
-            if (mutedTabs.length > 0) { triageResults.push({ type: "divider", id: "div-triage-muted", title: `Muted (${mutedTabs.length})`, url: "" }); triageResults.push(...mutedTabs); }
-            if (dupTabs.length > 0) { triageResults.push({ type: "divider", id: "div-triage-dupes", title: `Duplicates (${dupTabs.length})`, url: "" }); triageResults.push(...dupTabs); }
-            if (recentTabs.length > 0) { triageResults.push({ type: "divider", id: "div-triage-recent", title: "Recently Active", url: "" }); triageResults.push(...recentTabs); }
-            if (suspendedTabs.length > 0) { triageResults.push({ type: "divider", id: "div-triage-suspended", title: `Suspended (${suspendedTabs.length})`, url: "" }); triageResults.push(...suspendedTabs); }
-            if (frozenTabs.length > 0) { triageResults.push({ type: "divider", id: "div-triage-frozen", title: `Frozen (${frozenTabs.length})`, url: "" }); triageResults.push(...frozenTabs); }
-            results = triageResults.length > 0 ? triageResults : [];
-            if (triageResults.length === 0) statusMessage = "All clear — no tabs need attention";
+          for (const cat of TRIAGE_OVERVIEW) {
+            const catTabs = await cat.overviewTabs!();
+            if (catTabs.length === 0) continue;
+            const matched = searchQuery
+              ? rankedSearch(buildSearchHaystack(catTabs), searchQuery).map((i) => catTabs[i])
+              : catTabs;
+            if (matched.length === 0) continue;
+            triageResults.push({ type: "divider", id: cat.id, title: `${cat.title} (${matched.length})`, url: "" });
+            triageResults.push(...matched);
           }
-          break;
-        }
-        case "@a": {
-          const audio = allTabs.filter((t) => t.audible);
-          if (searchQuery) { const hay = buildSearchHaystack(audio); const indices = rankedSearch(hay, searchQuery); results = indices.map((i) => audio[i]); }
-          else results = audio;
-          break;
-        }
-        case "@m": {
-          const muted = allTabs.filter((t) => t.muted);
-          if (searchQuery) { const hay = buildSearchHaystack(muted); const indices = rankedSearch(hay, searchQuery); results = indices.map((i) => muted[i]); }
-          else results = muted;
-          break;
-        }
-        case "@d": {
-          const dupes = findDuplicateTabs(allTabs);
-          if (searchQuery) { const hay = buildSearchHaystack(dupes); const indices = rankedSearch(hay, searchQuery); results = indices.map((i) => dupes[i]); }
-          else results = dupes;
-          break;
-        }
-        case "@r": {
-          const recent = [...allTabs].filter((t) => t.type === "tab").sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0)).slice(0, 20);
-          if (searchQuery) { const hay = buildSearchHaystack(recent); const indices = rankedSearch(hay, searchQuery); results = indices.map((i) => recent[i]); }
-          else results = recent;
-          break;
-        }
-        case "@s": {
-          const suspended = allTabs.filter((t) => t.discarded);
-          if (searchQuery) { const hay = buildSearchHaystack(suspended); const indices = rankedSearch(hay, searchQuery); results = indices.map((i) => suspended[i]); }
-          else results = suspended;
-          break;
-        }
-        case "@u": {
-          const ungrouped = allTabs.filter((t) => !t.groupId || t.groupId === -1);
-          if (searchQuery) { const hay = buildSearchHaystack(ungrouped); const indices = rankedSearch(hay, searchQuery); results = indices.map((i) => ungrouped[i]); }
-          else results = ungrouped;
-          if (ungrouped.length === 0) statusMessage = "All tabs are grouped";
-          break;
-        }
-        case "@f": {
-          const frozen = allTabs.filter((t) => t.frozen);
-          if (searchQuery) { const hay = buildSearchHaystack(frozen); const indices = rankedSearch(hay, searchQuery); results = indices.map((i) => frozen[i]); }
-          else results = frozen;
-          if (frozen.length === 0) statusMessage = "No frozen tabs";
-          break;
-        }
-        case "@shared": {
-          const allGroups = await chrome.tabGroups.query({});
-          const sharedIds = new Set(allGroups.filter((g) => (g as any).shared === true).map((g) => g.id));
-          const shared = allTabs.filter((t) => t.groupId && sharedIds.has(t.groupId));
-          if (searchQuery) { const hay = buildSearchHaystack(shared); const indices = rankedSearch(hay, searchQuery); results = indices.map((i) => shared[i]); }
-          else results = shared;
-          if (shared.length === 0) statusMessage = "No shared group tabs";
+          results = triageResults;
+          if (triageResults.length === 0) {
+            statusMessage = searchQuery ? "No triage matches" : "All clear — no tabs need attention";
+          }
           break;
         }
         case "rl": {
@@ -471,11 +442,65 @@
       }
     } finally {
       loading = false;
+      selectedIndex = 0;
     }
-    selectedIndex = 0;
   }
 
   const ACTION_PREFIXES = new Set(ACTION_COMMANDS.map((c) => c.prefix));
+
+  interface TriageCategory {
+    prefix: string;
+    id: string;
+    title: string;
+    tabs: () => SearchResult[] | Promise<SearchResult[]>;
+    /** Status line when the dedicated @-view comes back empty. */
+    empty?: string;
+    /** Whether the bare "@" overview lists this category, and with what (shorter) list. */
+    overviewTabs?: () => SearchResult[] | Promise<SearchResult[]>;
+  }
+
+  // One definition per category, driving both the dedicated "@x" views and the bare "@"
+  // overview. Overview order follows this list.
+  const TRIAGE_CATEGORIES: TriageCategory[] = [
+    { prefix: "@a", id: "div-triage-audio", title: "Playing Audio",
+      tabs: () => allTabs.filter((t) => t.audible), overviewTabs: () => allTabs.filter((t) => t.audible) },
+    { prefix: "@m", id: "div-triage-muted", title: "Muted",
+      tabs: () => allTabs.filter((t) => t.muted), overviewTabs: () => allTabs.filter((t) => t.muted) },
+    { prefix: "@d", id: "div-triage-dupes", title: "Duplicates",
+      tabs: () => findDuplicateTabs(allTabs), overviewTabs: () => findDuplicateTabs(allTabs) },
+    // The dedicated view goes deeper than the overview section, which is one of six.
+    { prefix: "@r", id: "div-triage-recent", title: "Recently Active",
+      tabs: () => mostRecentTabs(20), overviewTabs: () => mostRecentTabs(15) },
+    // "Unloaded" is what /discard produces: dropped from memory, reloads when you return.
+    // "Paused by Chrome" is Chrome's own Memory Saver freeze — TabOrdo never sets it, so this
+    // view is an observation, not a result of anything the user did here.
+    { prefix: "@s", id: "div-triage-suspended", title: "Unloaded",
+      tabs: () => allTabs.filter((t) => t.discarded), overviewTabs: () => allTabs.filter((t) => t.discarded) },
+    { prefix: "@f", id: "div-triage-frozen", title: "Paused by Chrome", empty: "Chrome hasn't paused any tabs",
+      tabs: () => allTabs.filter((t) => t.frozen), overviewTabs: () => allTabs.filter((t) => t.frozen) },
+    { prefix: "@u", id: "div-triage-ungrouped", title: "Ungrouped", empty: "All tabs are grouped",
+      tabs: () => allTabs.filter((t) => !t.groupId || t.groupId === -1) },
+    { prefix: "@shared", id: "div-triage-shared", title: "Shared Groups", empty: "No shared group tabs",
+      tabs: sharedGroupTabs },
+  ];
+
+  // A Map, not an object literal: an object lookup would hit Object.prototype, so a command
+  // like /constructor or /toString would resolve to a truthy non-category and throw.
+  const TRIAGE_BY_PREFIX = new Map(TRIAGE_CATEGORIES.map((c) => [c.prefix, c]));
+  const TRIAGE_OVERVIEW = TRIAGE_CATEGORIES.filter((c) => c.overviewTabs);
+
+  function mostRecentTabs(limit: number): SearchResult[] {
+    return [...allTabs]
+      .filter((t) => t.type === "tab")
+      .sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0))
+      .slice(0, limit);
+  }
+
+  async function sharedGroupTabs(): Promise<SearchResult[]> {
+    const allGroups = await chrome.tabGroups.query({});
+    const sharedIds = new Set(allGroups.filter((g) => (g as any).shared === true).map((g) => g.id));
+    return allTabs.filter((t) => t.groupId && sharedIds.has(t.groupId));
+  }
 
   function findDuplicateTabs(tabs: SearchResult[]): SearchResult[] {
     const urlMap = new Map<string, SearchResult[]>();
@@ -514,7 +539,28 @@
   let frozenCount = $derived(dashboardTabs.filter((t) => t.frozen).length);
   let suspendedCount = $derived(dashboardTabs.filter((t) => t.discarded && !t.frozen).length);
 
+  // A single click on a dashboard/overflow button should never close tabs outright. Typing the
+  // equivalent slash command is deliberate enough to skip the second tap, and undo covers both.
+  const CONFIRM_ACTIONS = new Set(["merge", "dedup", "closeleft", "closeright", "closeold", "closesite", "focus"]);
+
+  function needsConfirm(action: string): boolean {
+    // "Focus" toggles: the unfocus direction restores tabs, so only arm the closing one.
+    if (action === "focus") return !hasWorkspace;
+    return CONFIRM_ACTIONS.has(action);
+  }
+
   async function handleOverflowAction(action: string) {
+    if (needsConfirm(action)) {
+      if (pendingConfirm === action) {
+        clearTimeout(confirmTimer);
+        pendingConfirm = null;
+      } else {
+        pendingConfirm = action;
+        clearTimeout(confirmTimer);
+        confirmTimer = setTimeout(() => { pendingConfirm = null; }, 3000);
+        return;
+      }
+    }
     const goBack = () => { activeSection = "dashboard"; };
     switch (action) {
       case "regroup": goBack(); dashAction(async () => { await snapshotBeforeGroup(); await groupTabsByDomain("rebuild"); return "Regrouped"; }); break;
@@ -538,11 +584,11 @@
       case "save": goBack(); exportTabsToFile(); statusMessage = "Exporting..."; setTimeout(() => { statusMessage = ""; }, 2000); break;
       case "load": fileInputEl?.click(); break;
       case "archive": chrome.tabs.create({ url: chrome.runtime.getURL("/archive.html") }); break;
-      case "feedback": chrome.tabs.create({ url: "https://github.com/nicepkg/TabOrdo/issues" }); break;
+      case "feedback": chrome.tabs.create({ url: FEEDBACK_URL }); break;
       case "sort": goBack(); dashAction(async () => { await snapshotBeforeGroup(); await sortTabsInWindow(currentWindowId); return "Sorted"; }); break;
       case "group": goBack(); dashAction(async () => { await snapshotBeforeGroup(); await groupTabsByDomain("additive"); return "Grouped"; }); break;
       case "dedup": goBack(); dashAction(async () => { await snapshotBeforeGroup(); const n = await removeDuplicates(); return n > 0 ? `${n} removed` : "No dupes"; }); break;
-      case "merge": goBack(); confirmAction("merge", () => dashAction(async () => { await snapshotBeforeGroup(); await mergeAllWindows(); return "Merged"; })); break;
+      case "merge": goBack(); dashAction(async () => { await snapshotBeforeGroup(); return mergeStatus(await mergeAllWindows()); }); break;
       case "pin": goBack(); handlePinCurrent(new MouseEvent("click", { altKey: altPressed })); break;
       case "aigroup": goBack(); await snapshotBeforeGroup(); chrome.runtime.sendMessage({ type: "aigroup-start" }); statusMessage = "AI grouping started..."; startAIPoll(); activeSection = "ai"; break;
       case "readlater": goBack(); dashAction(async () => {
@@ -551,7 +597,9 @@
         if (active?.url && active.title) { await addTabsToReadingList([{ url: active.url, title: active.title }]); return "Added to Reading List"; }
         return "No active tab";
       }); break;
-      case "recent": goBack(); query = "/recent "; updateResults(); break;
+      // updateResults() can't populate this one: "recent" is an action prefix, so it would
+      // fall through to an empty tab search. Run the action itself to fill the list.
+      case "recent": goBack(); query = "/recent "; paletteMode = "search"; commandHints = []; await handleActionCommand("recent", ""); break;
       case "sidepanel":
         if (chrome.sidePanel) { chrome.sidePanel.open({ windowId: currentWindowId }); }
         else { statusMessage = "Side Panel not available (Chrome 114+)"; setTimeout(() => { statusMessage = ""; }, 3000); }
@@ -601,7 +649,7 @@
       }
       case "archive":
         if (tabIds.length > 0) {
-          const tabData = matchingTabs.map((t) => ({ url: t.url, title: t.title, favIconUrl: t.favIconUrl, groupName: t.groupTitle }));
+          const tabData = matchingTabs.map((t) => ({ url: t.url, title: t.title, groupName: t.groupTitle }));
           const archived = await archiveTabs(tabData);
           await closeTabs(tabIds);
           statusMessage = `Archived ${archived} tab(s)`;
@@ -629,7 +677,7 @@
         }
         break;
       case "merge":
-        await snapshotBeforeGroup(); await mergeAllWindows(); statusMessage = "Merged all windows"; await loadTabs(); acted = true; break;
+        await snapshotBeforeGroup(); statusMessage = mergeStatus(await mergeAllWindows()); await loadTabs(); acted = true; break;
       case "sort": {
         const sortBy = (["title", "url", "domain"] as const).includes(searchQuery as any) ? searchQuery as "title" | "url" | "domain" : "domain";
         await snapshotBeforeGroup(); await sortTabsInWindow(currentWindowId, sortBy); statusMessage = `Sorted tabs by ${sortBy}`; await loadTabs(); acted = true; break;
@@ -700,7 +748,7 @@
       case "load":
         fileInputEl?.click(); acted = false; break;
       case "feedback":
-        await chrome.tabs.create({ url: "https://github.com/nicepkg/TabOrdo/issues" }); statusMessage = "Opening feedback page"; acted = true; break;
+        await chrome.tabs.create({ url: FEEDBACK_URL }); statusMessage = "Opening feedback page"; acted = true; break;
       case "discard":
         if (tabIds.length > 0) { await discardTabs(tabIds); statusMessage = `Discarded ${tabIds.length} tab(s)`; acted = true; }
         break;
@@ -715,11 +763,19 @@
           if (filter) {
             const indices = rankedSearch(searchHaystack, filter, 50, searchRecency, searchTitleHaystack, searchPriority);
             const targets = indices.map((i) => allTabs[i]).filter((t) => t.tabId);
-            for (const t of targets) await setTabVolume(t.tabId!, level / 100);
-            statusMessage = `Volume ${level}% on ${targets.length} tab(s)`;
+            let ok = 0;
+            for (const t of targets) if (await setTabVolume(t.tabId!, level / 100)) ok++;
+            // Without host permissions only the active tab is scriptable — say so rather than
+            // reporting success for tabs that were never touched.
+            statusMessage = ok === targets.length
+              ? `Volume ${level}% on ${ok} tab(s)`
+              : `Volume ${level}% on ${ok}/${targets.length} tab(s) — the rest need page access (only the active tab is reachable)`;
           } else {
             const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
-            if (active?.id) { await setTabVolume(active.id, level / 100); statusMessage = `Volume ${level}% on active tab`; }
+            if (active?.id) {
+              const ok = await setTabVolume(active.id, level / 100);
+              statusMessage = ok ? `Volume ${level}% on active tab` : "Can't control volume on this page";
+            }
           }
           acted = true;
         } else {
@@ -746,24 +802,28 @@
         acted = true;
         break;
       }
+      case "lock":
       case "pin": {
         const msg = await pinCurrentTab(searchQuery);
         statusMessage = msg;
         acted = true;
         break;
       }
+      case "unlock":
       case "unpin": {
         const msg = await unpinCurrentTab();
         statusMessage = msg;
         acted = true;
         break;
       }
+      case "lockgroup":
       case "pingroup": {
         const msg = await pinCurrentGroup(searchQuery);
         statusMessage = msg;
         acted = true;
         break;
       }
+      case "unlockgroup":
       case "unpingroup": {
         const msg = await unpinCurrentGroup();
         statusMessage = msg;
@@ -816,11 +876,11 @@
         break;
       }
       case "freeze":
-        if (tabIds.length > 0) { await discardTabs(tabIds); statusMessage = `Froze ${tabIds.length} tab(s)`; acted = true; }
+        if (tabIds.length > 0) { await discardTabs(tabIds); statusMessage = `Unloaded ${tabIds.length} tab(s)`; acted = true; }
         else if (!searchQuery) {
           const inactiveTabs = (await chrome.tabs.query({})).filter((t) => !t.active && !t.pinned && !t.audible && !t.discarded);
-          if (inactiveTabs.length > 0) { await discardTabs(inactiveTabs.map((t) => t.id!)); statusMessage = `Froze ${inactiveTabs.length} inactive tab(s)`; acted = true; }
-          else { statusMessage = "No tabs to freeze"; acted = true; }
+          if (inactiveTabs.length > 0) { await discardTabs(inactiveTabs.map((t) => t.id!)); statusMessage = `Unloaded ${inactiveTabs.length} inactive tab(s)`; acted = true; }
+          else { statusMessage = "No tabs to unload"; acted = true; }
         }
         break;
       case "aigroup": {
@@ -932,6 +992,16 @@
   }
 
   $effect(() => {
+    const listener = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
+      if (area === "local" && changes[ACTION_LOG_KEY]) {
+        actionLog = Array.isArray(changes[ACTION_LOG_KEY].newValue) ? changes[ACTION_LOG_KEY].newValue : [];
+      }
+    };
+    chrome.storage.onChanged.addListener(listener);
+    return () => chrome.storage.onChanged.removeListener(listener);
+  });
+
+  $effect(() => {
     const onKeyDown = (e: KeyboardEvent) => { if (e.key === "Alt") altPressed = true; };
     const onKeyUp = (e: KeyboardEvent) => { if (e.key === "Alt") altPressed = false; };
     const onBlur = () => { altPressed = false; };
@@ -946,7 +1016,10 @@
   });
 
   onMount(async () => {
-    try { await chrome.storage.session.set({ bulkOpInProgress: false }); } catch {}
+    // No lock reset here any more. It existed to clear a flag stranded by a popup that
+    // closed mid-operation, but it also wiped the background's lock during an AI run —
+    // and Chrome closes the popup on every focus loss. Lease expiry handles the stranded
+    // case now, without one realm clobbering another's lock.
     await loadTabs();
     await loadUndoStack();
     canUndo = !!peekUndo();
@@ -963,6 +1036,7 @@
     }
     hasWorkspace = await hasSavedWorkspace();
     archiveCount = await getArchiveCount();
+    actionLog = await getActionLog();
     aiProgress = await getAIProgress();
     if (aiProgress.status === "checking" || aiProgress.status === "prompting" || aiProgress.status === "grouping") {
       startAIPoll();
@@ -982,6 +1056,9 @@
         await chrome.storage.session.remove("openMode");
       }
     } catch {}
+    // Populate the empty-query MRU list. Without this `results` stayed empty until the first
+    // keystroke, so Cmd+E → Enter (jump to the previous tab) silently did nothing.
+    updateResults();
   });
 
   function openArchive() {
@@ -993,7 +1070,7 @@
   }
 </script>
 
-<div class="w-[450px] h-[600px] flex flex-col overflow-hidden">
+<div class="{fluid ? 'w-full h-screen' : 'w-[450px] h-[600px]'} flex flex-col overflow-hidden">
   <!-- Search bar — always visible -->
   <div class="flex items-center gap-1.5 px-3 pt-3 pb-2">
     <div class="flex-1 min-w-0">
@@ -1041,16 +1118,16 @@
       }}
     />
     </div>
-    <button
-      class="shrink-0 w-7 h-7 rounded-md flex items-center justify-center text-xs font-bold transition-colors
-        {showHelp ? 'bg-primary text-white' : 'bg-surface-hover text-text-muted hover:text-text'}"
-      onclick={() => { showHelp = !showHelp; activeSection = "dashboard"; }}
-      title="Command guide"
-    >?</button>
   </div>
 
   <div class="flex flex-1 min-h-0 overflow-hidden">
-    <Sidebar bind:active={activeSection} {archiveCount} onarchive={openArchive} />
+    <Sidebar
+      bind:active={activeSection}
+      {archiveCount}
+      helpActive={showHelp}
+      onarchive={openArchive}
+      onhelp={() => { showHelp = !showHelp; activeSection = "dashboard"; }}
+    />
   {#if activeSection === "rules"}
     <RulesEditor onclose={() => { activeSection = "dashboard"; }} />
   {:else if activeSection === "pins"}
@@ -1132,7 +1209,7 @@
           <div class="flex gap-2 mt-2">
             <button
               class="flex-1 px-3 py-1.5 rounded-lg bg-surface-hover text-text text-xs hover:bg-surface-active transition-colors border border-border"
-              onclick={() => { aiProgress = { ...defaultProgress(), status: "checking" }; chrome.runtime.sendMessage({ type: "aigroup-start" }); startAIPoll(); }}
+              onclick={() => { aiProgress = { ...defaultProgress(), status: "checking" }; snapshotBeforeGroup().catch(() => {}); chrome.runtime.sendMessage({ type: "aigroup-start" }); startAIPoll(); }}
             >Retry</button>
             <button
               class="px-3 py-1.5 rounded-lg bg-surface-hover text-text-muted text-xs border border-border hover:text-text transition-colors"
@@ -1198,7 +1275,7 @@
           {#each section.items as item}
             {@const poolEntry = ACTION_POOL_MAP.get(item.action)}
             <div
-              class="w-full text-left flex items-start gap-2.5 px-2 py-1.5 rounded-md hover:bg-surface-hover active:bg-surface-active transition-colors group cursor-pointer"
+              class="w-full text-left flex items-start gap-2.5 px-2 py-1.5 rounded-md hover:bg-surface-hover active:bg-surface-active transition-colors group cursor-pointer {pendingConfirm === item.action ? 'bg-accent-red/10 ring-1 ring-accent-red/30' : ''}"
               role="button" tabindex="0"
               onclick={() => handleOverflowAction(item.action)}
               onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleOverflowAction(item.action); } }}
@@ -1207,7 +1284,7 @@
                 {#if poolEntry}{@html smallIcon(item.action === "pin" ? pinDisplay.icon : poolEntry.icon)}{/if}
               </span>
               <div class="flex-1 min-w-0">
-                <div class="text-xs text-text font-medium">{item.action === "pin" ? pinDisplay.label : item.label}</div>
+                <div class="text-xs font-medium {pendingConfirm === item.action ? 'text-accent-red' : 'text-text'}">{pendingConfirm === item.action ? "Click again to confirm" : item.action === "pin" ? pinDisplay.label : item.label}</div>
                 <div class="text-[10px] text-text-muted/70 leading-tight">{item.action === "pin" ? pinDisplay.tooltip : item.tip}</div>
               </div>
               <button
@@ -1243,14 +1320,20 @@
           <span class="text-[10px] font-semibold uppercase tracking-wider {CATEGORY_STYLES[cat].color}">{CATEGORY_STYLES[cat].label}</span>
           <div class="flex-1 h-px bg-border/50"></div>
         </div>
-        {#each catCmds as cmd}
-          <button
-            class="w-full flex items-center gap-2 px-2 py-1 rounded hover:bg-surface-hover transition-colors text-left focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface"
-            onclick={() => { query = cmd.prefix.startsWith("@") ? `${cmd.prefix} ` : `/${cmd.prefix} `; showHelp = false; helpFilter = ""; updateResults(); }}
-          >
-            <span class="font-mono text-xs font-medium w-16 shrink-0 {cmd.color}">{cmd.label}</span>
-            <span class="text-xs text-text-muted">{cmd.description}</span>
-          </button>
+        {@const buckets = groupCommands(catCmds)}
+        {#each buckets as bucket}
+          {#if bucket.group && buckets.length > 1}
+            <div class="px-2 pt-1.5 pb-0.5 text-[9px] font-medium uppercase tracking-wider text-text-muted/60">{bucket.group}</div>
+          {/if}
+          {#each bucket.commands as cmd}
+            <button
+              class="w-full flex items-center gap-2 px-2 py-1 rounded hover:bg-surface-hover transition-colors text-left focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface"
+              onclick={() => { query = cmd.prefix.startsWith("@") ? `${cmd.prefix} ` : `/${cmd.prefix} `; showHelp = false; helpFilter = ""; updateResults(); }}
+            >
+              <span class="font-mono text-xs font-medium w-16 shrink-0 {cmd.color}">{cmd.label}</span>
+              <span class="text-xs text-text-muted">{cmd.description}</span>
+            </button>
+          {/each}
         {/each}
         {/if}
       {/each}
@@ -1280,16 +1363,30 @@
         {/if}
         {#if frozenCount > 0}
           <span class="text-border">·</span>
-          <span class="inline-flex items-center gap-0.5 text-accent-cyan">{frozenCount} <svg class="w-3 h-3 inline" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20"/><path d="m4.93 4.93 4.24 4.24"/><path d="m14.83 14.83 4.24 4.24"/><path d="m4.93 19.07 4.24-4.24"/><path d="m14.83 9.17 4.24-4.24"/><path d="M2 12h20"/></svg></span>
+          <span class="inline-flex items-center gap-0.5 text-accent-cyan" title="Paused by Chrome to save memory">{frozenCount} <svg class="w-3 h-3 inline" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20"/><path d="m4.93 4.93 4.24 4.24"/><path d="m14.83 14.83 4.24 4.24"/><path d="m4.93 19.07 4.24-4.24"/><path d="m14.83 9.17 4.24-4.24"/><path d="M2 12h20"/></svg></span>
         {/if}
         {#if suspendedCount > 0}
           <span class="text-border">·</span>
-          <span>{suspendedCount} suspended</span>
+          <span title="Unloaded from memory — reload when you return">{suspendedCount} unloaded</span>
         {/if}
       </div>
 
+      <!-- What Enter does right now. Makes Cmd+E → Enter (jump back to the previous tab)
+           visible without the palette taking the dashboard's place. -->
+      {#if jumpTarget}
+        <button
+          class="mx-3 mb-2 flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-border bg-surface-hover hover:bg-surface-active transition-colors text-left w-[calc(100%-1.5rem)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+          onclick={() => handleSelect(jumpTarget!)}
+          title="Press Enter to jump back to this tab"
+        >
+          <kbd class="shrink-0 px-1 py-0.5 rounded bg-surface text-[9px] font-mono text-text-muted">↵</kbd>
+          <span class="shrink-0 text-[11px] text-text-muted">Back to</span>
+          <span class="truncate text-[11px] text-text">{jumpTarget.title || jumpTarget.url}</span>
+        </button>
+      {/if}
+
       <!-- Onboarding hint -->
-      {#if !onboardingDismissed && allTabs.length <= 5}
+      {#if !onboardingDismissed && allTabs.length >= 15}
         <div class="mx-3 mb-2 flex items-center gap-2 px-2.5 py-2 rounded-lg border border-primary/20 bg-primary/5 text-[11px] text-text-muted">
           <svg class="w-3.5 h-3.5 shrink-0 text-primary" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/></svg>
           <span>Type <kbd class="px-1 py-0.5 rounded bg-surface-hover text-[10px] font-mono">/</kbd> for commands, <kbd class="px-1 py-0.5 rounded bg-surface-hover text-[10px] font-mono">@</kbd> for triage. Try <span class="text-primary font-medium">/sort</span> to organize tabs.</span>
@@ -1303,13 +1400,12 @@
           aria-busy={busy}>
           {#each dashboardActions as action}
             <ActionButton
-              label={action.id === "merge" && pendingConfirm === "merge" ? "Confirm" : action.id === "focus" ? (hasWorkspace ? "Unfocus" : "Focus") : action.id === "pin" ? pinDisplay.label : action.label}
+              label={pendingConfirm === action.id ? "Confirm" : action.id === "focus" ? (hasWorkspace ? "Unfocus" : "Focus") : action.id === "pin" ? pinDisplay.label : action.label}
               icon={action.id === "pin" ? pinDisplay.icon : action.icon}
               tooltip={action.id === "pin" ? pinDisplay.tooltip : action.tooltip}
-              confirming={action.id === "merge" && pendingConfirm === "merge"}
+              confirming={pendingConfirm === action.id}
               onclick={(e) => {
-                if (action.id === "merge") confirmAction("merge", () => dashAction(async () => { await snapshotBeforeGroup(); await mergeAllWindows(); return "Merged"; }));
-                else if (action.id === "pin") handlePinCurrent(e);
+                if (action.id === "pin") handlePinCurrent(e);
                 else handleOverflowAction(action.id);
               }}
             />
@@ -1332,7 +1428,7 @@
           <button class="px-2 py-0.5 rounded text-[10px] font-medium bg-surface-hover text-text-muted border border-border hover:text-text transition-colors"
             onclick={() => dashAction(async () => {
               const tabs = dashboardTabs.filter((t) => selectedTabs.has(t.id));
-              const tabData = tabs.map((t) => ({ url: t.url, title: t.title, favIconUrl: t.favIconUrl, groupName: t.groupTitle }));
+              const tabData = tabs.map((t) => ({ url: t.url, title: t.title, groupName: t.groupTitle }));
               const archived = await archiveTabs(tabData);
               await closeTabs([...selectedTabs]);
               return `Archived ${archived}`;
@@ -1365,6 +1461,21 @@
           >{t.enabled ? "✓ " : ""}{t.label}</button>
         {/each}
       </div>
+
+      <!-- Last thing the background automation actually did, sitting right under the switches
+           that caused it. Opens the full log in Settings. -->
+      {#if anyAutomationOn && lastAutomation}
+        <button
+          class="mx-3 mb-2 flex w-[calc(100%-1.5rem)] items-center gap-1.5 rounded-md border border-border/60 bg-surface-hover/50 px-2 py-1 text-left text-[10px] transition-colors hover:bg-surface-hover"
+          onclick={() => { activeSection = "settings"; }}
+          title="Open the full automation log in Settings"
+        >
+          <span class="shrink-0 text-primary">⚡</span>
+          <span class="shrink-0 font-medium text-text">{lastAutomation.action}</span>
+          <span class="truncate text-text-muted">{lastAutomation.detail}</span>
+          <span class="ml-auto shrink-0 text-text-muted/70">{relTime(lastAutomation.ts)}</span>
+        </button>
+      {/if}
 
       <!-- Hidden file input for Load -->
       <input type="file" accept=".txt,.json,.csv" class="hidden" bind:this={fileInputEl} onchange={handleFileLoad} />

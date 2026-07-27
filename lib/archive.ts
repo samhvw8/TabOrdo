@@ -2,9 +2,11 @@ export interface ArchivedTab {
   id: string;
   url: string;
   title: string;
-  favIconUrl?: string;
   archivedAt: number;
   groupName?: string;
+  /** Legacy: entries written before 0.6.0 stored the site's own icon URL. No longer read
+   *  or written — the archive page renders icons from Chrome's local favicon cache. */
+  favIconUrl?: string;
 }
 
 const STORAGE_KEY = "tabOrdo_archive";
@@ -21,7 +23,7 @@ async function saveArchive(archive: ArchivedTab[]): Promise<void> {
 }
 
 export async function archiveTabs(
-  tabs: { url: string; title: string; favIconUrl?: string; groupName?: string }[]
+  tabs: { url: string; title: string; groupName?: string }[]
 ): Promise<number> {
   const archive = await getArchive();
   const now = Date.now();
@@ -32,7 +34,6 @@ export async function archiveTabs(
       id: crypto.randomUUID(),
       url: tab.url,
       title: tab.title,
-      favIconUrl: tab.favIconUrl,
       archivedAt: now,
       groupName: tab.groupName,
     });

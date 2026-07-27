@@ -2,9 +2,14 @@ import { describe, it, expect } from "vitest";
 import { matchCommands, ALL_COMMANDS, TRIAGE_COMMANDS } from "./commands.ts";
 
 describe("matchCommands", () => {
-  it("returns all commands for bare /", () => {
+  it("returns every visible command for bare /, omitting hidden aliases", () => {
     const cmds = matchCommands("/");
-    expect(cmds.length).toBe(ALL_COMMANDS.length);
+    expect(cmds.length).toBe(ALL_COMMANDS.filter((c) => !c.hidden).length);
+    expect(cmds.some((c) => c.hidden)).toBe(false);
+  });
+
+  it("still resolves a hidden alias when it is typed out", () => {
+    expect(matchCommands("/freeze").some((c) => c.prefix === "freeze")).toBe(true);
   });
 
   it("finds /readlater command", () => {

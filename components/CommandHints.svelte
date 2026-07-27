@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { type CommandDefinition, CATEGORY_STYLES, type CommandCategory } from "../lib/commands.ts";
+  import { type CommandDefinition, CATEGORY_STYLES, type CommandCategory, groupCommands } from "../lib/commands.ts";
 
   let {
     commands,
@@ -33,18 +33,24 @@
         </span>
         <div class="flex-1 h-px bg-border/50"></div>
       </div>
-      {#each catCommands as cmd}
-        {@const globalIdx = commands.indexOf(cmd)}
-        <button
-          use:scrollIntoView={globalIdx === selectedIndex}
-          class="w-full flex items-center gap-3 px-2 py-1.5 rounded-md text-left transition-colors
-            {globalIdx === selectedIndex ? 'bg-surface-active' : 'hover:bg-surface-hover'}"
-          onclick={() => onselect(cmd)}
-        >
-          <span class="font-mono text-xs font-medium w-16 shrink-0 {cmd.color}">{cmd.label}</span>
-          <span class="text-sm text-text-muted flex-1">{cmd.description}</span>
-          <span class="text-[9px] px-1 py-0.5 rounded {CATEGORY_STYLES[cat].bg} {CATEGORY_STYLES[cat].color}">{cat}</span>
-        </button>
+      {@const buckets = groupCommands(catCommands)}
+      {#each buckets as bucket}
+        {#if bucket.group && buckets.length > 1}
+          <div class="px-2 pt-1.5 pb-0.5 text-[9px] font-medium uppercase tracking-wider text-text-muted/60">{bucket.group}</div>
+        {/if}
+        {#each bucket.commands as cmd}
+          {@const globalIdx = commands.indexOf(cmd)}
+          <button
+            use:scrollIntoView={globalIdx === selectedIndex}
+            class="w-full flex items-center gap-3 px-2 py-1.5 rounded-md text-left transition-colors
+              {globalIdx === selectedIndex ? 'bg-surface-active' : 'hover:bg-surface-hover'}"
+            onclick={() => onselect(cmd)}
+          >
+            <span class="font-mono text-xs font-medium w-16 shrink-0 {cmd.color}">{cmd.label}</span>
+            <span class="text-sm text-text-muted flex-1">{cmd.description}</span>
+            <span class="text-[9px] px-1 py-0.5 rounded {CATEGORY_STYLES[cat].bg} {CATEGORY_STYLES[cat].color}">{cat}</span>
+          </button>
+        {/each}
       {/each}
     {/if}
   {/each}

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { getArchive, restoreFromArchive, deleteFromArchive, clearArchive, type ArchivedTab } from "../../lib/archive.ts";
+  import { faviconCacheUrl } from "../../lib/favicon.ts";
 
   let archive = $state<ArchivedTab[]>([]);
   let searchQuery = $state("");
@@ -112,13 +113,10 @@
   }
 
   function faviconUrl(item: ArchivedTab): string {
-    if (item.favIconUrl && !item.favIconUrl.startsWith("chrome://")) return item.favIconUrl;
-    try {
-      const u = new URL(item.url);
-      return `https://www.google.com/s2/favicons?domain=${u.hostname}&sz=32`;
-    } catch {
-      return "";
-    }
+    // Always Chrome's local cache, never the stored favIconUrl. These tabs were closed days
+    // or weeks ago, so preferring the stored URL meant simply opening the archive fired a
+    // request to every archived site's own server.
+    return item.url ? faviconCacheUrl(item.url, 32) : "";
   }
 
   function formatTime(ts: number): string {

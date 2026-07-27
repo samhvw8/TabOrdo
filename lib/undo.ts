@@ -16,6 +16,10 @@ interface GroupAssignment {
   groupId: number;
   groupTitle?: string;
   groupColor?: string;
+  // Optional: entries persisted by older versions have neither. /aigroup moves tabs across
+  // windows, so restoring group membership alone left them stranded where the AI put them.
+  windowId?: number;
+  index?: number;
 }
 
 const UNDO_KEY = "tabOrdo_undoStack";
@@ -91,6 +95,8 @@ export async function snapshotBeforeGroup(): Promise<void> {
         groupId: t.groupId,
         groupTitle: g?.title,
         groupColor: g?.color,
+        windowId: t.windowId,
+        index: t.index,
       };
     });
   pushUndo({
@@ -108,11 +114,24 @@ export async function executeUndo(): Promise<string> {
   switch (entry.type) {
     case "close": {
       const tabs = entry.data as ClosedTabData[];
+      // The snapshot records where each tab lived; put it back there when that window still
+      // exists instead of dumping every restored tab into whatever window is focused now.
+      const openWindows = new Set<number>();
+      try {
+        for (const w of await chrome.windows.getAll()) {
+          if (w.id !== undefined) openWindows.add(w.id);
+        }
+      } catch {}
       let reopened = 0;
       for (const t of tabs) {
         if (!t.url || t.url === "chrome://newtab/") continue;
         try {
-          await chrome.tabs.create({ url: t.url, pinned: t.pinned, active: false });
+          await chrome.tabs.create({
+            url: t.url,
+            pinned: t.pinned,
+            active: false,
+            ...(openWindows.has(t.windowId) ? { windowId: t.windowId } : {}),
+          });
           reopened++;
         } catch {}
       }
@@ -135,6 +154,29 @@ export async function executeUndo(): Promise<string> {
       const allCurrentGrouped = currentTabs.filter((t) => t.groupId !== -1);
       if (allCurrentGrouped.length > 0) {
         await chrome.tabs.ungroup(allCurrentGrouped.map((t) => t.id!)).catch(() => {});
+      }
+
+      // Put tabs back in the window they came from before regrouping. /aigroup relocates tabs
+      // across windows, and chrome.tabs.group rejects ids spanning windows anyway, so this has
+      // to happen first. Ungrouping above frees them from their current group's block.
+      const openWindows = new Set<number>();
+      try {
+        for (const w of await chrome.windows.getAll()) {
+          if (w.id !== undefined) openWindows.add(w.id);
+        }
+      } catch {}
+      const byTabId = new Map(currentTabs.map((t) => [t.id!, t]));
+      const relocations = assignments
+        .filter((a) => a.windowId !== undefined && currentIds.has(a.tabId) && openWindows.has(a.windowId))
+        .filter((a) => {
+          const t = byTabId.get(a.tabId);
+          return !!t && (t.windowId !== a.windowId || t.index !== a.index);
+        })
+        .sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+      for (const a of relocations) {
+        await chrome.tabs
+          .move(a.tabId, { windowId: a.windowId!, index: a.index ?? -1 })
+          .catch(() => {});
       }
 
       for (const [, info] of byGroup) {

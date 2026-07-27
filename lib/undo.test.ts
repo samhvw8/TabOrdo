@@ -55,6 +55,8 @@ describe("executeUndo — close", () => {
   });
 
   it("reopens closed tabs pinned-state intact, inactive, skipping newtab and empty urls", async () => {
+    // Window 1 is still open; window 2 is gone.
+    stub.windows = [{ id: 1 }];
     snapshotClosedTabs([
       { url: "https://a.com", pinned: true, windowId: 1 },
       { url: "chrome://newtab/", pinned: false, windowId: 1 },
@@ -65,7 +67,9 @@ describe("executeUndo — close", () => {
     const msg = await executeUndo();
     expect(msg).toBe("Reopened 2 tab(s)");
     expect(stub.created).toEqual([
-      { url: "https://a.com", pinned: true, active: false },
+      // restored into its original window, which still exists...
+      { url: "https://a.com", pinned: true, active: false, windowId: 1 },
+      // ...while a tab whose window is gone falls back to the focused one
       { url: "https://b.com", pinned: false, active: false },
     ]);
     expect(undoStackSize()).toBe(0);
@@ -131,5 +135,44 @@ describe("executeUndo — group", () => {
     await executeUndo();
     // Both land in the same group because the snapshot keys on title:color
     expect(stub.openTabs[0].groupId).toBe(stub.openTabs[1].groupId);
+  });
+
+  it("moves tabs back to their snapshotted window before regrouping", async () => {
+    stub.windows = [{ id: 1 }, { id: 2 }];
+    stub.openTabs = [
+      { id: 1, url: "https://a.com", pinned: false, windowId: 1, groupId: -1, index: 0 },
+      { id: 2, url: "https://b.com", pinned: false, windowId: 2, groupId: -1, index: 0 },
+    ];
+    await snapshotBeforeGroup();
+
+    // What /aigroup does: consolidate across windows, then group.
+    stub.openTabs[1].windowId = 1;
+    stub.openTabs[1].index = 1;
+    stub.openTabs[0].groupId = 5;
+    stub.openTabs[1].groupId = 5;
+
+    await executeUndo();
+    expect(stub.moves).toEqual([expect.objectContaining({ ids: [2], windowId: 2 })]);
+    expect(stub.openTabs.find((t) => t.id === 2)?.windowId).toBe(2);
+  });
+
+  it("leaves tabs alone when the snapshotted window is gone", async () => {
+    stub.windows = [{ id: 1 }, { id: 2 }];
+    stub.openTabs = [{ id: 1, url: "https://a.com", pinned: false, windowId: 2, groupId: -1, index: 0 }];
+    await snapshotBeforeGroup();
+
+    stub.openTabs[0].windowId = 1;
+    stub.windows = [{ id: 1 }]; // window 2 closed since the snapshot
+    await executeUndo();
+    expect(stub.moves).toEqual([]);
+  });
+
+  it("does not relocate for legacy entries that recorded no window", async () => {
+    stub.windows = [{ id: 1 }, { id: 2 }];
+    stub.openTabs = [{ id: 1, url: "https://a.com", pinned: false, windowId: 2, groupId: -1, index: 0 }];
+    pushUndo({ type: "group", label: "Group change", timestamp: 1, data: [{ tabId: 1, groupId: -1 }] });
+
+    await executeUndo();
+    expect(stub.moves).toEqual([]);
   });
 });
