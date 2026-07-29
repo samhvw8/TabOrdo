@@ -1,11 +1,11 @@
 import { getConfig, matchDomainToRule, isIgnoredUrl, isIgnoredGroupName } from "../../lib/rules.ts";
-import { getFullHostname, getDomain, sortTabsInWindow, pickMajorityWindow, GROUP_COLORS, hashCode } from "../../lib/tabs.ts";
+import { getFullHostname, getDomain, sortTabsInWindow, pickMajorityWindow, GROUP_COLORS, hashCode } from "../../lib/tabs/index.ts";
 import { syncPinUrl } from "../../lib/pin.ts";
 import { findBounceTarget } from "../../lib/bounce.ts";
 import { logAction } from "../../lib/actionLog.ts";
 import { addToReadingList } from "../../lib/readinglist.ts";
 import { checkAIAvailability, suggestGroups, setAIProgress, getAIProgress, defaultProgress } from "../../lib/ai.ts";
-import { isBulkLocked, acquireBulkLock, releaseBulkLock, newLockOwner, AI_LEASE_MS } from "../../lib/bulklock.ts";
+import { isBulkLocked, acquireBulkLock, releaseBulkLock, newLockOwner, withBulkLock, AI_LEASE_MS } from "../../lib/bulklock.ts";
 let pinSyncInProgress = false;
 const ungroupTimers = new Map<number, ReturnType<typeof setTimeout>>();
 
@@ -29,6 +29,28 @@ function isRecentSelfWrite(tabId: number): boolean {
   if (t === undefined) return false;
   if (Date.now() - t > SELF_WRITE_TTL_MS) {
     selfWrites.delete(tabId);
+    return false;
+  }
+  return true;
+}
+
+// Same idea, separate ledger for pin-state writes. The pinSyncInProgress flag alone couldn't
+// suppress the echoes: Chrome dispatches the onUpdated events our own tabs.update calls
+// generate *after* the loop has finished and cleared the flag, so every synced tab kicked off
+// another full pass. They converged (the state already matched) but each one woke the worker
+// and re-queried every tab in the profile.
+const pinSelfWrites = new Map<number, number>();
+
+function markPinSelfWrite(tabIds: number[]): void {
+  const now = Date.now();
+  for (const id of tabIds) pinSelfWrites.set(id, now);
+}
+
+function isRecentPinSelfWrite(tabId: number): boolean {
+  const t = pinSelfWrites.get(tabId);
+  if (t === undefined) return false;
+  if (Date.now() - t > SELF_WRITE_TTL_MS) {
+    pinSelfWrites.delete(tabId);
     return false;
   }
   return true;
@@ -124,8 +146,16 @@ async function tryGroupTab(tabId: number, groupId: number, title: string, color:
 export default defineBackground(() => {
   chrome.commands.onCommand.addListener(async (command) => {
     if (command === "open-dashboard") {
+      // The flag is consumed by the popup on mount. If openPopup fails (it needs Chrome 127+,
+      // and rejects when no window is focused) a stale flag would sit in session storage and
+      // silently steal search autofocus from the *next* ordinary Cmd+E open.
       await chrome.storage.session.set({ openMode: "dashboard" });
-      await chrome.action.openPopup();
+      try {
+        await chrome.action.openPopup();
+      } catch (e) {
+        console.warn("[TabOrdo] openPopup failed:", e);
+        await chrome.storage.session.remove("openMode").catch(() => {});
+      }
     }
   });
 
@@ -312,17 +342,22 @@ export default defineBackground(() => {
   chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     if (changeInfo.pinned === undefined || !tab.url) return;
     if (pinSyncInProgress) return;
+    if (isRecentPinSelfWrite(tabId)) return;
     if (!(await getConfig()).autoPinFollow) return;
 
     pinSyncInProgress = true;
     try {
       const allTabs = await chrome.tabs.query({});
       const sameUrl = allTabs.filter((t) => t.id !== tabId && t.url === tab.url);
-      for (const t of sameUrl) {
-        if (t.pinned !== changeInfo.pinned) {
-          await chrome.tabs.update(t.id!, { pinned: changeInfo.pinned });
-        }
+      const stale = sameUrl.filter((t) => t.pinned !== changeInfo.pinned);
+      markPinSelfWrite(stale.map((t) => t.id!));
+      for (const t of stale) {
+        await chrome.tabs.update(t.id!, { pinned: changeInfo.pinned }).catch((e) => {
+          console.warn("[TabOrdo] pin follow update failed:", e);
+        });
       }
+    } catch (e) {
+      console.error("[TabOrdo] pin follow error:", e);
     } finally {
       pinSyncInProgress = false;
     }
@@ -356,19 +391,22 @@ export default defineBackground(() => {
     chrome.contextMenus.onClicked.addListener(async (info) => {
       try {
         switch (info.menuItemId) {
+          // These three do the same bulk rearranging the palette does, so they need the same
+          // suppression — without it the auto-group/sort/ungroup listeners react to the very
+          // mutations these are making. The palette wrapped them; this path never did.
           case "tabOrdo-group-domain": {
-            const { groupTabsByDomain } = await import("../../lib/tabs.ts");
-            await groupTabsByDomain("additive");
+            const { groupTabsByDomain } = await import("../../lib/tabs/index.ts");
+            await withBulkLock(() => groupTabsByDomain("additive"));
             break;
           }
           case "tabOrdo-dedup": {
-            const { removeDuplicates } = await import("../../lib/tabs.ts");
-            await removeDuplicates();
+            const { removeDuplicates } = await import("../../lib/tabs/index.ts");
+            await withBulkLock(() => removeDuplicates());
             break;
           }
           case "tabOrdo-sort": {
             const win = await chrome.windows.getCurrent();
-            await sortTabsInWindow(win.id!);
+            await withBulkLock(() => sortTabsInWindow(win.id!));
             break;
           }
           case "tabOrdo-readlater": {

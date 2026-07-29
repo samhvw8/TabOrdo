@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { installChromeStub, type ChromeStub } from "./testing/chrome-stub.ts";
-import { uniteDomain, isolateDomain, splitByDomain } from "./tabs.ts";
+import { installChromeStub, type ChromeStub } from "../testing/chrome-stub.ts";
+import { uniteDomain, isolateDomain, splitByDomain } from "./index.ts";
 
 let stub: ChromeStub;
 

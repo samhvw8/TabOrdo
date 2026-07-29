@@ -72,6 +72,22 @@ The dashboard shows a live 🔊 banner when any tabs are playing audio — click
 
 **Customizable actions** — the action buttons on the dashboard are configurable. Open the **More** sidebar panel and click ★ next to any action to add or remove it from the dashboard grid. Your selection persists across sessions.
 
+**Alt-click for the opposite** — several tiles carry a second mode. Hold `Alt` and the tile relabels to show what it will do; click to run it. One tile covers both directions, so you don't have to spend two dashboard slots on a pair.
+
+| Tile | Click | Alt-click |
+|------|-------|-----------|
+| Lock Tab | Hold at current position | Hold at first position |
+| Lock Group | Hold group at current position | Hold group at first position |
+| Mute Tab | Mute active tab | Unmute active tab |
+| Close Left | Close tabs to the left | Close tabs to the right |
+| Close Right | Close tabs to the right | Close tabs to the left |
+| Split V | Side-by-side windows | Top/bottom windows |
+| Split H | Top/bottom windows | Side-by-side windows |
+| Save | Export tabs to file | Import tabs from file |
+| Load | Import tabs from file | Export tabs to file |
+| Unite | Pull same-domain tabs here | Send domain to a new window |
+| Isolate | Send domain to a new window | Pull same-domain tabs here |
+
 ## Sidebar
 
 | Section | Description |

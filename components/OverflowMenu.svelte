@@ -17,6 +17,8 @@
       { action: "regroup", label: "Regroup All" },
       { action: "ungroup", label: "Ungroup All" },
       { action: "shuffle", label: "Shuffle" },
+      { action: "collapse", label: "Collapse Groups" },
+      { action: "pingroup", label: "Lock Group" },
     ]},
     { title: "Windows", items: [
       { action: "unite", label: "Unite Domain" },
@@ -25,6 +27,13 @@
       { action: "splith", label: "Split Horizontal" },
       { action: "splitdomain", label: "Split by Domain" },
       { action: "stack", label: "Stack Windows" },
+      { action: "split", label: "Split Tab Out" },
+      { action: "extract", label: "Extract from Group" },
+    ]},
+    { title: "Tab", items: [
+      { action: "mute", label: "Mute Tab" },
+      { action: "freeze", label: "Unload Inactive" },
+      { action: "restore", label: "Restore Last Closed" },
     ]},
     { title: "Close", items: [
       { action: "closeleft", label: "Close Left" },

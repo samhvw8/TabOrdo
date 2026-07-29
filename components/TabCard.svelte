@@ -1,6 +1,6 @@
 <script lang="ts">
-  import type { TabInfo } from "../lib/tabs.ts";
-  import { switchToTab, getFullHostname, muteTab, setTabVolume } from "../lib/tabs.ts";
+  import type { TabInfo } from "../lib/tabs/index.ts";
+  import { switchToTab, getFullHostname, muteTab, setTabVolume } from "../lib/tabs/index.ts";
 
   let {
     tab,

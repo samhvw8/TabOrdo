@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { getRules, saveRules, getAutoGroup, setAutoGroup, populateFromCurrentGroups, mergeRules, domainMatches, type GroupRule } from "../lib/rules.ts";
-  import { getFullHostname } from "../lib/tabs.ts";
+  import { getFullHostname } from "../lib/tabs/index.ts";
 
   let {
     onclose,

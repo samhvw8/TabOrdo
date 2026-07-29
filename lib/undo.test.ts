@@ -6,46 +6,58 @@ let stub: ChromeStub;
 
 const entry = (type: string, data: unknown = []) => ({ type, label: type, timestamp: 1, data });
 
-beforeEach(() => {
+beforeEach(async () => {
   stub = installChromeStub();
   // Drain the module-level stack between tests
-  while (popUndo()) {
+  while (await popUndo()) {
     /* empty */
   }
 });
 
 describe("undo stack", () => {
-  it("push / peek / pop / size", () => {
+  it("push / peek / pop / size", async () => {
     expect(undoStackSize()).toBe(0);
-    pushUndo(entry("close"));
-    pushUndo(entry("group"));
+    await pushUndo(entry("close"));
+    await pushUndo(entry("group"));
     expect(undoStackSize()).toBe(2);
     expect(peekUndo()?.type).toBe("group");
-    expect(popUndo()?.type).toBe("group");
-    expect(popUndo()?.type).toBe("close");
-    expect(popUndo()).toBeNull();
+    expect((await popUndo())?.type).toBe("group");
+    expect((await popUndo())?.type).toBe("close");
+    expect(await popUndo()).toBeNull();
   });
 
-  it("caps at 20 entries, dropping the oldest", () => {
-    for (let i = 0; i < 25; i++) pushUndo(entry("close", i));
+  it("caps at 20 entries, dropping the oldest", async () => {
+    for (let i = 0; i < 25; i++) await pushUndo(entry("close", i));
     expect(undoStackSize()).toBe(20);
     expect(peekUndo()?.data).toBe(24);
     let bottom = null;
     let e;
-    while ((e = popUndo())) bottom = e;
+    while ((e = await popUndo())) bottom = e;
     expect(bottom?.data).toBe(5);
   });
 
   it("persists to session storage and loads back", async () => {
-    pushUndo(entry("close", "x"));
+    await pushUndo(entry("close", "x"));
     expect(stub.sessionData["tabOrdo_undoStack"]).toHaveLength(1);
-    while (popUndo()) {
+    while (await popUndo()) {
       /* empty */
     }
     stub.sessionData["tabOrdo_undoStack"] = [entry("group", "y")];
     await loadUndoStack();
     expect(undoStackSize()).toBe(1);
     expect(peekUndo()?.data).toBe("y");
+  });
+});
+
+describe("cross-realm stack", () => {
+  it("picks up entries another surface persisted before pushing", async () => {
+    await pushUndo(entry("close", "mine"));
+    // The side panel is the same component in a second realm, with its own module-level
+    // mirror but the same session storage behind it.
+    stub.sessionData["tabOrdo_undoStack"] = [entry("close", "mine"), entry("group", "theirs")];
+    await pushUndo(entry("close", "later"));
+    const persisted = stub.sessionData["tabOrdo_undoStack"] as { data: unknown }[];
+    expect(persisted.map((e) => e.data)).toEqual(["mine", "theirs", "later"]);
   });
 });
 
@@ -57,7 +69,7 @@ describe("executeUndo — close", () => {
   it("reopens closed tabs pinned-state intact, inactive, skipping newtab and empty urls", async () => {
     // Window 1 is still open; window 2 is gone.
     stub.windows = [{ id: 1 }];
-    snapshotClosedTabs([
+    await snapshotClosedTabs([
       { url: "https://a.com", pinned: true, windowId: 1 },
       { url: "chrome://newtab/", pinned: false, windowId: 1 },
       { url: "", pinned: false, windowId: 1 },
@@ -76,7 +88,7 @@ describe("executeUndo — close", () => {
   });
 
   it("returns a message for unknown entry types", async () => {
-    pushUndo(entry("mystery"));
+    await pushUndo(entry("mystery"));
     expect(await executeUndo()).toBe("Unknown undo type");
   });
 });
@@ -167,10 +179,61 @@ describe("executeUndo — group", () => {
     expect(stub.moves).toEqual([]);
   });
 
+  it("leaves tabs grouped after the snapshot alone", async () => {
+    stub.openTabs = [{ id: 1, url: "https://a.com", pinned: false, windowId: 1, groupId: 7, index: 0 }];
+    stub.groups = [{ id: 7, title: "Work", color: "blue", windowId: 1 }];
+    await snapshotBeforeGroup();
+
+    stub.openTabs[0].groupId = -1;
+    // Opened and grouped by the user after the snapshot — outside this undo's scope.
+    stub.openTabs.push({ id: 2, url: "https://new.com", pinned: false, windowId: 1, groupId: 12, index: 1 });
+    stub.groups.push({ id: 12, title: "Later", color: "red", windowId: 1 });
+
+    await executeUndo();
+    expect(stub.ungroupedIds).not.toContain(2);
+    expect(stub.openTabs.find((t) => t.id === 2)?.groupId).toBe(12);
+  });
+
+  it("keeps same-titled groups from different windows apart", async () => {
+    stub.windows = [{ id: 1 }, { id: 2 }];
+    stub.openTabs = [
+      { id: 1, url: "https://a.com", pinned: false, windowId: 1, groupId: 7, index: 0 },
+      { id: 2, url: "https://b.com", pinned: false, windowId: 2, groupId: 8, index: 0 },
+    ];
+    stub.groups = [
+      { id: 7, title: "Work", color: "blue", windowId: 1 },
+      { id: 8, title: "Work", color: "blue", windowId: 2 },
+    ];
+    await snapshotBeforeGroup();
+
+    // Something consolidated both into one group in window 1.
+    stub.openTabs[1].windowId = 1;
+    stub.openTabs[1].index = 1;
+    stub.openTabs[0].groupId = 9;
+    stub.openTabs[1].groupId = 9;
+
+    const msg = await executeUndo();
+    expect(msg).toBe("Restored previous group state");
+    const t1 = stub.openTabs.find((t) => t.id === 1)!;
+    const t2 = stub.openTabs.find((t) => t.id === 2)!;
+    expect(t2.windowId).toBe(2);
+    expect(t1.groupId).not.toBe(t2.groupId);
+  });
+
+  it("reports groups it could not rebuild instead of aborting the restore", async () => {
+    stub.openTabs = [{ id: 1, url: "https://a.com", pinned: false, windowId: 1, groupId: 7, index: 0 }];
+    stub.groups = [{ id: 7, title: "Work", color: "blue", windowId: 1 }];
+    await snapshotBeforeGroup();
+
+    stub.openTabs[0].groupId = -1;
+    stub.failGroup = true;
+    expect(await executeUndo()).toBe("Restored previous group state — 1 group(s) could not be rebuilt");
+  });
+
   it("does not relocate for legacy entries that recorded no window", async () => {
     stub.windows = [{ id: 1 }, { id: 2 }];
     stub.openTabs = [{ id: 1, url: "https://a.com", pinned: false, windowId: 2, groupId: -1, index: 0 }];
-    pushUndo({ type: "group", label: "Group change", timestamp: 1, data: [{ tabId: 1, groupId: -1 }] });
+    await pushUndo({ type: "group", label: "Group change", timestamp: 1, data: [{ tabId: 1, groupId: -1 }] });
 
     await executeUndo();
     expect(stub.moves).toEqual([]);

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { focusMode, unfocusMode, hasSavedWorkspace } from "./workspace.ts";
+import { focusMode, unfocusMode, hasSavedWorkspace, loadTabsFromText } from "./workspace.ts";
 
 type FakeTab = { id: number; url?: string; pinned: boolean };
 
@@ -7,12 +7,16 @@ let storage: Record<string, unknown>;
 let openTabs: FakeTab[];
 let created: { url?: string; pinned?: boolean; active?: boolean }[];
 let removed: number[];
+let windowsCreated: { url?: string }[];
+let discarded: number[];
 
 beforeEach(() => {
   storage = {};
   openTabs = [];
   created = [];
   removed = [];
+  windowsCreated = [];
+  discarded = [];
   globalThis.chrome = {
     storage: {
       local: {
@@ -38,6 +42,15 @@ beforeEach(() => {
       },
       remove: async (ids: number[]) => {
         removed.push(...ids);
+      },
+      discard: async (id: number) => {
+        discarded.push(id);
+      },
+    },
+    windows: {
+      create: async (props: { url?: string } = {}) => {
+        windowsCreated.push(props);
+        return { id: 900 + windowsCreated.length };
       },
     },
   } as unknown as typeof chrome;
@@ -126,5 +139,29 @@ describe("legacy single-slot migration", () => {
     created = [];
     await unfocusMode();
     expect(created.map((c) => c.url)).toEqual(["https://old.com"]);
+  });
+});
+
+describe("loadTabsFromText", () => {
+  it("opens the URLs it parsed, discarding all but the first", async () => {
+    const n = await loadTabsFromText("A\thttps://a.com\nB\thttps://b.com\nnot a url");
+    expect(n).toBe(2);
+    expect(windowsCreated).toEqual([{ url: "https://a.com" }]);
+    expect(created.map((c) => c.url)).toEqual(["https://b.com"]);
+    expect(discarded).toHaveLength(1);
+  });
+
+  it("still opens the first URL when it alone exceeds the size cap", async () => {
+    // Previously capped came back empty here, so we opened a blank window and then
+    // reported "no valid URLs found".
+    const huge = "https://a.com/" + "x".repeat(3 * 1024 * 1024);
+    const n = await loadTabsFromText(huge);
+    expect(n).toBe(1);
+    expect(windowsCreated).toEqual([{ url: huge }]);
+  });
+
+  it("opens nothing when no line parses to a URL", async () => {
+    expect(await loadTabsFromText("nope\nstill nope")).toBe(0);
+    expect(windowsCreated).toEqual([]);
   });
 });

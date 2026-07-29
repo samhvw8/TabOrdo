@@ -14,7 +14,7 @@ export interface AIGroupProgress {
   error: string;
 }
 
-const AI_PROGRESS_KEY = "tabOrdo_aiGroupProgress";
+export const AI_PROGRESS_KEY = "tabOrdo_aiGroupProgress";
 
 export function defaultProgress(): AIGroupProgress {
   return { status: "idle", total: 0, processed: 0, currentTab: "", grouped: 0, groupCount: 0, error: "" };

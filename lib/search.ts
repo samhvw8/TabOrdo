@@ -1,5 +1,5 @@
 import uFuzzy from "@leeoniya/ufuzzy";
-import type { TabInfo } from "./tabs.ts";
+import type { TabInfo } from "./tabs/index.ts";
 import { pinyinVariants, hasChinese } from "./pinyin.ts";
 import { TRIAGE_COMMANDS } from "./commands.ts";
 

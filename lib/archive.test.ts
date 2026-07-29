@@ -105,3 +105,19 @@ describe("deleteFromArchive / clearArchive", () => {
     expect(await getArchiveCount()).toBe(0);
   });
 });
+
+describe("getArchiveCount", () => {
+  it("backfills the count for archives written before the counter existed", async () => {
+    // Pre-0.6.x shape: entries present, no denormalized count key.
+    stub.localData["tabOrdo_archive"] = [
+      { id: "a", url: "https://a.com", title: "A", archivedAt: 1 },
+      { id: "b", url: "https://b.com", title: "B", archivedAt: 1 },
+    ];
+    expect(await getArchiveCount()).toBe(2);
+    expect(stub.localData["tabOrdo_archiveCount"]).toBe(2);
+  });
+
+  it("is zero when there is no archive at all", async () => {
+    expect(await getArchiveCount()).toBe(0);
+  });
+});

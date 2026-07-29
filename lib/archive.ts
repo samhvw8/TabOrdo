@@ -73,7 +73,15 @@ export async function clearArchive(): Promise<void> {
   await saveArchive([]);
 }
 
+// COUNT_KEY is a cheap denormalized read so the sidebar badge doesn't deserialize the whole
+// archive. It only exists from the version that introduced saveArchive's dual write, so an
+// archive written before that has entries and no count — fall back to measuring it, and
+// backfill so the next read is cheap again.
 export async function getArchiveCount(): Promise<number> {
-  const data = await chrome.storage.local.get(COUNT_KEY);
-  return data[COUNT_KEY] || 0;
+  const data = await chrome.storage.local.get([COUNT_KEY, STORAGE_KEY]);
+  const count = data[COUNT_KEY];
+  if (typeof count === "number") return count;
+  const archive: ArchivedTab[] = Array.isArray(data[STORAGE_KEY]) ? data[STORAGE_KEY] : [];
+  await chrome.storage.local.set({ [COUNT_KEY]: archive.length }).catch(() => {});
+  return archive.length;
 }

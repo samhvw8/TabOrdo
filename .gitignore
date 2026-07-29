@@ -8,3 +8,6 @@ dist/
 ss-*.png
 promo-*.png
 cws-*.png
+
+# Lockfile is npm (CI runs `npm ci`); a second bun lockfile only drifts.
+bun.lock

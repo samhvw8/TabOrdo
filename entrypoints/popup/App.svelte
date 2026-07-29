@@ -1,18 +1,21 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { getAllTabs, getCurrentWindowTabs, switchToTab, closeTabs, sortTabsInWindow, sortTabsInGroup, groupTabsByDomain, ungroupAll, removeDuplicates, mergeAllWindows, muteTab, setTabVolume, splitTabToWindow, extractGroupToWindow, discardTabs, closeTabsToLeft, closeTabsToRight, closeTabsSameSite, closeOldTabs, shuffleTabs, uniteDomain, isolateDomain, splitWindow, splitByDomain, stackWindows, collapseAllGroups, moveCurrentTab, moveGroup, pinCurrentTab, unpinCurrentTab, pinCurrentGroup, unpinCurrentGroup, type TabInfo } from "../../lib/tabs.ts";
+  import { getAllTabs, getCurrentWindowTabs, switchToTab, closeTabs, sortTabsInWindow, sortTabsInGroup, groupTabsByDomain, ungroupAll, removeDuplicates, mergeAllWindows, extractGroupToWindow, discardTabs, closeTabsToLeft, closeTabsToRight, closeTabsSameSite, closeOldTabs, shuffleTabs, uniteDomain, isolateDomain, splitWindow, splitByDomain, stackWindows, pinCurrentTab, unpinCurrentTab, type TabInfo } from "../../lib/tabs/index.ts";
   import { getPinnedTabs, getPinForTab, type PinnedTabEntry } from "../../lib/pin.ts";
   import { archiveTabs, getArchiveCount } from "../../lib/archive.ts";
   import { search, rankedSearch, tabsToSearchItems, searchBookmarks, searchHistory, parseCommand, buildSearchHaystack, buildTitleHaystack, type SearchResult } from "../../lib/search.ts";
   import { getAutoGroup, setAutoGroup, getAutoUngroup, setAutoUngroup, getUseRules, setUseRules, getAutoSort, setAutoSort, getAutoPinFollow, setAutoPinFollow, getAutoDiscard, setAutoDiscard, setSwitchToExisting } from "../../lib/rules.ts";
   import { matchCommands, ALL_COMMANDS, ACTION_COMMANDS, TRIAGE_COMMANDS, CATEGORY_STYLES, groupCommands, type CommandDefinition, type CommandCategory } from "../../lib/commands.ts";
-  import { snapshotBeforeClose, snapshotBeforeGroup, executeUndo, peekUndo, loadUndoStack } from "../../lib/undo.ts";
+  import { snapshotBeforeClose, snapshotBeforeGroup, executeUndo, peekUndo, loadUndoStack, UNDO_KEY } from "../../lib/undo.ts";
   import { focusMode, unfocusMode, hasSavedWorkspace, exportTabsToFile, loadTabsFromText } from "../../lib/workspace.ts";
   import { addTabsToReadingList, isReadingListAvailable, getReadingList } from "../../lib/readinglist.ts";
-  import { getRecentlyClosed, restoreSession } from "../../lib/sessions.ts";
+  import { getRecentlyClosed } from "../../lib/sessions.ts";
   import { withBulkLock } from "../../lib/bulklock.ts";
-  import { checkAIAvailability, getAIProgress, setAIProgress, defaultProgress, type AIGroupProgress } from "../../lib/ai.ts";
+  import { checkAIAvailability, getAIProgress, defaultProgress, AI_PROGRESS_KEY, type AIGroupProgress } from "../../lib/ai.ts";
   import { getActionLog, ACTION_LOG_KEY, type ActionLogEntry } from "../../lib/actionLog.ts";
+  import { runAction, mergeStatus, FEEDBACK_URL } from "../../lib/actions.ts";
+  import { DASHBOARD_ACTION_POOL, ACTION_POOL_MAP, DEFAULT_DASHBOARD_IDS, ALT_MODE, MORE_SECTIONS,
+           UNPIN_ICON, PIN_TOP_ICON, type DashActionDef, type MoreItem } from "../../lib/dashboard.ts";
   import SearchInput from "../../components/SearchInput.svelte";
   import ResultList from "../../components/ResultList.svelte";
   import CommandHints from "../../components/CommandHints.svelte";
@@ -48,8 +51,13 @@
   let autoDiscardEnabled = $state(false);
   let switchToExistingEnabled = $state(false);
   let hasWorkspace = $state(false);
+  // `fluid` is fixed per mount — the popup and side-panel entrypoints each pass a literal — so
+  // seeding from it once is the intent, not a missed derived. Silenced rather than left to sit,
+  // because two standing warnings train you to skim past the next real one.
+  // svelte-ignore state_referenced_locally
   let inputFocused = $state(!fluid);
   // The panel persists, so grabbing focus on open would yank it off the page the user is reading.
+  // svelte-ignore state_referenced_locally
   let searchAutofocus = $state(!fluid);
   let canUndo = $state(false);
   let archiveCount = $state(0);
@@ -57,7 +65,6 @@
   let fileInputEl = $state<HTMLInputElement | undefined>(undefined);
   let busy = $state(false);
   let aiProgress = $state<AIGroupProgress>(defaultProgress());
-  let aiPollTimer: ReturnType<typeof setTimeout> | undefined;
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
   let pendingConfirm = $state<string | null>(null);
   let confirmTimer: ReturnType<typeof setTimeout> | undefined;
@@ -82,45 +89,7 @@
   let helpFilter = $state("");
   let altPressed = $state(false);
 
-  const FEEDBACK_URL = "https://github.com/samhvw8/TabOrdo/issues";
 
-  const ICON = (d: string) => `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
-  const UNPIN_ICON = ICON('<path d="M12 17v5"/><path d="M15 9.34V7a1 1 0 0 1 1-1 2 2 0 0 0 2-2H6a2 2 0 0 0 2 2 1 1 0 0 1 1 1v2.34"/><path d="m2 2 20 20"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76"/>');
-  const PIN_TOP_ICON = ICON('<path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 2-2H6a2 2 0 0 0 2 2 1 1 0 0 1 1 1z"/><path d="M5 3h14"/>');
-
-  interface DashActionDef { id: string; label: string; icon: string; tooltip: string; }
-
-  const DASHBOARD_ACTION_POOL: DashActionDef[] = [
-    { id: "sort", label: "Sort All", icon: ICON('<path d="m3 16 4 4 4-4"/><path d="M7 20V4"/><path d="m21 8-4-4-4 4"/><path d="M17 4v16"/>'), tooltip: "Sort tabs by domain." },
-    { id: "group", label: "Group+", icon: ICON('<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/><path d="M12 10v6"/><path d="M9 13h6"/>'), tooltip: "Group ungrouped tabs by domain." },
-    { id: "dedup", label: "Dedup", icon: ICON('<rect width="8" height="14" x="2" y="6" rx="2"/><rect width="8" height="14" x="14" y="4" rx="2" opacity="0.5"/><path d="m15 2-3 3-3-3"/>'), tooltip: "Close duplicate tabs." },
-    { id: "merge", label: "Merge", icon: ICON('<path d="m8 6 4-4 4 4"/><path d="M12 2v10.3a4 4 0 0 1-1.172 2.872L4 22"/><path d="m20 22-5-5"/>'), tooltip: "Move all tabs from other windows here." },
-    { id: "pin", label: "Lock Tab", icon: ICON('<path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 2-2H6a2 2 0 0 0 2 2 1 1 0 0 1 1 1z"/>'), tooltip: "Hold current tab at its position in the group." },
-    { id: "regroup", label: "Regroup", icon: ICON('<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/>'), tooltip: "Ungroup all, then regroup from scratch." },
-    { id: "ungroup", label: "Ungroup", icon: ICON('<path d="m18.84 12.25 1.72-1.71h-.02a5.004 5.004 0 0 0-.12-7.07 5.006 5.006 0 0 0-6.95 0l-1.72 1.71"/><path d="m5.17 11.75-1.71 1.71a5.004 5.004 0 0 0 .12 7.07 5.006 5.006 0 0 0 6.95 0l1.71-1.71"/><line x1="8" x2="8" y1="2" y2="5"/><line x1="2" x2="5" y1="8" y2="8"/><line x1="16" x2="16" y1="19" y2="22"/><line x1="19" x2="22" y1="16" y2="16"/>'), tooltip: "Remove all tab groups." },
-    { id: "shuffle", label: "Shuffle", icon: ICON('<path d="M2 18h1.4c1.3 0 2.5-.6 3.3-1.7l6.1-8.6c.7-1.1 2-1.7 3.3-1.7H22"/><path d="m18 2 4 4-4 4"/><path d="M2 6h1.9c1.5 0 2.9.9 3.6 2.2"/><path d="M22 18h-5.9c-1.3 0-2.6-.7-3.3-1.8l-.5-.8"/><path d="m18 14 4 4-4 4"/>'), tooltip: "Randomly reorder tabs." },
-    { id: "unite", label: "Unite", icon: ICON('<path d="m6 15-4-4 6.75-6.77a7.79 7.79 0 0 1 11 11L13 22l-4-4 6.39-6.36a2.14 2.14 0 0 0-3-3L6 15"/><path d="m5 8 4 4"/><path d="m12 15 4 4"/>'), tooltip: "Pull same-domain tabs here." },
-    { id: "isolate", label: "Isolate", icon: ICON('<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>'), tooltip: "Move domain to new window." },
-    { id: "splitv", label: "Split V", icon: ICON('<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M12 3v18"/>'), tooltip: "Side by side windows." },
-    { id: "splith", label: "Split H", icon: ICON('<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 12h18"/>'), tooltip: "Top/bottom windows." },
-    { id: "splitdomain", label: "Split Dom", icon: ICON('<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M3 15h18"/><path d="M9 3v18"/><path d="M15 3v18"/>'), tooltip: "One window per domain." },
-    { id: "stack", label: "Stack", icon: ICON('<path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m2 12 8.58 3.91a2 2 0 0 0 1.66 0L21 12"/>'), tooltip: "Stack windows to left." },
-    { id: "closeleft", label: "Close Left", icon: ICON('<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>'), tooltip: "Close tabs left of active." },
-    { id: "closeright", label: "Close Right", icon: ICON('<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>'), tooltip: "Close tabs right of active." },
-    { id: "closeold", label: "Close Old", icon: ICON('<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>'), tooltip: "Close tabs older than 7 days." },
-    { id: "closesite", label: "Close Site", icon: ICON('<circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/>'), tooltip: "Close other tabs from this domain." },
-    { id: "focus", label: "Focus", icon: ICON('<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>'), tooltip: "Save tabs & start fresh." },
-    { id: "save", label: "Save", icon: ICON('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/>'), tooltip: "Export tabs as text." },
-    { id: "load", label: "Load", icon: ICON('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/>'), tooltip: "Import tabs from text." },
-    { id: "archive", label: "Archive", icon: ICON('<rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>'), tooltip: "Open archive." },
-    { id: "aigroup", label: "AI Group", icon: ICON('<path d="M12 2a4 4 0 0 0-4 4v2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2h-2V6a4 4 0 0 0-4-4z"/><circle cx="12" cy="15" r="2"/><path d="M12 13v-2"/>'), tooltip: "Smart group tabs with on-device AI." },
-    { id: "readlater", label: "Read Later", icon: ICON('<path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/><path d="m9 9.5 2 2 4-4"/>'), tooltip: "Save active tab to Reading List." },
-    { id: "recent", label: "Recent", icon: ICON('<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/>'), tooltip: "Show recently closed tabs." },
-    { id: "sidepanel", label: "Side Panel", icon: ICON('<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M15 3v18"/>'), tooltip: "Open TabOrdo in Side Panel." },
-  ];
-
-  const DEFAULT_DASHBOARD_IDS = ["sort", "group", "dedup", "merge", "pin"];
-  const ACTION_POOL_MAP = new Map(DASHBOARD_ACTION_POOL.map(a => [a.id, a]));
   let dashboardActionIds = $state<string[]>([...DEFAULT_DASHBOARD_IDS]);
   let dashboardActions = $derived(dashboardActionIds.map(id => ACTION_POOL_MAP.get(id)).filter((a): a is DashActionDef => !!a));
 
@@ -142,10 +111,20 @@
   // Rebuilding a carried group can fail (Chrome refuses tab edits mid-drag, for one), which
   // used to leave tabs loose or in a grey untitled group while the status bar still said
   // "Merged". Say so instead.
-  function mergeStatus(r: { moved: number; groupsFailed: number }): string {
-    if (r.moved === 0) return "Nothing to merge";
-    if (r.groupsFailed > 0) return `Merged ${r.moved} tab(s) — ${r.groupsFailed} group(s) could not be rebuilt`;
-    return `Merged ${r.moved} tab(s)`;
+  /**
+   * Live text for a More-panel row. MORE_SECTIONS is static data; these three rows read state
+   * the catalogue can't know — whether a workspace is saved, how big the archive is, and
+   * whether the active tab is already locked.
+   */
+  function moreRowText(item: MoreItem): { label: string; tip: string } {
+    if (item.action === "pin") return { label: pinDisplay.label, tip: pinDisplay.tooltip };
+    if (item.action === "focus") {
+      return hasWorkspace
+        ? { label: "Unfocus", tip: "Restore saved tabs" }
+        : { label: "Focus", tip: "Save tabs & start fresh" };
+    }
+    if (item.action === "archive") return { label: item.label, tip: `${archiveCount} saved` };
+    return { label: item.label, tip: item.tip };
   }
 
   function smallIcon(svg: string): string {
@@ -177,16 +156,30 @@
   // Lock helper lives in lib/bulklock.ts — it releases only the lease this call took, so a
   // quick popup action can no longer unlock a long-running background AI grouping run.
 
+  // Every status message goes through here so none can strand on screen. The triage views
+  // used to set statusMessage with no timer of their own, leaving "Reading List is empty"
+  // pinned under the search bar until an unrelated action happened to overwrite it.
+  let statusTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function flashStatus(msg: string, ms = 3000) {
+    statusMessage = msg;
+    clearTimeout(statusTimer);
+    statusTimer = setTimeout(() => { statusMessage = ""; }, ms);
+  }
+
   async function handleUndo() {
     if (busy) return;
     busy = true;
     try {
       const msg = await withBulkLock(() => executeUndo());
-      statusMessage = msg;
-      canUndo = !!peekUndo();
+      flashStatus(msg);
       await loadTabs();
-      setTimeout(() => { statusMessage = ""; }, 3000);
+    } catch (e) {
+      // The entry is already popped by this point, so swallowing this left the user with no
+      // message, no undo, and an unhandled rejection in the console.
+      flashStatus(`Undo failed: ${e instanceof Error ? e.message : "unknown error"}`, 5000);
     } finally {
+      canUndo = !!peekUndo();
       busy = false;
     }
   }
@@ -351,7 +344,7 @@
         results = searchQuery
           ? rankedSearch(buildSearchHaystack(viewTabs), searchQuery).map((i) => viewTabs[i])
           : viewTabs;
-        if (viewTabs.length === 0 && view.empty) statusMessage = view.empty;
+        if (viewTabs.length === 0 && view.empty) flashStatus(view.empty);
         return;
       }
 
@@ -404,26 +397,26 @@
           }
           results = triageResults;
           if (triageResults.length === 0) {
-            statusMessage = searchQuery ? "No triage matches" : "All clear — no tabs need attention";
+            flashStatus(searchQuery ? "No triage matches" : "All clear — no tabs need attention");
           }
           break;
         }
         case "rl": {
-          if (!isReadingListAvailable()) { results = []; statusMessage = "Reading List not available (Chrome 120+)"; break; }
+          if (!isReadingListAvailable()) { results = []; flashStatus("Reading List not available (Chrome 120+)"); break; }
           const rlItems = await getReadingList();
           const rlResults: SearchResult[] = rlItems.map((item, i) => ({
             type: "bookmark" as const, id: `rl-${i}`, title: `${item.hasBeenRead ? "✓ " : ""}${item.title}`, url: item.url,
           }));
           if (searchQuery) { const hay = buildSearchHaystack(rlResults); const indices = rankedSearch(hay, searchQuery); results = indices.map((i) => rlResults[i]); }
           else results = rlResults;
-          if (rlResults.length === 0) statusMessage = "Reading List is empty";
+          if (rlResults.length === 0) flashStatus("Reading List is empty");
           break;
         }
         case "rc": {
           const rcItems = await getRecentlyClosed();
           if (searchQuery) { const hay = buildSearchHaystack(rcItems); const indices = rankedSearch(hay, searchQuery); results = indices.map((i) => rcItems[i]); }
           else results = rcItems;
-          if (rcItems.length === 0) statusMessage = "No recently closed tabs";
+          if (rcItems.length === 0) flashStatus("No recently closed tabs");
           break;
         }
         case "re": {
@@ -517,20 +510,62 @@
     return dupes;
   }
 
-  async function startAIPoll() {
-    await setAIProgress({ ...defaultProgress(), status: "checking" });
-    clearInterval(aiPollTimer);
-    let ticks = 0;
-    aiPollTimer = setInterval(async () => {
-      aiProgress = await getAIProgress();
-      ticks++;
-      if (aiProgress.status === "done" || aiProgress.status === "error") {
-        clearInterval(aiPollTimer);
-        if (aiProgress.status === "done") await loadTabs();
-      } else if (aiProgress.status === "idle" && ticks > 6) {
-        clearInterval(aiPollTimer);
+  // Read-only. The background owns the AI progress state machine end to end: runAIGroup's
+  // first act is to read the status and refuse to start when one looks in flight, so a poller
+  // that stamped "checking" could reject the very run it was opened to watch — and reopening
+  // the popup mid-run reset a live "prompting" back to "checking", where it stuck for the
+  // whole model call because suggestGroups writes no intermediate progress.
+  const AI_IN_FLIGHT = new Set(["checking", "prompting", "grouping"]);
+
+  /**
+   * Single entry point for kicking off a run — takes the undo snapshot too, so a start that
+   * gets refused doesn't leave a junk entry on the stack.
+   *
+   * Called outside withBulkLock. That used to be load-bearing — a UI lease still held at
+   * hand-off made the background's acquire fail, and our release then cleared the lock
+   * outright — but bulklock now grants concurrent leases and releases only its own, so this
+   * is merely tidier than nesting. Writes nothing to the AI progress key; the background
+   * owns it, because that key also gates runAIGroup's in-flight guard.
+   */
+  async function startAIGroup() {
+    // Courtesy check — runAIGroup's own guard stays the authority. Without it a second
+    // /aigroup during a live run would snapshot, spin, and then be refused anyway.
+    const current = await getAIProgress();
+    if (AI_IN_FLIGHT.has(current.status)) {
+      aiProgress = current;
+      activeSection = "ai";
+      flashStatus("AI grouping already in progress");
+      return;
+    }
+
+    // No undo point, no destructive regroup.
+    try {
+      await snapshotBeforeGroup();
+    } catch {
+      flashStatus("Could not save an undo point — AI grouping cancelled", 5000);
+      return;
+    }
+    canUndo = !!peekUndo();
+
+    activeSection = "ai";
+    aiProgress = { ...defaultProgress(), status: "checking" };
+    try {
+      const res = await chrome.runtime.sendMessage({ type: "aigroup-start" });
+      if (res && res.ok === false) {
+        // Refused because another run raced past the check above — leave that run's progress
+        // on screen rather than replacing it with an error about our own start.
+        if (AI_IN_FLIGHT.has((await getAIProgress()).status)) {
+          flashStatus(res.message, 5000);
+          return;
+        }
+        aiProgress = { ...defaultProgress(), status: "error", error: res.message };
+        flashStatus(res.message, 5000);
       }
-    }, 500);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "AI grouping failed to start";
+      aiProgress = { ...defaultProgress(), status: "error", error: message };
+      flashStatus(message, 5000);
+    }
   }
 
   let groupCount = $derived(windows.reduce((n, w) => n + w.groups.size, 0));
@@ -563,6 +598,14 @@
     }
     const goBack = () => { activeSection = "dashboard"; };
     switch (action) {
+      case "collapse": goBack(); dashCommand("collapse"); break;
+      case "extract": goBack(); dashCommand("extract"); break;
+      case "restore": goBack(); dashCommand("restore"); break;
+      case "mute": goBack(); dashCommand("mute"); break;
+      case "unmute": goBack(); dashCommand("unmute"); break;
+      case "freeze": goBack(); dashCommand("freeze"); break;
+      case "pingroup": goBack(); dashCommand("pingroup"); break;
+      case "split": goBack(); dashCommand("split"); break;
       case "regroup": goBack(); dashAction(async () => { await snapshotBeforeGroup(); await groupTabsByDomain("rebuild"); return "Regrouped"; }); break;
       case "ungroup": goBack(); dashAction(async () => { await snapshotBeforeGroup(); await ungroupAll(); return "Ungrouped all"; }); break;
       case "shuffle": goBack(); dashAction(async () => { await snapshotBeforeGroup(); await shuffleTabs(); return "Shuffled"; }); break;
@@ -581,16 +624,16 @@
           if (hasWorkspace) { const n = await unfocusMode(); hasWorkspace = await hasSavedWorkspace(); return n > 0 ? `Restored ${n}` : "No workspace"; }
           else { const n = await focusMode(); hasWorkspace = await hasSavedWorkspace(); return n > 0 ? `Saved ${n}, focused` : "No tabs to save"; }
         }); break;
-      case "save": goBack(); exportTabsToFile(); statusMessage = "Exporting..."; setTimeout(() => { statusMessage = ""; }, 2000); break;
+      case "save": goBack(); exportTabsToFile(); flashStatus("Exporting...", 2000); break;
       case "load": fileInputEl?.click(); break;
       case "archive": chrome.tabs.create({ url: chrome.runtime.getURL("/archive.html") }); break;
       case "feedback": chrome.tabs.create({ url: FEEDBACK_URL }); break;
       case "sort": goBack(); dashAction(async () => { await snapshotBeforeGroup(); await sortTabsInWindow(currentWindowId); return "Sorted"; }); break;
       case "group": goBack(); dashAction(async () => { await snapshotBeforeGroup(); await groupTabsByDomain("additive"); return "Grouped"; }); break;
-      case "dedup": goBack(); dashAction(async () => { await snapshotBeforeGroup(); const n = await removeDuplicates(); return n > 0 ? `${n} removed` : "No dupes"; }); break;
+      case "dedup": goBack(); dashAction(async () => { const n = await removeDuplicates(); return n > 0 ? `${n} removed` : "No dupes"; }); break;
       case "merge": goBack(); dashAction(async () => { await snapshotBeforeGroup(); return mergeStatus(await mergeAllWindows()); }); break;
       case "pin": goBack(); handlePinCurrent(new MouseEvent("click", { altKey: altPressed })); break;
-      case "aigroup": goBack(); await snapshotBeforeGroup(); chrome.runtime.sendMessage({ type: "aigroup-start" }); statusMessage = "AI grouping started..."; startAIPoll(); activeSection = "ai"; break;
+      case "aigroup": goBack(); await startAIGroup(); break;
       case "readlater": goBack(); dashAction(async () => {
         if (!isReadingListAvailable()) return "Reading List not available (Chrome 120+)";
         const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -602,307 +645,61 @@
       case "recent": goBack(); query = "/recent "; paletteMode = "search"; commandHints = []; await handleActionCommand("recent", ""); break;
       case "sidepanel":
         if (chrome.sidePanel) { chrome.sidePanel.open({ windowId: currentWindowId }); }
-        else { statusMessage = "Side Panel not available (Chrome 114+)"; setTimeout(() => { statusMessage = ""; }, 3000); }
+        else { flashStatus("Side Panel not available (Chrome 114+)"); }
         break;
     }
+  }
+
+  /** Rank the live tab set against a query, keeping only rows backed by a real tab. */
+  function rankTabs(q: string): SearchResult[] {
+    if (!q) return [];
+    return rankedSearch(searchHaystack, q, 50, searchRecency, searchTitleHaystack, searchPriority)
+      .map((i) => allTabs[i])
+      .filter((t) => t.tabId);
   }
 
   async function handleActionCommand(prefix: string, searchQuery: string) {
     if (!ACTION_PREFIXES.has(prefix)) return;
     if (busy) return;
+
+    // Handled before the lock, deliberately. Inside withBulkLock the background's own
+    // acquire lost to the UI lease we were still holding, and our release then cleared the
+    // lock outright — leaving the entire AI run with no suppression at all.
+    if (prefix === "aigroup") {
+      query = "";
+      await startAIGroup();
+      return;
+    }
+
     busy = true;
 
     try {
-    await withBulkLock(async () => {
-    const matchingIndices = searchQuery ? rankedSearch(searchHaystack, searchQuery, 50, searchRecency, searchTitleHaystack, searchPriority) : [];
-    const matchingTabs = matchingIndices.map((i) => allTabs[i]).filter((t) => t.tabId);
-    const tabIds = matchingTabs.map((t) => t.tabId!);
-    let acted = false;
+      await withBulkLock(async () => {
+        const matchingTabs = rankTabs(searchQuery);
+        const outcome = await runAction(prefix, {
+          query: searchQuery,
+          matchingTabs,
+          tabIds: matchingTabs.map((t) => t.tabId!),
+          currentWindowId,
+          rankTabs,
+          requestFilePicker: () => fileInputEl?.click(),
+        });
+        if (!outcome) return;
 
-    switch (prefix) {
-      case "close":
-        if (tabIds.length > 0) { await snapshotBeforeClose(tabIds); await closeTabs(tabIds); statusMessage = `Closed ${tabIds.length} tab(s)`; acted = true; }
-        break;
-      case "closeleft": {
-        const n = await closeTabsToLeft();
-        statusMessage = n > 0 ? `Closed ${n} tab(s) to left` : "None to close";
-        acted = true;
-        break;
-      }
-      case "closeright": {
-        const n = await closeTabsToRight();
-        statusMessage = n > 0 ? `Closed ${n} tab(s) to right` : "None to close";
-        acted = true;
-        break;
-      }
-      case "closeold": {
-        const n = await closeOldTabs();
-        statusMessage = n > 0 ? `Closed ${n} old tab(s)` : "No old tabs found";
-        acted = true;
-        break;
-      }
-      case "closesite": {
-        const n = await closeTabsSameSite();
-        statusMessage = n > 0 ? `Closed ${n} same-site tab(s)` : "No other tabs from this site";
-        acted = true;
-        break;
-      }
-      case "archive":
-        if (tabIds.length > 0) {
-          const tabData = matchingTabs.map((t) => ({ url: t.url, title: t.title, groupName: t.groupTitle }));
-          const archived = await archiveTabs(tabData);
-          await closeTabs(tabIds);
-          statusMessage = `Archived ${archived} tab(s)`;
-          acted = true;
+        // Undefined message means "leave whatever is on screen" — a handler that matched
+        // nothing shouldn't blank out the last thing the user was told.
+        if (outcome.message !== undefined) flashStatus(outcome.message);
+        if (outcome.results) results = outcome.results;
+        if (outcome.workspaceChanged) hasWorkspace = await hasSavedWorkspace();
+
+        if (outcome.acted) {
+          query = "";
+          canUndo = !!peekUndo();
+          await loadTabs();
         }
-        break;
-      case "group":
-        if (tabIds.length > 0) {
-          await snapshotBeforeGroup();
-          const gid = await chrome.tabs.group({ tabIds });
-          await chrome.tabGroups.update(gid, { title: searchQuery || "Grouped" });
-          statusMessage = `Grouped ${tabIds.length} tab(s)`; await loadTabs(); acted = true;
-        }
-        break;
-      case "ungroup":
-        if (tabIds.length > 0) {
-          await snapshotBeforeGroup();
-          await chrome.tabs.ungroup(tabIds);
-          statusMessage = `Ungrouped ${tabIds.length} tab(s)`; await loadTabs(); acted = true;
-        } else if (!searchQuery) {
-          const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-          if (activeTab?.id && activeTab.groupId !== -1) {
-            await snapshotBeforeGroup(); await chrome.tabs.ungroup(activeTab.id); statusMessage = "Ungrouped current tab"; await loadTabs(); acted = true;
-          }
-        }
-        break;
-      case "merge":
-        await snapshotBeforeGroup(); statusMessage = mergeStatus(await mergeAllWindows()); await loadTabs(); acted = true; break;
-      case "sort": {
-        const sortBy = (["title", "url", "domain"] as const).includes(searchQuery as any) ? searchQuery as "title" | "url" | "domain" : "domain";
-        await snapshotBeforeGroup(); await sortTabsInWindow(currentWindowId, sortBy); statusMessage = `Sorted tabs by ${sortBy}`; await loadTabs(); acted = true; break;
-      }
-      case "dedup": {
-        await snapshotBeforeGroup();
-        const count = await removeDuplicates();
-        statusMessage = count > 0 ? `Removed ${count} duplicate(s)` : "No duplicates found"; await loadTabs(); acted = true; break;
-      }
-      case "mute":
-        if (tabIds.length > 0) { for (const id of tabIds) await muteTab(id, true); statusMessage = `Muted ${tabIds.length} tab(s)`; acted = true; }
-        else if (!searchQuery) { const [active] = await chrome.tabs.query({ active: true, currentWindow: true }); if (active?.id) { await muteTab(active.id, true); statusMessage = "Muted active tab"; acted = true; } }
-        break;
-      case "unmute":
-        if (tabIds.length > 0) { for (const id of tabIds) await muteTab(id, false); statusMessage = `Unmuted ${tabIds.length} tab(s)`; acted = true; }
-        else if (!searchQuery) { const [active] = await chrome.tabs.query({ active: true, currentWindow: true }); if (active?.id) { await muteTab(active.id, false); statusMessage = "Unmuted active tab"; acted = true; } }
-        break;
-      case "split":
-        if (tabIds.length > 0) { await splitTabToWindow(tabIds[0]); statusMessage = "Split tab to new window"; acted = true; }
-        break;
-      case "extract": {
-        const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-        if (activeTab?.groupId && activeTab.groupId !== -1) {
-          await chrome.windows.create({ tabId: activeTab.id! });
-          statusMessage = "Extracted tab to new window";
-          acted = true;
-        } else {
-          statusMessage = "Active tab is not in a group";
-          acted = true;
-        }
-        break;
-      }
-      case "shuffle":
-        await snapshotBeforeGroup(); await shuffleTabs(); statusMessage = "Shuffled tabs"; acted = true; break;
-      case "unite": {
-        const n = await uniteDomain();
-        statusMessage = n > 0 ? `United ${n} tab(s) from other windows` : "No matching tabs in other windows";
-        acted = true; break;
-      }
-      case "isolate": {
-        const n = await isolateDomain();
-        statusMessage = n > 0 ? `Isolated ${n} tab(s) to new window` : "Not enough tabs to isolate";
-        acted = true; break;
-      }
-      case "splitv":
-        await snapshotBeforeGroup(); await splitWindow("vertical"); statusMessage = "Split vertically"; acted = true; break;
-      case "splith":
-        await snapshotBeforeGroup(); await splitWindow("horizontal"); statusMessage = "Split horizontally"; acted = true; break;
-      case "splitdomain": {
-        await snapshotBeforeGroup();
-        const n = await splitByDomain();
-        statusMessage = n > 0 ? `Split into ${n + 1} window(s)` : "Only one domain"; acted = true; break;
-      }
-      case "stack":
-        await stackWindows(); statusMessage = "Stacked windows"; acted = true; break;
-      case "focus": {
-        const n = await focusMode();
-        hasWorkspace = await hasSavedWorkspace();
-        statusMessage = n > 0 ? `Saved ${n} tab(s), focus mode on` : "No tabs to save"; acted = true; break;
-      }
-      case "unfocus": {
-        const n = await unfocusMode();
-        hasWorkspace = await hasSavedWorkspace();
-        statusMessage = n > 0 ? `Restored ${n} tab(s)` : "No saved workspace"; acted = true; break;
-      }
-      case "save":
-        exportTabsToFile(); statusMessage = "Exporting tabs..."; acted = true; break;
-      case "load":
-        fileInputEl?.click(); acted = false; break;
-      case "feedback":
-        await chrome.tabs.create({ url: FEEDBACK_URL }); statusMessage = "Opening feedback page"; acted = true; break;
-      case "discard":
-        if (tabIds.length > 0) { await discardTabs(tabIds); statusMessage = `Discarded ${tabIds.length} tab(s)`; acted = true; }
-        break;
-      case "reload":
-        if (tabIds.length > 0) { await Promise.allSettled(tabIds.map((id) => chrome.tabs.reload(id))); statusMessage = `Reloaded ${tabIds.length} tab(s)`; acted = true; }
-        break;
-      case "vol": {
-        const volMatch = searchQuery.match(/^(\d+)\s*(.*)/);
-        if (volMatch) {
-          const level = Math.max(0, Math.min(100, parseInt(volMatch[1])));
-          const filter = volMatch[2].trim();
-          if (filter) {
-            const indices = rankedSearch(searchHaystack, filter, 50, searchRecency, searchTitleHaystack, searchPriority);
-            const targets = indices.map((i) => allTabs[i]).filter((t) => t.tabId);
-            let ok = 0;
-            for (const t of targets) if (await setTabVolume(t.tabId!, level / 100)) ok++;
-            // Without host permissions only the active tab is scriptable — say so rather than
-            // reporting success for tabs that were never touched.
-            statusMessage = ok === targets.length
-              ? `Volume ${level}% on ${ok} tab(s)`
-              : `Volume ${level}% on ${ok}/${targets.length} tab(s) — the rest need page access (only the active tab is reachable)`;
-          } else {
-            const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
-            if (active?.id) {
-              const ok = await setTabVolume(active.id, level / 100);
-              statusMessage = ok ? `Volume ${level}% on active tab` : "Can't control volume on this page";
-            }
-          }
-          acted = true;
-        } else {
-          statusMessage = "Usage: /vol 50 [search]";
-          acted = true;
-        }
-        break;
-      }
-      case "collapse": {
-        const n = await collapseAllGroups();
-        statusMessage = n > 0 ? `Collapsed ${n} group(s)` : "No groups to collapse";
-        acted = true;
-        break;
-      }
-      case "move": {
-        const msg = await moveCurrentTab(searchQuery);
-        statusMessage = msg;
-        acted = true;
-        break;
-      }
-      case "movegroup": {
-        const msg = await moveGroup(searchQuery);
-        statusMessage = msg;
-        acted = true;
-        break;
-      }
-      case "lock":
-      case "pin": {
-        const msg = await pinCurrentTab(searchQuery);
-        statusMessage = msg;
-        acted = true;
-        break;
-      }
-      case "unlock":
-      case "unpin": {
-        const msg = await unpinCurrentTab();
-        statusMessage = msg;
-        acted = true;
-        break;
-      }
-      case "lockgroup":
-      case "pingroup": {
-        const msg = await pinCurrentGroup(searchQuery);
-        statusMessage = msg;
-        acted = true;
-        break;
-      }
-      case "unlockgroup":
-      case "unpingroup": {
-        const msg = await unpinCurrentGroup();
-        statusMessage = msg;
-        acted = true;
-        break;
-      }
-      case "readlater": {
-        if (!isReadingListAvailable()) { statusMessage = "Reading List not available (requires Chrome 120+)"; acted = true; break; }
-        if (tabIds.length > 0) {
-          const tabData = matchingTabs.map((t) => ({ url: t.url, title: t.title }));
-          const added = await addTabsToReadingList(tabData);
-          statusMessage = added > 0 ? `Added ${added} to Reading List` : "No valid tabs to add";
-        } else if (!searchQuery) {
-          const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
-          if (active?.url && active.title) {
-            await addTabsToReadingList([{ url: active.url, title: active.title }]);
-            statusMessage = "Added to Reading List";
-          }
-        }
-        acted = true;
-        break;
-      }
-      case "recent": {
-        const recentClosed = await getRecentlyClosed();
-        if (searchQuery) {
-          const hay = buildSearchHaystack(recentClosed);
-          const indices = rankedSearch(hay, searchQuery);
-          results = indices.map((i) => recentClosed[i]);
-        } else {
-          results = recentClosed;
-        }
-        if (recentClosed.length === 0) statusMessage = "No recently closed tabs";
-        acted = false;
-        break;
-      }
-      case "sidepanel":
-        if (chrome.sidePanel) { await chrome.sidePanel.open({ windowId: currentWindowId }); statusMessage = "Opened Side Panel"; }
-        else { statusMessage = "Side Panel not available (Chrome 114+)"; }
-        acted = true;
-        break;
-      case "restore": {
-        const sessions = await chrome.sessions?.getRecentlyClosed?.({ maxResults: 1 }) ?? [];
-        if (sessions.length > 0) {
-          const s = sessions[0];
-          const sid = s.tab?.sessionId || s.window?.sessionId;
-          if (sid) { await restoreSession(sid); statusMessage = "Restored last closed"; }
-          else { statusMessage = "Nothing to restore"; }
-        } else { statusMessage = "No recently closed tabs"; }
-        acted = true;
-        break;
-      }
-      case "freeze":
-        if (tabIds.length > 0) { await discardTabs(tabIds); statusMessage = `Unloaded ${tabIds.length} tab(s)`; acted = true; }
-        else if (!searchQuery) {
-          const inactiveTabs = (await chrome.tabs.query({})).filter((t) => !t.active && !t.pinned && !t.audible && !t.discarded);
-          if (inactiveTabs.length > 0) { await discardTabs(inactiveTabs.map((t) => t.id!)); statusMessage = `Unloaded ${inactiveTabs.length} inactive tab(s)`; acted = true; }
-          else { statusMessage = "No tabs to unload"; acted = true; }
-        }
-        break;
-      case "aigroup": {
-        await snapshotBeforeGroup();
-        chrome.runtime.sendMessage({ type: "aigroup-start" });
-        statusMessage = "AI grouping started in background...";
-        startAIPoll();
-        activeSection = "ai";
-        acted = true;
-        break;
-      }
-    }
-    if (acted) {
-      query = "";
-      canUndo = !!peekUndo();
-      await loadTabs();
-      setTimeout(() => { statusMessage = ""; }, 3000);
-    }
-    });
+      });
     } catch (e) {
-      statusMessage = `Error: ${e instanceof Error ? e.message : "Action failed"}`;
-      setTimeout(() => { statusMessage = ""; }, 5000);
+      flashStatus(`Error: ${e instanceof Error ? e.message : "Action failed"}`, 5000);
     } finally {
       busy = false;
     }
@@ -914,16 +711,25 @@
   }
 
   async function handleClose(item: SearchResult) {
+    // It checked `busy` but never set it, so held Ctrl+Delete could interleave two
+    // snapshot/close pairs against the same list.
     if (busy || !item.tabId) return;
-    await snapshotBeforeClose([item.tabId]);
-    await closeTabs([item.tabId]);
-    canUndo = true;
-    results = results.filter((r) => r.id !== item.id);
-    allTabs = allTabs.filter((t) => t.id !== item.id);
-    searchHaystack = buildSearchHaystack(allTabs);
-    searchTitleHaystack = buildTitleHaystack(allTabs);
-    dashboardTabs = dashboardTabs.filter((t) => t.id !== item.tabId);
-    await loadTabs();
+    busy = true;
+    try {
+      await snapshotBeforeClose([item.tabId]);
+      await closeTabs([item.tabId]);
+      canUndo = true;
+      results = results.filter((r) => r.id !== item.id);
+      allTabs = allTabs.filter((t) => t.id !== item.id);
+      searchHaystack = buildSearchHaystack(allTabs);
+      searchTitleHaystack = buildTitleHaystack(allTabs);
+      dashboardTabs = dashboardTabs.filter((t) => t.id !== item.tabId);
+      await loadTabs();
+    } catch (e) {
+      flashStatus(`Error: ${e instanceof Error ? e.message : "Could not close tab"}`, 5000);
+    } finally {
+      busy = false;
+    }
   }
 
   function handleCommandSelect(cmd: CommandDefinition) {
@@ -955,17 +761,46 @@
     busy = true;
     try {
       const msg = await withBulkLock(fn);
-      if (msg) statusMessage = msg;
+      // flashStatus, not a bare setTimeout: the loose timers this used to arm kept running
+      // after the next action replaced the message, so a dash action followed by an undo
+      // blanked the undo's confirmation early. flashStatus owns the single timer.
+      if (msg) flashStatus(msg);
       canUndo = !!peekUndo();
       await loadTabs();
       selectedTabs = new Set();
-      setTimeout(() => { statusMessage = ""; }, 3000);
     } catch (e) {
-      statusMessage = `Error: ${e instanceof Error ? e.message : "Action failed"}`;
-      setTimeout(() => { statusMessage = ""; }, 5000);
+      flashStatus(`Error: ${e instanceof Error ? e.message : "Action failed"}`, 5000);
     } finally {
       busy = false;
     }
+  }
+
+  /**
+   * Run a bare (no-query) palette action from a dashboard or menu button. Routes through the
+   * same handler the slash command uses, so a button and its command can't drift into
+   * reporting different things for the same work.
+   */
+  function dashCommand(prefix: string, commandQuery = "") {
+    return dashAction(async () => {
+      const outcome = await runAction(prefix, {
+        query: commandQuery,
+        matchingTabs: [],
+        tabIds: [],
+        currentWindowId,
+        rankTabs,
+        requestFilePicker: () => fileInputEl?.click(),
+      });
+      if (outcome?.workspaceChanged) hasWorkspace = await hasSavedWorkspace();
+      return outcome?.message;
+    });
+  }
+
+  /** Dashboard tile click: Lock Tab keeps its bespoke state toggle, everything else may have an alt mode. */
+  function dashButtonClick(id: string, e: MouseEvent) {
+    if (id === "pin") { handlePinCurrent(e); return; }
+    const alt = (e.altKey || e.ctrlKey) ? ALT_MODE[id] : undefined;
+    if (alt?.query !== undefined) { dashCommand(alt.action, alt.query); return; }
+    handleOverflowAction(alt?.action ?? id);
   }
 
   async function handlePinCurrent(e: MouseEvent) {
@@ -986,15 +821,49 @@
     if (!file) return;
     const text = await file.text();
     const n = await loadTabsFromText(text);
-    statusMessage = n > 0 ? `Loaded ${n} tab(s) into new window` : "No valid URLs found";
-    setTimeout(() => { statusMessage = ""; }, 3000);
+    flashStatus(n > 0 ? `Loaded ${n} tab(s) into new window` : "No valid URLs found");
     (e.target as HTMLInputElement).value = "";
   }
 
+  function applyConfig(rc: Record<string, unknown> | undefined) {
+    if (!rc) return;
+    autoGroupEnabled = rc.autoGroup === true;
+    autoUngroupEnabled = rc.autoUngroup === true;
+    useRulesEnabled = rc.useRules === true;
+    autoSortEnabled = rc.autoSort === true;
+    autoPinFollowEnabled = rc.autoPinFollow === true;
+    autoDiscardEnabled = rc.autoDiscard === true;
+    switchToExistingEnabled = rc.switchToExisting === true;
+  }
+
+  // Every cross-realm value used to be read once at mount and never again, which is what let
+  // a side panel opened before an AI run keep offering to start one. Subscribing is also what
+  // retires the old progress poller: an event only fires on a real change, so there is no
+  // stale terminal state to read and no "has the background written yet?" heuristic to time
+  // out. The popup writes none of these keys — it only listens.
   $effect(() => {
     const listener = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
-      if (area === "local" && changes[ACTION_LOG_KEY]) {
-        actionLog = Array.isArray(changes[ACTION_LOG_KEY].newValue) ? changes[ACTION_LOG_KEY].newValue : [];
+      if (area === "local") {
+        if (changes[ACTION_LOG_KEY]) {
+          actionLog = Array.isArray(changes[ACTION_LOG_KEY].newValue) ? changes[ACTION_LOG_KEY].newValue : [];
+        }
+        if (changes.rulesConfig) applyConfig(changes.rulesConfig.newValue);
+        return;
+      }
+      if (area !== "session") return;
+      if (changes[AI_PROGRESS_KEY]) {
+        const p = changes[AI_PROGRESS_KEY].newValue as AIGroupProgress | undefined;
+        if (p) {
+          // Progress only — deliberately does not steer activeSection. The paths that start a
+          // run switch to the panel themselves; doing it here would yank a user who had
+          // navigated away back on every tick of a background run.
+          aiProgress = p;
+          if (p.status === "done") loadTabs();
+        }
+      }
+      if (changes[UNDO_KEY]) {
+        const next = changes[UNDO_KEY].newValue;
+        canUndo = Array.isArray(next) && next.length > 0;
       }
     };
     chrome.storage.onChanged.addListener(listener);
@@ -1024,26 +893,12 @@
     await loadUndoStack();
     canUndo = !!peekUndo();
     const config = await chrome.storage.local.get(["rulesConfig", "collapsedGroups", "dashboardActionIds"]);
-    const rc = config.rulesConfig;
-    if (rc) {
-      autoGroupEnabled = rc.autoGroup ?? false;
-      autoUngroupEnabled = rc.autoUngroup ?? false;
-      useRulesEnabled = rc.useRules ?? false;
-      autoSortEnabled = rc.autoSort ?? false;
-      autoPinFollowEnabled = rc.autoPinFollow ?? false;
-      autoDiscardEnabled = rc.autoDiscard ?? false;
-      switchToExistingEnabled = rc.switchToExisting ?? false;
-    }
+    applyConfig(config.rulesConfig);
     hasWorkspace = await hasSavedWorkspace();
     archiveCount = await getArchiveCount();
     actionLog = await getActionLog();
     aiProgress = await getAIProgress();
-    if (aiProgress.status === "checking" || aiProgress.status === "prompting" || aiProgress.status === "grouping") {
-      startAIPoll();
-      activeSection = "ai";
-    } else if (aiProgress.status === "done" || aiProgress.status === "error") {
-      activeSection = "ai";
-    }
+    if (aiProgress.status !== "idle") activeSection = "ai";
     if (config.collapsedGroups) collapsedGroups = new Set(config.collapsedGroups);
     if (Array.isArray(config.dashboardActionIds)) dashboardActionIds = config.dashboardActionIds;
     const ob = await chrome.storage.local.get("onboardingDismissed");
@@ -1142,7 +997,7 @@
         <div class="text-[11px] text-text-muted mb-3">Use on-device AI (Gemini Nano) to intelligently group your tabs by topic. Runs entirely on your device — no data sent externally.</div>
         <button
           class="w-full px-3 py-2 rounded-lg bg-primary text-white text-xs font-medium hover:bg-primary-hover transition-colors"
-          onclick={() => { aiProgress = { ...aiProgress, status: "checking" }; snapshotBeforeGroup().catch(() => {}); chrome.runtime.sendMessage({ type: "aigroup-start" }); startAIPoll(); }}
+          onclick={() => startAIGroup()}
         >Group tabs with AI</button>
       {:else if aiProgress.status === "checking"}
         <div class="flex items-center gap-2 text-[11px] text-text-muted">
@@ -1191,11 +1046,11 @@
           <div class="flex gap-2 mt-2">
             <button
               class="flex-1 px-3 py-2 rounded-lg bg-primary text-white text-xs font-medium hover:bg-primary-hover transition-colors"
-              onclick={() => { aiProgress = { ...defaultProgress(), status: "checking" }; snapshotBeforeGroup().catch(() => {}); chrome.runtime.sendMessage({ type: "aigroup-start" }); startAIPoll(); }}
+              onclick={() => startAIGroup()}
             >Run again</button>
             <button
               class="px-3 py-2 rounded-lg bg-surface-hover text-text-muted text-xs border border-border hover:text-text transition-colors"
-              onclick={async () => { aiProgress = defaultProgress(); await setAIProgress(aiProgress); activeSection = "dashboard"; }}
+              onclick={() => { aiProgress = defaultProgress(); activeSection = "dashboard"; }}
             >Dismiss</button>
           </div>
         </div>
@@ -1209,11 +1064,11 @@
           <div class="flex gap-2 mt-2">
             <button
               class="flex-1 px-3 py-1.5 rounded-lg bg-surface-hover text-text text-xs hover:bg-surface-active transition-colors border border-border"
-              onclick={() => { aiProgress = { ...defaultProgress(), status: "checking" }; snapshotBeforeGroup().catch(() => {}); chrome.runtime.sendMessage({ type: "aigroup-start" }); startAIPoll(); }}
+              onclick={() => startAIGroup()}
             >Retry</button>
             <button
               class="px-3 py-1.5 rounded-lg bg-surface-hover text-text-muted text-xs border border-border hover:text-text transition-colors"
-              onclick={async () => { aiProgress = defaultProgress(); await setAIProgress(aiProgress); activeSection = "dashboard"; }}
+              onclick={() => { aiProgress = defaultProgress(); activeSection = "dashboard"; }}
             >Dismiss</button>
           </div>
         </div>
@@ -1229,44 +1084,7 @@
   {:else if activeSection === "more"}
     <div class="flex-1 overflow-y-auto px-2 py-2 min-h-0">
       <div class="px-2 pb-1.5 text-[9px] text-text-muted/60">Click ★ to add/remove actions from dashboard</div>
-      {#each [
-        { title: "Organize", items: [
-          { action: "sort", label: "Sort All", tip: "Sort tabs by domain" },
-          { action: "group", label: "Group+", tip: "Group ungrouped tabs by domain" },
-          { action: "dedup", label: "Dedup", tip: "Close duplicate tabs" },
-          { action: "pin", label: "Pin Tab", tip: "Pin current tab at position" },
-          { action: "regroup", label: "Regroup All", tip: "Ungroup all, then regroup from scratch" },
-          { action: "ungroup", label: "Ungroup All", tip: "Remove all tab groups" },
-          { action: "shuffle", label: "Shuffle", tip: "Randomly reorder tabs" },
-        ]},
-        { title: "Windows", items: [
-          { action: "merge", label: "Merge", tip: "Move all tabs from other windows here" },
-          { action: "unite", label: "Unite Domain", tip: "Pull same-domain tabs here" },
-          { action: "isolate", label: "Isolate Domain", tip: "Move domain to new window" },
-          { action: "splitv", label: "Split Vertical", tip: "Side by side windows" },
-          { action: "splith", label: "Split Horizontal", tip: "Top/bottom windows" },
-          { action: "splitdomain", label: "Split by Domain", tip: "One window per domain" },
-          { action: "stack", label: "Stack", tip: "Stack windows to left" },
-        ]},
-        { title: "Close", items: [
-          { action: "closeleft", label: "Close Left", tip: "Tabs left of active" },
-          { action: "closeright", label: "Close Right", tip: "Tabs right of active" },
-          { action: "closeold", label: "Close Old", tip: "Tabs older than 7 days" },
-          { action: "closesite", label: "Close Same Site", tip: "Other tabs from this domain" },
-        ]},
-        { title: "Smart", items: [
-          { action: "aigroup", label: "AI Group", tip: "Group tabs with on-device AI" },
-          { action: "readlater", label: "Read Later", tip: "Save tab to Reading List" },
-          { action: "recent", label: "Recently Closed", tip: "Restore closed tabs" },
-          { action: "sidepanel", label: "Side Panel", tip: "Open persistent sidebar" },
-        ]},
-        { title: "Workspace", items: [
-          { action: "focus", label: hasWorkspace ? "Unfocus" : "Focus", tip: hasWorkspace ? "Restore saved tabs" : "Save tabs & start fresh" },
-          { action: "save", label: "Save to File", tip: "Export as text" },
-          { action: "load", label: "Load from File", tip: "Import from text" },
-          { action: "archive", label: "Open Archive", tip: `${archiveCount} saved` },
-        ]},
-      ] as section, si}
+      {#each MORE_SECTIONS as section, si}
         {#if si > 0}
           <div class="my-1 mx-1 h-px bg-border/20"></div>
         {/if}
@@ -1274,6 +1092,7 @@
         <div class="grid gap-0.5">
           {#each section.items as item}
             {@const poolEntry = ACTION_POOL_MAP.get(item.action)}
+            {@const row = moreRowText(item)}
             <div
               class="w-full text-left flex items-start gap-2.5 px-2 py-1.5 rounded-md hover:bg-surface-hover active:bg-surface-active transition-colors group cursor-pointer {pendingConfirm === item.action ? 'bg-accent-red/10 ring-1 ring-accent-red/30' : ''}"
               role="button" tabindex="0"
@@ -1284,8 +1103,8 @@
                 {#if poolEntry}{@html smallIcon(item.action === "pin" ? pinDisplay.icon : poolEntry.icon)}{/if}
               </span>
               <div class="flex-1 min-w-0">
-                <div class="text-xs font-medium {pendingConfirm === item.action ? 'text-accent-red' : 'text-text'}">{pendingConfirm === item.action ? "Click again to confirm" : item.action === "pin" ? pinDisplay.label : item.label}</div>
-                <div class="text-[10px] text-text-muted/70 leading-tight">{item.action === "pin" ? pinDisplay.tooltip : item.tip}</div>
+                <div class="text-xs font-medium {pendingConfirm === item.action ? 'text-accent-red' : 'text-text'}">{pendingConfirm === item.action ? "Click again to confirm" : row.label}</div>
+                <div class="text-[10px] text-text-muted/70 leading-tight">{row.tip}</div>
               </div>
               <button
                 class="shrink-0 self-center text-sm leading-none transition-[color,opacity] hover:scale-110 {dashboardActionIds.includes(item.action) ? 'text-primary' : 'text-text-muted/30 opacity-0 group-hover:opacity-100'}"
@@ -1399,15 +1218,13 @@
         <div class="grid grid-cols-3 gap-1.5 px-3 pb-2 {busy ? 'opacity-50 pointer-events-none' : ''}"
           aria-busy={busy}>
           {#each dashboardActions as action}
+            {@const alt = altPressed && action.id !== "pin" ? ALT_MODE[action.id] : undefined}
             <ActionButton
-              label={pendingConfirm === action.id ? "Confirm" : action.id === "focus" ? (hasWorkspace ? "Unfocus" : "Focus") : action.id === "pin" ? pinDisplay.label : action.label}
-              icon={action.id === "pin" ? pinDisplay.icon : action.icon}
-              tooltip={action.id === "pin" ? pinDisplay.tooltip : action.tooltip}
+              label={pendingConfirm === action.id ? "Confirm" : alt ? alt.label : action.id === "focus" ? (hasWorkspace ? "Unfocus" : "Focus") : action.id === "pin" ? pinDisplay.label : action.label}
+              icon={alt ? (alt.icon ?? ACTION_POOL_MAP.get(alt.action)?.icon ?? action.icon) : action.id === "pin" ? pinDisplay.icon : action.icon}
+              tooltip={alt ? alt.tooltip : action.id === "pin" ? pinDisplay.tooltip : action.tooltip}
               confirming={pendingConfirm === action.id}
-              onclick={(e) => {
-                if (action.id === "pin") handlePinCurrent(e);
-                else handleOverflowAction(action.id);
-              }}
+              onclick={(e) => dashButtonClick(action.id, e)}
             />
           {/each}
         </div>
@@ -1442,7 +1259,7 @@
       <div class="flex items-center gap-1 px-3 pb-2 text-[10px]">
         {#each [{label: "Rules", enabled: useRulesEnabled, toggle: async () => { useRulesEnabled = !useRulesEnabled; await setUseRules(useRulesEnabled); }, tip: "Custom rules for grouping"},
                 {label: "Auto", enabled: autoGroupEnabled, toggle: async () => { autoGroupEnabled = !autoGroupEnabled; await setAutoGroup(autoGroupEnabled); }, tip: "Auto-group new tabs"},
-                {label: "Ungroup", enabled: autoUngroupEnabled, toggle: async () => { autoUngroupEnabled = !autoUngroupEnabled; await setAutoUngroup(autoUngroupEnabled); }, tip: "Auto-ungroup singles"}] as t}
+                {label: "Ungroup", enabled: autoUngroupEnabled, toggle: async () => { autoUngroupEnabled = !autoUngroupEnabled; await setAutoUngroup(autoUngroupEnabled); }, tip: "Dissolve a group when only one tab is left. Named groups only — untitled ones are left alone, since another extension may still be filling them."}] as t}
           <button
             class="px-1.5 py-0.5 rounded transition-colors border
               {t.enabled ? 'bg-primary/15 text-primary border-primary/30 font-medium' : 'bg-surface-hover text-text-muted border-transparent hover:border-border'}"

@@ -1,5 +1,6 @@
-import { describe, it, expect } from "vitest";
-import { groupStartIndex, buildGroupOrder } from "./pin.ts";
+import { describe, it, expect, beforeEach } from "vitest";
+import { installChromeStub, type ChromeStub } from "./testing/chrome-stub.ts";
+import { groupStartIndex, buildGroupOrder, pinTab, unpinTab, getPinnedTabs } from "./pin.ts";
 
 // 2 pinned tabs, then group A (1), group B (2), group C (3).
 function strip(): chrome.tabs.Tab[] {
@@ -62,5 +63,36 @@ describe("buildGroupOrder", () => {
       { id: 10, index: 2, pinned: false, groupId: 1 },
     ] as unknown as chrome.tabs.Tab[];
     expect(buildGroupOrder(tabs)).toEqual([1]);
+  });
+});
+
+describe("unpinTab", () => {
+  let stub: ChromeStub;
+
+  beforeEach(() => {
+    stub = installChromeStub();
+  });
+
+  it("removes the entry matched by tabId even when the URL has moved on", async () => {
+    await pinTab("https://a.com", "Work", 0, "A", 42);
+    // getPinForTab would light up "Unlock" off the tabId; a URL-only unpin found nothing
+    // and reported "Tab was not pinned".
+    stub.localData["pinnedTabs"] = [
+      { id: "x", url: "https://old.example", title: "A", tabId: 42, groupName: "Work", position: 0 },
+    ];
+    expect(await unpinTab("https://a.com", "Work", 42)).toBe(true);
+    expect(await getPinnedTabs()).toEqual([]);
+  });
+
+  it("still falls back to a URL match when no tabId is supplied", async () => {
+    await pinTab("https://a.com", "Work", 0);
+    expect(await unpinTab("https://a.com", "Work")).toBe(true);
+    expect(await getPinnedTabs()).toEqual([]);
+  });
+
+  it("returns false when nothing matches", async () => {
+    await pinTab("https://a.com", "Work", 0, "A", 42);
+    expect(await unpinTab("https://b.com", "Work", 99)).toBe(false);
+    expect(await getPinnedTabs()).toHaveLength(1);
   });
 });

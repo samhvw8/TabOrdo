@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { getPinnedTabs, getPinnedGroups, savePinnedTabs, unpinTab, unpinGroup, reorderPins, applyPinsToGroup, type PinnedTabEntry, type PinnedGroupEntry } from "../lib/pin.ts";
-  import { switchToTab } from "../lib/tabs.ts";
+  import { switchToTab } from "../lib/tabs/index.ts";
   import { faviconCacheUrl } from "../lib/favicon.ts";
 
   let pinnedTabs = $state<PinnedTabEntry[]>([]);

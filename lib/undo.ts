@@ -22,15 +22,25 @@ interface GroupAssignment {
   index?: number;
 }
 
-const UNDO_KEY = "tabOrdo_undoStack";
+export const UNDO_KEY = "tabOrdo_undoStack";
+// In-memory mirror of the persisted stack, so peekUndo can stay synchronous for the UI's
+// `canUndo` binding. Every mutation re-reads storage first — see syncFromStorage.
 const stack: UndoEntry[] = [];
 const MAX_STACK = 20;
 
-function persistStack() {
-  chrome.storage.session?.set({ [UNDO_KEY]: [...stack] }).catch(() => {});
+async function persistStack(): Promise<void> {
+  try {
+    await chrome.storage.session?.set({ [UNDO_KEY]: [...stack] });
+  } catch {}
 }
 
-export async function loadUndoStack(): Promise<void> {
+/**
+ * Refresh the mirror from storage before mutating it. The popup and the side panel are the
+ * same component in two realms, each with its own module instance but one shared persisted
+ * stack — pushing onto a mirror loaded at mount time would overwrite whatever the other
+ * surface recorded in the meantime.
+ */
+async function syncFromStorage(): Promise<void> {
   try {
     const data = await chrome.storage.session.get(UNDO_KEY);
     const loaded = data[UNDO_KEY];
@@ -41,19 +51,30 @@ export async function loadUndoStack(): Promise<void> {
   } catch {}
 }
 
-export function pushUndo(entry: UndoEntry) {
+export async function loadUndoStack(): Promise<void> {
+  await syncFromStorage();
+}
+
+/**
+ * Await this before doing the thing being undone. The write has to be durable while the
+ * caller is still alive: Chrome tears the popup down on any focus loss, so a fire-and-forget
+ * persist can lose the snapshot for anything that hands off to the background (/aigroup).
+ */
+export async function pushUndo(entry: UndoEntry): Promise<void> {
+  await syncFromStorage();
   stack.push(entry);
   if (stack.length > MAX_STACK) stack.shift();
-  persistStack();
+  await persistStack();
 }
 
 export function peekUndo(): UndoEntry | null {
   return stack.length > 0 ? stack[stack.length - 1] : null;
 }
 
-export function popUndo(): UndoEntry | null {
+export async function popUndo(): Promise<UndoEntry | null> {
+  await syncFromStorage();
   const entry = stack.pop() || null;
-  persistStack();
+  await persistStack();
   return entry;
 }
 
@@ -65,16 +86,16 @@ export async function snapshotBeforeClose(tabIds: number[]): Promise<void> {
   const tabs = await chrome.tabs.query({});
   const idSet = new Set(tabIds);
   const toClose = tabs.filter((t) => idSet.has(t.id!));
-  snapshotClosedTabs(toClose);
+  await snapshotClosedTabs(toClose);
 }
 
-export function snapshotClosedTabs(tabs: chrome.tabs.Tab[]): void {
+export async function snapshotClosedTabs(tabs: chrome.tabs.Tab[]): Promise<void> {
   const data: ClosedTabData[] = tabs.map((t) => ({
     url: t.url || "",
     pinned: t.pinned,
     windowId: t.windowId,
   }));
-  pushUndo({
+  await pushUndo({
     type: "close",
     label: `Closed ${data.length} tab(s)`,
     timestamp: Date.now(),
@@ -99,7 +120,7 @@ export async function snapshotBeforeGroup(): Promise<void> {
         index: t.index,
       };
     });
-  pushUndo({
+  await pushUndo({
     type: "group",
     label: "Group change",
     timestamp: Date.now(),
@@ -108,7 +129,7 @@ export async function snapshotBeforeGroup(): Promise<void> {
 }
 
 export async function executeUndo(): Promise<string> {
-  const entry = popUndo();
+  const entry = await popUndo();
   if (!entry) return "Nothing to undo";
 
   switch (entry.type) {
@@ -141,19 +162,14 @@ export async function executeUndo(): Promise<string> {
       const assignments = entry.data as GroupAssignment[];
       const currentTabs = await chrome.tabs.query({});
       const currentIds = new Set(currentTabs.map((t) => t.id));
+      const snapshotIds = new Set(assignments.map((a) => a.tabId));
 
-      const grouped = assignments.filter((a) => a.groupId !== -1 && currentIds.has(a.tabId));
-
-      const byGroup = new Map<string, { title: string; color: string; tabIds: number[] }>();
-      for (const a of grouped) {
-        const key = `${a.groupTitle || ""}:${a.groupColor || ""}`;
-        if (!byGroup.has(key)) byGroup.set(key, { title: a.groupTitle || "", color: a.groupColor || "", tabIds: [] });
-        byGroup.get(key)!.tabIds.push(a.tabId);
-      }
-
-      const allCurrentGrouped = currentTabs.filter((t) => t.groupId !== -1);
-      if (allCurrentGrouped.length > 0) {
-        await chrome.tabs.ungroup(allCurrentGrouped.map((t) => t.id!)).catch(() => {});
+      // Only tabs the snapshot actually covers. Ungrouping everything currently grouped also
+      // dissolved groups the user built *after* the snapshot, in windows this undo never
+      // touched — an undo that destroys unrelated state isn't an undo.
+      const toUngroup = currentTabs.filter((t) => t.groupId !== -1 && snapshotIds.has(t.id!));
+      if (toUngroup.length > 0) {
+        await chrome.tabs.ungroup(toUngroup.map((t) => t.id!)).catch(() => {});
       }
 
       // Put tabs back in the window they came from before regrouping. /aigroup relocates tabs
@@ -179,15 +195,46 @@ export async function executeUndo(): Promise<string> {
           .catch(() => {});
       }
 
+      // Bucket by window as well as title/color. Keying on title:color alone folded two
+      // same-named groups living in different windows into one bucket, and the resulting
+      // cross-window chrome.tabs.group call throws — taking the whole undo with it.
+      // Legacy entries carry no windowId, so fall back to where the tab sits now.
+      const windowFor = (a: GroupAssignment): number | undefined =>
+        a.windowId !== undefined && openWindows.has(a.windowId)
+          ? a.windowId
+          : byTabId.get(a.tabId)?.windowId;
+
+      const byGroup = new Map<string, { title: string; color: string; windowId?: number; tabIds: number[] }>();
+      for (const a of assignments) {
+        if (a.groupId === -1 || !currentIds.has(a.tabId)) continue;
+        const windowId = windowFor(a);
+        const key = `${windowId ?? "?"}:${a.groupTitle || ""}:${a.groupColor || ""}`;
+        if (!byGroup.has(key)) {
+          byGroup.set(key, { title: a.groupTitle || "", color: a.groupColor || "", windowId, tabIds: [] });
+        }
+        byGroup.get(key)!.tabIds.push(a.tabId);
+      }
+
+      let failed = 0;
       for (const [, info] of byGroup) {
         if (info.tabIds.length === 0) continue;
-        const validIds = info.tabIds.filter((id) => currentIds.has(id));
-        if (validIds.length === 0) continue;
-        const gid = await chrome.tabs.group({ tabIds: validIds });
-        await chrome.tabGroups.update(gid, {
-          title: info.title,
-          color: info.color as chrome.tabGroups.ColorEnum,
-        });
+        try {
+          const gid = await chrome.tabs.group({
+            tabIds: info.tabIds,
+            ...(info.windowId !== undefined ? { createProperties: { windowId: info.windowId } } : {}),
+          });
+          await chrome.tabGroups.update(gid, {
+            title: info.title,
+            color: info.color as chrome.tabGroups.ColorEnum,
+          });
+        } catch (e) {
+          // One group Chrome refuses to rebuild must not abandon the rest of the restore.
+          console.warn("[TabOrdo] undo: could not restore group", info.title, e);
+          failed++;
+        }
+      }
+      if (failed > 0) {
+        return `Restored previous group state — ${failed} group(s) could not be rebuilt`;
       }
       return "Restored previous group state";
     }

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { installChromeStub, type ChromeStub } from "./testing/chrome-stub.ts";
-import { mergeAllWindows } from "./tabs.ts";
+import { installChromeStub, type ChromeStub } from "../testing/chrome-stub.ts";
+import { mergeAllWindows } from "./index.ts";
 
 let stub: ChromeStub;
 

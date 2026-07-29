@@ -40,9 +40,17 @@ export async function pinTab(url: string, groupName: string, position: number, t
   return entry;
 }
 
-export async function unpinTab(url: string, groupName: string): Promise<boolean> {
+/**
+ * Resolve by tabId first, then URL — the same order pinTab and getPinForTab use. Matching on
+ * URL alone made the button lie: getPinForTab would light up "Unlock" off a tabId match while
+ * this failed to find the entry and reported "Tab was not pinned".
+ */
+export async function unpinTab(url: string, groupName: string, tabId?: number): Promise<boolean> {
   const pins = await getPinnedTabs();
-  const idx = pins.findIndex((p) => p.url === url && p.groupName === groupName);
+  let idx = tabId
+    ? pins.findIndex((p) => p.tabId === tabId && p.groupName === groupName)
+    : -1;
+  if (idx === -1) idx = pins.findIndex((p) => p.url === url && p.groupName === groupName);
   if (idx === -1) return false;
   pins.splice(idx, 1);
   await savePinnedTabs(pins);
@@ -111,23 +119,6 @@ export async function applyPinsToGroup(
   }
 
   return moved;
-}
-
-export async function applyAllPins(): Promise<number> {
-  const pins = await getPinnedTabs();
-  if (pins.length === 0) return 0;
-
-  const groupNames = [...new Set(pins.map((p) => p.groupName))];
-  const allGroups = await chrome.tabGroups.query({});
-  let totalMoved = 0;
-
-  for (const name of groupNames) {
-    const group = allGroups.find((g) => g.title === name);
-    if (!group) continue;
-    totalMoved += await applyPinsToGroup(group.id, name);
-  }
-
-  return totalMoved;
 }
 
 export interface PinnedGroupEntry {

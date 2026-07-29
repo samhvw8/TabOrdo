@@ -9,6 +9,8 @@ export interface StubTab {
   groupId: number;
   index?: number;
   active?: boolean;
+  lastAccessed?: number;
+  muted?: boolean;
 }
 
 export interface StubGroup {
@@ -29,6 +31,10 @@ export interface ChromeStub {
   created: { url?: string; pinned?: boolean; active?: boolean; windowId?: number }[];
   removedIds: number[];
   ungroupedIds: number[];
+  discardedIds: number[];
+  reloadedIds: number[];
+  /** Tabs setTabVolume successfully injected into. */
+  scriptedIds: number[];
   moves: { ids: number[]; windowId?: number; index?: number }[];
   groupUpdates: { id: number; title?: string; color?: string; collapsed?: boolean }[];
   failCreateUrls: Set<string>;
@@ -37,6 +43,8 @@ export interface ChromeStub {
   failWrites: boolean;
   /** Make chrome.tabs.group reject, to exercise group-restore failure. */
   failGroup: boolean;
+  /** Tabs scripting.executeScript rejects for — no host permissions in the real extension. */
+  failScriptingIds: Set<number>;
 }
 
 /**
@@ -83,12 +91,16 @@ export function installChromeStub(): ChromeStub {
     created: [],
     removedIds: [],
     ungroupedIds: [],
+    discardedIds: [],
+    reloadedIds: [],
+    scriptedIds: [],
     moves: [],
     groupUpdates: [],
     failCreateUrls: new Set(),
     changeListeners: [],
     failWrites: false,
     failGroup: false,
+    failScriptingIds: new Set(),
   };
 
   let nextTabId = 1000;
@@ -135,11 +147,18 @@ export function installChromeStub(): ChromeStub {
       },
     },
     tabs: {
-      query: async (q: { windowId?: number; groupId?: number; currentWindow?: boolean } = {}) =>
+      query: async (
+        q: { windowId?: number; groupId?: number; currentWindow?: boolean; active?: boolean; pinned?: boolean } = {}
+      ) =>
         stub.openTabs.filter((t) => {
           if (q.windowId !== undefined && t.windowId !== q.windowId) return false;
           if (q.groupId !== undefined && t.groupId !== q.groupId) return false;
           if (q.currentWindow && t.windowId !== stub.currentWindowId) return false;
+          // Without these two the `{active: true}` queries all matched every tab, so the
+          // "active tab" every close/unite/isolate command pivots on was silently just the
+          // first tab in the strip — and any test built on that would assert nothing.
+          if (q.active !== undefined && (t.active ?? false) !== q.active) return false;
+          if (q.pinned !== undefined && t.pinned !== q.pinned) return false;
           return true;
         }),
       // Chrome drops a tab's group when it crosses into another window, AND it reindexes
@@ -185,6 +204,19 @@ export function installChromeStub(): ChromeStub {
         stub.removedIds.push(...arr);
         stub.openTabs = stub.openTabs.filter((t) => !arr.includes(t.id));
       },
+      update: async (id: number, props: { muted?: boolean; active?: boolean }) => {
+        const t = stub.openTabs.find((x) => x.id === id);
+        if (!t) return undefined;
+        if (props.muted !== undefined) t.muted = props.muted;
+        if (props.active !== undefined) t.active = props.active;
+        return t;
+      },
+      discard: async (id: number) => {
+        stub.discardedIds.push(id);
+      },
+      reload: async (id: number) => {
+        stub.reloadedIds.push(id);
+      },
       ungroup: async (ids: number | number[]) => {
         const arr = Array.isArray(ids) ? ids : [ids];
         stub.ungroupedIds.push(...arr);
@@ -202,6 +234,15 @@ export function installChromeStub(): ChromeStub {
         }
         makeContiguous(stub, gid);
         return gid;
+      },
+    },
+    scripting: {
+      executeScript: async (opts: { target: { tabId: number } }) => {
+        if (stub.failScriptingIds.has(opts.target.tabId)) {
+          throw new Error("stub: cannot access contents of the page");
+        }
+        stub.scriptedIds.push(opts.target.tabId);
+        return [];
       },
     },
     tabGroups: {
