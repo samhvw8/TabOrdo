@@ -1,6 +1,7 @@
 import uFuzzy from "@leeoniya/ufuzzy";
-import type { TabInfo } from "./tabs.ts";
+import type { TabInfo } from "./tabs/index.ts";
 import { pinyinVariants, hasChinese } from "./pinyin.ts";
+import { TRIAGE_COMMANDS } from "./commands.ts";
 
 export interface SearchResult {
   type: "tab" | "bookmark" | "history" | "divider";
@@ -148,30 +149,85 @@ export function rankedSearch(
     return sortByRecency(exactSearch(haystack, needle, haystack.length), recency, priority).slice(0, limit);
   }
   const seen = new Set<number>();
-  const out: number[] = [];
-  const take = (indices: number[]) => {
+  // Split into two buckets rather than one flat list. A single shared slice(0, limit) at the end
+  // meant the approximate tiers were dead weight on any query the literal tiers matched broadly:
+  // prefix/substring filled all `limit` slots and the fuzzy hits below them were computed and
+  // then discarded. Reserving a slice keeps them reachable.
+  const literal: number[] = [];
+  const approximate: number[] = [];
+  const take = (bucket: number[], indices: number[]) => {
     for (const i of indices) {
       if (!seen.has(i)) {
         seen.add(i);
-        out.push(i);
+        bucket.push(i);
       }
     }
   };
   // A title/group-name hit is a stronger signal than a URL-only hit (e.g. "com" inside every
   // domain), so it's ranked first when a title-only view of the haystack is supplied.
   const titleHay = titleHaystack ?? haystack;
-  take(sortByRecency(prefixSearch(titleHay, needle, titleHay.length), recency, priority));
-  take(sortByRecency(prefixSearch(haystack, needle, haystack.length), recency, priority));
-  take(sortByRecency(exactSearch(titleHay, needle, titleHay.length), recency, priority));
-  take(sortByRecency(exactSearch(haystack, needle, haystack.length), recency, priority));
-  take(fuzzySearch(haystack, needle, limit));
-  return out.slice(0, limit);
+  take(literal, sortByRecency(prefixSearch(titleHay, needle, titleHay.length), recency, priority));
+  take(literal, sortByRecency(prefixSearch(haystack, needle, haystack.length), recency, priority));
+  take(literal, sortByRecency(exactSearch(titleHay, needle, titleHay.length), recency, priority));
+  take(literal, sortByRecency(exactSearch(haystack, needle, haystack.length), recency, priority));
+  // Bounded by the haystack, not by `limit`, exactly as the literal tiers above are: truncating
+  // to `limit` here would spend the whole quota on indices the literal tiers already claimed,
+  // and dedup afterwards would leave nothing.
+  take(approximate, fuzzySearch(haystack, needle, haystack.length));
+  take(approximate, subsequenceSearch(titleHay, needle, titleHay.length));
+  take(approximate, subsequenceSearch(haystack, needle, haystack.length));
+
+  const reserved = Math.min(approximate.length, APPROXIMATE_RESERVE);
+  return [...literal.slice(0, Math.max(0, limit - reserved)), ...approximate].slice(0, limit);
 }
+
+/** Slots held back from the literal tiers so approximate matches always have somewhere to land. */
+const APPROXIMATE_RESERVE = 10;
 
 function fuzzySearch(haystack: string[], needle: string, limit: number): number[] {
   const [idxs, info, order] = fuzzy.search(haystack, needle);
   if (!idxs || !order) return [];
   return order.slice(0, limit).map((i) => (info ? info.idx[i] : idxs[i]));
+}
+
+/**
+ * In-order character match, the way fzf and most command palettes behave: "yt" reaches
+ * "YouTube" because y precedes t. uFuzzy can't do this — it runs in SingleError mode, and
+ * "yt" → "youtube" needs two inserted characters.
+ *
+ * Ranked by the tightest window that contains the needle, so "yt" scores "YouTube" (span 4)
+ * far above a title where a y and a t happen to sit thirty characters apart.
+ */
+function subsequenceSearch(haystack: string[], needle: string, limit: number): number[] {
+  // One-character needles match nearly everything and carry no signal.
+  const q = needle.toLowerCase().replace(/\s+/g, "");
+  if (q.length < 2) return [];
+  const scored: { i: number; span: number }[] = [];
+  for (let i = 0; i < haystack.length; i++) {
+    const span = subsequenceSpan(haystack[i].toLowerCase(), q);
+    if (span >= 0) scored.push({ i, span });
+  }
+  scored.sort((a, b) => a.span - b.span);
+  return scored.slice(0, limit).map((s) => s.i);
+}
+
+/** Width of the tightest window containing `q` as an in-order subsequence of `text`, or -1. */
+function subsequenceSpan(text: string, q: string): number {
+  let best = -1;
+  for (let start = 0; start < text.length; start++) {
+    if (text[start] !== q[0]) continue;
+    let qi = 1;
+    let ti = start + 1;
+    while (ti < text.length && qi < q.length) {
+      if (text[ti] === q[qi]) qi++;
+      ti++;
+    }
+    if (qi < q.length) break; // no completion from here, and later starts can only do worse
+    const span = ti - start;
+    if (best < 0 || span < best) best = span;
+    if (best === q.length) break; // contiguous — nothing tighter exists
+  }
+  return best;
 }
 
 function exactSearch(haystack: string[], needle: string, limit: number): number[] {
@@ -286,12 +342,25 @@ export function buildTitleHaystack(items: { title: string; groupTitle?: string }
   });
 }
 
+// Longest first, so "@shared" is tested before "@s" swallows it.
+const TRIAGE_PREFIXES = TRIAGE_COMMANDS.map((c) => c.prefix).sort((a, b) => b.length - a.length);
+
 export function parseCommand(input: string): {
   prefix: string | null;
   query: string;
 } {
-  const atMatch = input.match(/^(@\w?)\s*(.*)/);
-  if (atMatch) {
+  if (input.startsWith("@")) {
+    // Match the longest *known* prefix rather than a greedy \w*. Greedy fixes "@shared" but
+    // breaks every one-letter view with an attached query: "@afoo" has always meant
+    // "@a" + "foo", and \w* turns it into the unknown prefix "@afoo" with an empty query.
+    for (const p of TRIAGE_PREFIXES) {
+      if (input.startsWith(p)) {
+        return { prefix: p, query: input.slice(p.length).trim() };
+      }
+    }
+    // Unknown prefix — fall back to the original single-character split so anything that
+    // isn't a real view behaves exactly as it did before.
+    const atMatch = input.match(/^(@\w?)\s*(.*)/)!;
     return { prefix: atMatch[1], query: atMatch[2] };
   }
   const match = input.match(/^\/(\w+)\s*(.*)/);

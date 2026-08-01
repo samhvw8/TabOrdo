@@ -14,7 +14,7 @@ export interface AIGroupProgress {
   error: string;
 }
 
-const AI_PROGRESS_KEY = "tabOrdo_aiGroupProgress";
+export const AI_PROGRESS_KEY = "tabOrdo_aiGroupProgress";
 
 export function defaultProgress(): AIGroupProgress {
   return { status: "idle", total: 0, processed: 0, currentTab: "", grouped: 0, groupCount: 0, error: "" };
@@ -106,6 +106,43 @@ export async function checkAIAvailability(): Promise<{ available: boolean; needs
   }
 }
 
+// Gemini Nano frequently wraps its answer in a ```json fence or adds a sentence of
+// preamble. Pull out the first bracketed array instead of feeding raw text to JSON.parse,
+// which would throw and be swallowed as "no groups found".
+//
+// It also ignores "respond with an array" often enough to matter: {"groups": [...]}, a bare
+// single group, and [[...]] all arrive in practice. Coerce those to the array the caller
+// expects rather than reporting no groups.
+function coerceToSuggestions(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.length === 1 && Array.isArray(value[0]) ? value[0] : value;
+  }
+  if (value && typeof value === "object") {
+    // Check the single-group shape first: {"group":"A","indices":[0]} also contains an
+    // array, and scanning for one would return the indices instead of the group.
+    if ("group" in value) return [value];
+    const wrapped = Object.values(value as Record<string, unknown>).find(Array.isArray);
+    if (wrapped) return wrapped;
+  }
+  return null;
+}
+
+export function parseSuggestionJson(response: string): unknown {
+  const cleaned = response.replace(/^\s*```(?:json)?/i, "").replace(/```\s*$/, "").trim();
+  try {
+    const coerced = coerceToSuggestions(JSON.parse(cleaned));
+    if (coerced) return coerced;
+  } catch {}
+  const start = cleaned.indexOf("[");
+  const end = cleaned.lastIndexOf("]");
+  if (start === -1 || end <= start) return null;
+  try {
+    return coerceToSuggestions(JSON.parse(cleaned.slice(start, end + 1)));
+  } catch {
+    return null;
+  }
+}
+
 export async function suggestGroups(
   tabs: { id: number; title: string; url: string }[]
 ): Promise<AIGroupSuggestion[]> {
@@ -117,14 +154,16 @@ export async function suggestGroups(
   const session = await createSession();
   try {
     const response = await session.prompt(prompt);
-    const parsed = JSON.parse(response);
+    const parsed = parseSuggestionJson(response);
     if (!Array.isArray(parsed)) return [];
 
     const colors = ["blue", "cyan", "green", "yellow", "orange", "pink", "purple", "red"];
     return parsed.map((g: any, i: number) => ({
-      groupName: String(g.group || "Group"),
+      groupName: String(g?.group || "Group"),
       color: colors[i % colors.length],
-      tabIds: (g.indices as number[]).map((idx) => tabs[idx]?.id).filter(Boolean),
+      tabIds: (Array.isArray(g?.indices) ? g.indices : [])
+        .map((idx: number) => tabs[idx]?.id)
+        .filter((id: number | undefined): id is number => id !== undefined),
     })).filter((g: AIGroupSuggestion) => g.tabIds.length > 0);
   } catch {
     return [];

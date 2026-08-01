@@ -55,13 +55,13 @@ describe("getRecentlyClosed", () => {
   });
 
   it("returns empty array when no recent sessions", async () => {
-    vi.mocked(chrome.sessions.getRecentlyClosed).mockResolvedValue([]);
+    vi.mocked(chrome.sessions.getRecentlyClosed).mockResolvedValue([] as any);
     const results = await getRecentlyClosed();
     expect(results).toHaveLength(0);
   });
 
   it("passes maxResults to the API", async () => {
-    vi.mocked(chrome.sessions.getRecentlyClosed).mockResolvedValue([]);
+    vi.mocked(chrome.sessions.getRecentlyClosed).mockResolvedValue([] as any);
     await getRecentlyClosed(10);
     expect(chrome.sessions.getRecentlyClosed).toHaveBeenCalledWith({ maxResults: 10 });
   });

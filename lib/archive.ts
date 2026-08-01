@@ -2,9 +2,11 @@ export interface ArchivedTab {
   id: string;
   url: string;
   title: string;
-  favIconUrl?: string;
   archivedAt: number;
   groupName?: string;
+  /** Legacy: entries written before 0.6.0 stored the site's own icon URL. No longer read
+   *  or written — the archive page renders icons from Chrome's local favicon cache. */
+  favIconUrl?: string;
 }
 
 const STORAGE_KEY = "tabOrdo_archive";
@@ -21,7 +23,7 @@ async function saveArchive(archive: ArchivedTab[]): Promise<void> {
 }
 
 export async function archiveTabs(
-  tabs: { url: string; title: string; favIconUrl?: string; groupName?: string }[]
+  tabs: { url: string; title: string; groupName?: string }[]
 ): Promise<number> {
   const archive = await getArchive();
   const now = Date.now();
@@ -32,7 +34,6 @@ export async function archiveTabs(
       id: crypto.randomUUID(),
       url: tab.url,
       title: tab.title,
-      favIconUrl: tab.favIconUrl,
       archivedAt: now,
       groupName: tab.groupName,
     });
@@ -72,7 +73,20 @@ export async function clearArchive(): Promise<void> {
   await saveArchive([]);
 }
 
+// COUNT_KEY is a cheap denormalized read so the sidebar badge doesn't deserialize the whole
+// archive. It only exists from the version that introduced saveArchive's dual write, so an
+// archive written before that has entries and no count — fall back to measuring it, and
+// backfill so the next read is cheap again.
 export async function getArchiveCount(): Promise<number> {
+  // Ask for the count ALONE. Requesting both keys in one get defeated the entire point of
+  // storing a count: chrome.storage deserializes every key you name, so the popup — which
+  // reads this on mount — paid for parsing up to MAX_ARCHIVE_SIZE entries on every open, and
+  // the cost grew with the archive. The fallback below is the only path that needs the array.
   const data = await chrome.storage.local.get(COUNT_KEY);
-  return data[COUNT_KEY] || 0;
+  const count = data[COUNT_KEY];
+  if (typeof count === "number") return count;
+  const legacy = await chrome.storage.local.get(STORAGE_KEY);
+  const archive: ArchivedTab[] = Array.isArray(legacy[STORAGE_KEY]) ? legacy[STORAGE_KEY] : [];
+  await chrome.storage.local.set({ [COUNT_KEY]: archive.length }).catch(() => {});
+  return archive.length;
 }

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { getRules, saveRules, getAutoGroup, setAutoGroup, populateFromCurrentGroups, mergeRules, type GroupRule } from "../lib/rules.ts";
-  import { getFullHostname } from "../lib/tabs.ts";
+  import { getRules, saveRules, getAutoGroup, setAutoGroup, populateFromCurrentGroups, mergeRules, domainMatches, type GroupRule } from "../lib/rules.ts";
+  import { getFullHostname } from "../lib/tabs/index.ts";
 
   let {
     onclose,
@@ -137,6 +137,29 @@
     statusMsg = msg;
     setTimeout(() => { statusMsg = ""; }, 2500);
   }
+
+  let testerOpen = $state(false);
+  let testerInput = $state("");
+
+  // Mirrors matchDomainToRule: rules are tried in list order and the first pattern hit wins.
+  // Reporting the losers matters as much as the winner — rule order is invisible in this editor,
+  // so a rule permanently shadowed by an earlier one looks identical to one that works.
+  let testerResult = $derived.by(() => {
+    const raw = testerInput.trim();
+    if (!raw) return null;
+    const host = raw.includes("://") ? getFullHostname(raw) : raw;
+    const hits: { rule: GroupRule; pattern: string }[] = [];
+    if (host) {
+      for (const rule of rules) {
+        if (!Array.isArray(rule.patterns)) continue;
+        const pattern = rule.patterns.find((p) => {
+          try { return domainMatches(host, p); } catch { return false; }
+        });
+        if (pattern) hits.push({ rule, pattern });
+      }
+    }
+    return { host: host || raw, hits };
+  });
 </script>
 
 <div class="flex-1 overflow-y-auto px-3 py-2 min-h-0">
@@ -175,6 +198,46 @@
         class="px-2 py-1 rounded bg-accent-red/10 border border-accent-red/30 text-[10px] text-accent-red"
         onclick={() => { mergeSource = null; }}
       >Cancel merge</button>
+    {/if}
+  </div>
+
+  <!-- Rule tester -->
+  <div class="mb-2">
+    <button
+      class="text-[10px] text-text-muted hover:text-text transition-colors"
+      onclick={() => { testerOpen = !testerOpen; }}
+      aria-expanded={testerOpen}
+    >{testerOpen ? "▾" : "▸"} Test a URL against these rules</button>
+    {#if testerOpen}
+      <div class="mt-1 p-2 rounded-md bg-surface-hover border border-border">
+        <input
+          type="text"
+          class="w-full px-1.5 py-1 rounded border border-border bg-surface text-[11px] text-text placeholder:text-text-muted focus:outline-none focus:border-primary"
+          placeholder="news.ycombinator.com or https://…"
+          bind:value={testerInput}
+        />
+        {#if testerResult}
+          <div class="mt-1.5 text-[10px]">
+            {#if testerResult.hits.length === 0}
+              <span class="text-text-muted">No rule matches <span class="font-mono text-text">{testerResult.host}</span> — it would fall back to grouping by domain.</span>
+            {:else}
+              {@const winner = testerResult.hits[0]}
+              <div class="flex items-center gap-1.5">
+                <span class="w-2 h-2 rounded-full shrink-0 {colorClasses[winner.rule.color] || 'bg-border'}"></span>
+                <span class="font-medium text-text">{winner.rule.name}</span>
+                <span class="text-text-muted">via</span>
+                <span class="font-mono text-text-muted truncate">{winner.pattern}</span>
+              </div>
+              {#if testerResult.hits.length > 1}
+                <div class="mt-1 text-text-muted/80">
+                  Also matches, but never fires for this URL (listed later):
+                  {#each testerResult.hits.slice(1) as h, i}<span class="text-text-muted">{i > 0 ? ", " : " "}{h.rule.name}</span>{/each}
+                </div>
+              {/if}
+            {/if}
+          </div>
+        {/if}
+      </div>
     {/if}
   </div>
 

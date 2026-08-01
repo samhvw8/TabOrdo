@@ -1,6 +1,6 @@
 <script lang="ts">
   import { highlightSegments, type SearchResult } from "../lib/search.ts";
-  import { getFullHostname } from "../lib/tabs.ts";
+  import { getFullHostname } from "../lib/tabs/index.ts";
 
   let {
     results,

@@ -13,7 +13,7 @@ A keyboard-first tab manager for Chrome. Press `Cmd+E` to open a command palette
 | `/b` | Search bookmarks |
 | `/h` | Search history |
 | `/w` | Current window tabs |
-| `/p` | Pinned tabs only |
+| `/p` | Chrome-pinned tabs only |
 | `/g` | Current group tabs |
 | `/sort` | Sort tabs by domain |
 | `/group` | Group matching tabs |
@@ -23,10 +23,10 @@ A keyboard-first tab manager for Chrome. Press `Cmd+E` to open a command palette
 | `/merge` | Merge all windows |
 | `/move` | Move tab to position (`^` `$` or number) |
 | `/movegroup` | Move group to position (`^` `$` or number) |
-| `/pin` | Pin tab at fixed position in its group (`^` `$` or number) |
-| `/unpin` | Remove tab position pin |
-| `/pingroup` | Pin group at fixed position in window (`^` `$` or number) |
-| `/unpingroup` | Remove group position pin |
+| `/lock` | Hold tab at a position in its group (`^` `$` or number) |
+| `/unlock` | Release a tab's held position |
+| `/lockgroup` | Hold group at a position in the window (`^` `$` or number) |
+| `/unlockgroup` | Release a group's held position |
 | `/close` | Close matching tabs |
 | `/closeold` | Close tabs older than 7 days |
 | `/archive` | Archive matching tabs (supports group names) |
@@ -40,9 +40,19 @@ A keyboard-first tab manager for Chrome. Press `Cmd+E` to open a command palette
 | `/unite` | Pull same-domain tabs here |
 | `/isolate` | Move domain to new window |
 | `/shuffle` | Randomly reorder tabs |
-| `/discard` | Suspend matching tabs |
+| `/discard` | Unload tabs from memory (they reload when you return) |
 | `/reload` | Reload matching tabs |
 | `/save` `/load` | Export/import tabs as text |
+| `/re` | Regex search tabs |
+| `/rl` | Search Reading List |
+| `/readlater` | Save matching tabs to Reading List |
+| `/rc` `/recent` | Recently closed tabs |
+| `/restore` | Restore the last closed tab or window |
+| `/closeleft` `/closeright` | Close tabs left/right of the active tab |
+| `/closesite` | Close other tabs from the active tab's domain |
+| `/extract` | Extract the active tab from its group to a new window |
+| `/aigroup` | Smart grouping with on-device AI (Gemini Nano) |
+| `/sidepanel` | Open TabOrdo in the Side Panel |
 | `/feedback` | Open feedback page |
 
 ## Keyboard Shortcuts
@@ -62,6 +72,22 @@ The dashboard shows a live 🔊 banner when any tabs are playing audio — click
 
 **Customizable actions** — the action buttons on the dashboard are configurable. Open the **More** sidebar panel and click ★ next to any action to add or remove it from the dashboard grid. Your selection persists across sessions.
 
+**Alt-click for the opposite** — several tiles carry a second mode. Hold `Alt` and the tile relabels to show what it will do; click to run it. One tile covers both directions, so you don't have to spend two dashboard slots on a pair.
+
+| Tile | Click | Alt-click |
+|------|-------|-----------|
+| Lock Tab | Hold at current position | Hold at first position |
+| Lock Group | Hold group at current position | Hold group at first position |
+| Mute Tab | Mute active tab | Unmute active tab |
+| Close Left | Close tabs to the left | Close tabs to the right |
+| Close Right | Close tabs to the right | Close tabs to the left |
+| Split V | Side-by-side windows | Top/bottom windows |
+| Split H | Top/bottom windows | Side-by-side windows |
+| Save | Export tabs to file | Import tabs from file |
+| Load | Import tabs from file | Export tabs to file |
+| Unite | Pull same-domain tabs here | Send domain to a new window |
+| Isolate | Send domain to a new window | Pull same-domain tabs here |
+
 ## Sidebar
 
 | Section | Description |
@@ -77,12 +103,15 @@ The dashboard shows a live 🔊 banner when any tabs are playing audio — click
 
 | Command | Shows |
 |---------|-------|
+| `@` | Overview of every category below |
 | `@a` | Tabs playing audio |
 | `@d` | Duplicate tabs |
 | `@m` | Muted tabs |
 | `@r` | Recently active tabs |
 | `@s` | Suspended tabs |
 | `@u` | Ungrouped tabs |
+| `@f` | Frozen (memory-suspended) tabs |
+| `@shared` | Tabs in shared groups |
 
 ## Development
 
@@ -92,6 +121,7 @@ npm run dev          # dev mode with hot reload
 npm run build        # production build
 npm run zip          # build + zip for CWS
 npm run check        # svelte type checking
+npm test             # unit tests
 ```
 
 ## Tech Stack
@@ -105,4 +135,4 @@ npm run check        # svelte type checking
 
 ## Privacy
 
-All data stays in your browser. No analytics, no tracking, no external requests. See [PRIVACY.md](PRIVACY.md).
+All data stays in your browser. No analytics, no tracking, and no third-party services — favicons come from Chrome's local cache rather than a remote favicon service, and `/aigroup` runs Gemini Nano on-device. See [PRIVACY.md](PRIVACY.md).

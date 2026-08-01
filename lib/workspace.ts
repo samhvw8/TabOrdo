@@ -88,6 +88,9 @@ export async function loadTabsFromText(text: string): Promise<number> {
     if (totalBytes > MAX_BYTES) break;
     capped.push(u);
   }
+  // Always keep the first URL, even if it alone blows the cap. Otherwise capped was empty and
+  // we opened a blank window before reporting "no valid URLs found".
+  if (capped.length === 0) capped.push(urls[0]);
 
   const win = await chrome.windows.create({ url: capped[0] });
   for (let i = 1; i < capped.length; i++) {
