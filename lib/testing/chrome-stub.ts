@@ -38,6 +38,8 @@ export interface ChromeStub {
   moves: { ids: number[]; windowId?: number; index?: number }[];
   groupUpdates: { id: number; title?: string; color?: string; collapsed?: boolean }[];
   failCreateUrls: Set<string>;
+  /** Every storage.get, in order, with the keys it asked for. */
+  storageReads: { area: string; keys: string[] }[];
   changeListeners: ((changes: Record<string, unknown>, area: string) => void)[];
   /** Make every storage.set reject, to exercise failed-write paths. */
   failWrites: boolean;
@@ -97,6 +99,7 @@ export function installChromeStub(): ChromeStub {
     moves: [],
     groupUpdates: [],
     failCreateUrls: new Set(),
+    storageReads: [],
     changeListeners: [],
     failWrites: false,
     failGroup: false,
@@ -110,6 +113,9 @@ export function installChromeStub(): ChromeStub {
   const storageArea = (data: Record<string, unknown>, areaName: string) => ({
     get: async (keys: string | string[]) => {
       const arr = Array.isArray(keys) ? keys : [keys];
+      // Recorded so tests can assert *which* keys a read pulls in. chrome.storage
+      // deserializes every key you name, so naming a big one you don't need is a real cost.
+      stub.storageReads.push({ area: areaName, keys: [...arr] });
       const out: Record<string, unknown> = {};
       for (const k of arr) if (k in data) out[k] = data[k];
       return out;

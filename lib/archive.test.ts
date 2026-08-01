@@ -107,6 +107,23 @@ describe("deleteFromArchive / clearArchive", () => {
 });
 
 describe("getArchiveCount", () => {
+  // The count key exists so the popup's badge doesn't pay to deserialize the archive on every
+  // open. Naming both keys in one storage.get quietly defeated that: chrome.storage
+  // deserializes every key you ask for, so the cost came back and grew with the archive.
+  it("reads the count alone, never the archive array, on the normal path", async () => {
+    stub.localData["tabOrdo_archiveCount"] = 4200;
+    stub.localData["tabOrdo_archive"] = Array.from({ length: 4200 }, (_, i) => ({
+      id: `x${i}`, url: `https://x${i}.com`, title: `T${i}`, archivedAt: 1,
+    }));
+    stub.storageReads.length = 0;
+
+    expect(await getArchiveCount()).toBe(4200);
+
+    const keysRead = stub.storageReads.flatMap((r) => r.keys);
+    expect(keysRead).toEqual(["tabOrdo_archiveCount"]);
+    expect(keysRead).not.toContain("tabOrdo_archive");
+  });
+
   it("backfills the count for archives written before the counter existed", async () => {
     // Pre-0.6.x shape: entries present, no denormalized count key.
     stub.localData["tabOrdo_archive"] = [

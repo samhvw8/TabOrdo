@@ -15,4 +15,4 @@ export * from "./order.ts";
 export * from "./lock.ts";
 
 // Re-exported so existing importers keep their import site; the definitions live in url.ts.
-export { getDomain, getFullHostname, hashCode } from "../url.ts";
+export { getDomainMapper, getFullHostname, hashCode, type DomainMapper } from "../url.ts";

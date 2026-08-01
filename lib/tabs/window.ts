@@ -1,6 +1,6 @@
 // Moving tabs between windows without losing their groups, and arranging windows.
 
-import { getDomain } from "../url.ts";
+import { getDomainMapper } from "../url.ts";
 import type { MoveGroupsResult } from "./types.ts";
 import { getAllGroups } from "./query.ts";
 
@@ -165,12 +165,13 @@ export async function extractGroupToWindow(groupId: number): Promise<number> {
 export async function uniteDomain(): Promise<number> {
   const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!active?.url) return 0;
-  const domain = getDomain(active.url);
+  const domainOf = await getDomainMapper();
+  const domain = domainOf(active.url);
   if (!domain) return 0;
   const currentWin = await chrome.windows.getCurrent();
   const allTabs = await chrome.tabs.query({});
   const toMove = allTabs.filter(
-    (t) => !t.pinned && t.windowId !== currentWin.id && getDomain(t.url || "") === domain
+    (t) => !t.pinned && t.windowId !== currentWin.id && domainOf(t.url || "") === domain
   );
   const { moved } = await moveTabsPreservingGroups(toMove, currentWin.id!);
   return moved;
@@ -179,10 +180,11 @@ export async function uniteDomain(): Promise<number> {
 export async function isolateDomain(): Promise<number> {
   const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!active?.url) return 0;
-  const domain = getDomain(active.url);
+  const domainOf = await getDomainMapper();
+  const domain = domainOf(active.url);
   if (!domain) return 0;
   const tabs = await chrome.tabs.query({ currentWindow: true });
-  const sameDomain = tabs.filter((t) => !t.pinned && getDomain(t.url || "") === domain);
+  const sameDomain = tabs.filter((t) => !t.pinned && domainOf(t.url || "") === domain);
   if (sameDomain.length < 1) return 0;
   const outcome = await moveTabsToNewWindow(sameDomain);
   return outcome?.result.moved ?? 0;
@@ -215,10 +217,11 @@ export async function splitWindow(direction: "vertical" | "horizontal"): Promise
 }
 
 export async function splitByDomain(): Promise<number> {
+  const domainOf = await getDomainMapper();
   const tabs = await chrome.tabs.query({ currentWindow: true });
   const domainMap = new Map<string, chrome.tabs.Tab[]>();
   for (const tab of tabs.filter((t) => !t.pinned)) {
-    const domain = getDomain(tab.url || "") || "__other__";
+    const domain = domainOf(tab.url || "") || "__other__";
     if (!domainMap.has(domain)) domainMap.set(domain, []);
     domainMap.get(domain)!.push(tab);
   }

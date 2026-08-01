@@ -242,10 +242,14 @@
   };
 
   async function loadTabs() {
-    const tabs = await getAllTabs();
-    const win = await chrome.windows.getCurrent();
+    // Three independent reads; serialising them cost three round-trips for no ordering reason.
+    const [tabs, win, pins] = await Promise.all([
+      getAllTabs(),
+      chrome.windows.getCurrent(),
+      getPinnedTabs(),
+    ]);
     currentWindowId = win.id!;
-    pinnedTabs = await getPinnedTabs();
+    pinnedTabs = pins;
 
     allTabs = tabsToSearchItems(tabs);
     searchHaystack = buildSearchHaystack(allTabs);
@@ -889,28 +893,43 @@
     // closed mid-operation, but it also wiped the background's lock during an AI run —
     // and Chrome closes the popup on every focus loss. Lease expiry handles the stranded
     // case now, without one realm clobbering another's lock.
-    await loadTabs();
-    await loadUndoStack();
-    canUndo = !!peekUndo();
-    const config = await chrome.storage.local.get(["rulesConfig", "collapsedGroups", "dashboardActionIds"]);
+    // These used to await one after another — a dozen IPC round-trips before the popup was
+    // populated, each waiting on a result the next one did not need. Chrome tears the popup
+    // down on every focus loss, so that cost is paid on every single open. Nothing here
+    // depends on anything else here, so it all goes out at once, and the two storage reads
+    // are batched into one call per area instead of four.
+    // Two tiers, deliberately. Everything used to await in series — a dozen IPC round-trips
+    // before anything appeared — and then briefly all in one Promise.all, which is concurrent
+    // but still ONE barrier: the tab list waited on the archive count. Chrome tears the popup
+    // down on every focus loss, so this is paid on every open.
+    //
+    // Tier 1 is what the first useful frame needs. Tier 2 feeds badges and panels that are
+    // off-screen or secondary; each lands on its own and re-renders the one thing it owns.
+    const critical = Promise.all([
+      loadTabs(),
+      chrome.storage.local.get(["rulesConfig", "collapsedGroups", "dashboardActionIds", "onboardingDismissed"]),
+      chrome.storage.session.get("openMode").catch(() => ({}) as Record<string, unknown>),
+    ]);
+
+    void loadUndoStack().then(() => { canUndo = !!peekUndo(); });
+    void hasSavedWorkspace().then((v) => { hasWorkspace = v; });
+    void getArchiveCount().then((v) => { archiveCount = v; });
+    void getActionLog().then((v) => { actionLog = v; });
+    void getAIProgress().then((v) => {
+      aiProgress = v;
+      if (v.status !== "idle") activeSection = "ai";
+    });
+
+    const [, config, session] = await critical;
     applyConfig(config.rulesConfig);
-    hasWorkspace = await hasSavedWorkspace();
-    archiveCount = await getArchiveCount();
-    actionLog = await getActionLog();
-    aiProgress = await getAIProgress();
-    if (aiProgress.status !== "idle") activeSection = "ai";
     if (config.collapsedGroups) collapsedGroups = new Set(config.collapsedGroups);
     if (Array.isArray(config.dashboardActionIds)) dashboardActionIds = config.dashboardActionIds;
-    const ob = await chrome.storage.local.get("onboardingDismissed");
-    onboardingDismissed = !!ob.onboardingDismissed;
-    try {
-      const mode = await chrome.storage.session.get("openMode");
-      if (mode.openMode === "dashboard") {
-        searchAutofocus = false;
-        inputFocused = false;
-        await chrome.storage.session.remove("openMode");
-      }
-    } catch {}
+    onboardingDismissed = !!config.onboardingDismissed;
+    if (session.openMode === "dashboard") {
+      searchAutofocus = false;
+      inputFocused = false;
+      chrome.storage.session.remove("openMode").catch(() => {});
+    }
     // Populate the empty-query MRU list. Without this `results` stayed empty until the first
     // keystroke, so Cmd+E → Enter (jump to the previous tab) silently did nothing.
     updateResults();

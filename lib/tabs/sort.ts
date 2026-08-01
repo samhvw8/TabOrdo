@@ -1,6 +1,6 @@
 // Ordering tabs inside a window or a group, honouring position locks.
 
-import { getDomain } from "../url.ts";
+import { getDomainMapper, type DomainMapper } from "../url.ts";
 import { getPinnedTabs, applyGroupPinsToWindow, type PinnedTabEntry } from "../pin.ts";
 
 export async function sortTabsInWindow(
@@ -17,7 +17,10 @@ export async function sortTabsInGroup(
 ): Promise<void> {
   const tabs = await chrome.tabs.query({ groupId });
   const group = (await chrome.tabGroups.query({})).find((g) => g.id === groupId);
-  const ordered = group?.title ? pinAwareSortTabs(tabs, group.title, await getPinnedTabs(), by) : tabs.sort((a, b) => compareTabs(a, b, by));
+  const domainOf = await getDomainMapper();
+  const ordered = group?.title
+    ? pinAwareSortTabs(tabs, group.title, await getPinnedTabs(), by, domainOf)
+    : tabs.sort((a, b) => compareTabs(a, b, by, domainOf));
   const ids = ordered.map((t) => t.id!);
   if (ids.length > 0) {
     await chrome.tabs.move(ids, { index: -1 });
@@ -32,6 +35,7 @@ export async function organizeWindow(
   const tabs = await chrome.tabs.query({ windowId });
   const groups = await chrome.tabGroups.query({ windowId });
   const allPins = await getPinnedTabs();
+  const domainOf = await getDomainMapper();
   const pinnedCount = tabs.filter((t) => t.pinned).length;
 
   const groupMap = new Map<number, { group: chrome.tabGroups.TabGroup; tabs: chrome.tabs.Tab[] }>();
@@ -56,10 +60,10 @@ export async function organizeWindow(
 
   for (const entry of sortedGroups) {
     entry.tabs = entry.group.title
-      ? pinAwareSortTabs(entry.tabs, entry.group.title, allPins, by)
-      : entry.tabs.sort((a, b) => compareTabs(a, b, by));
+      ? pinAwareSortTabs(entry.tabs, entry.group.title, allPins, by, domainOf)
+      : entry.tabs.sort((a, b) => compareTabs(a, b, by, domainOf));
   }
-  ungrouped.sort((a, b) => compareTabs(a, b, by));
+  ungrouped.sort((a, b) => compareTabs(a, b, by, domainOf));
 
   let index = pinnedCount;
 
@@ -82,10 +86,11 @@ function pinAwareSortTabs(
   tabs: chrome.tabs.Tab[],
   groupTitle: string,
   allPins: PinnedTabEntry[],
-  by: "title" | "url" | "domain"
+  by: "title" | "url" | "domain",
+  domainOf: DomainMapper
 ): chrome.tabs.Tab[] {
   const groupPins = allPins.filter((p) => p.groupName === groupTitle);
-  if (groupPins.length === 0) return tabs.sort((a, b) => compareTabs(a, b, by));
+  if (groupPins.length === 0) return tabs.sort((a, b) => compareTabs(a, b, by, domainOf));
 
   const tabIdMap = new Map(groupPins.filter((p) => p.tabId).map((p) => [p.tabId!, p.position]));
   const urlMap = new Map(groupPins.map((p) => [p.url, p.position]));
@@ -102,7 +107,7 @@ function pinAwareSortTabs(
   }
 
   pinned.sort((a, b) => a.pos - b.pos);
-  unpinned.sort((a, b) => compareTabs(a, b, by));
+  unpinned.sort((a, b) => compareTabs(a, b, by, domainOf));
 
   const result: chrome.tabs.Tab[] = [];
   let ui = 0;
@@ -127,7 +132,8 @@ function pinAwareSortTabs(
 function compareTabs(
   a: chrome.tabs.Tab,
   b: chrome.tabs.Tab,
-  by: "title" | "url" | "domain"
+  by: "title" | "url" | "domain",
+  domainOf: DomainMapper
 ): number {
   switch (by) {
     case "title":
@@ -135,8 +141,8 @@ function compareTabs(
     case "url":
       return (a.url || "").localeCompare(b.url || "");
     case "domain": {
-      const domA = getDomain(a.url || "");
-      const domB = getDomain(b.url || "");
+      const domA = domainOf(a.url || "");
+      const domB = domainOf(b.url || "");
       return domA.localeCompare(domB) || (a.title || "").localeCompare(b.title || "");
     }
   }

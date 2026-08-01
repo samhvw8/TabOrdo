@@ -1,6 +1,6 @@
 // Bulk closing and unloading. Every path here snapshots for undo first.
 
-import { getDomain } from "../url.ts";
+import { getDomainMapper } from "../url.ts";
 import { snapshotClosedTabs } from "../undo.ts";
 
 export async function discardTabs(tabIds: number[]): Promise<void> {
@@ -34,11 +34,12 @@ export async function closeTabsToRight(): Promise<number> {
 export async function closeTabsSameSite(): Promise<number> {
   const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!active?.url) return 0;
-  const activeDomain = getDomain(active.url);
+  const domainOf = await getDomainMapper();
+  const activeDomain = domainOf(active.url);
   if (!activeDomain) return 0;
   const tabs = await chrome.tabs.query({});
   const toClose = tabs.filter(
-    (t) => !t.pinned && t.id !== active.id && getDomain(t.url || "") === activeDomain
+    (t) => !t.pinned && t.id !== active.id && domainOf(t.url || "") === activeDomain
   );
   if (toClose.length > 0) {
     await snapshotClosedTabs(toClose);

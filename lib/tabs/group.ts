@@ -1,7 +1,7 @@
 // Creating, rebuilding and collapsing tab groups.
 
 import { getRules, getUseRules, matchDomainToRule } from "../rules.ts";
-import { getDomain, getFullHostname, hashCode } from "../url.ts";
+import { getDomainMapper, getFullHostname, hashCode } from "../url.ts";
 import { applyAllGroupPins } from "../pin.ts";
 import { GROUP_COLORS } from "./types.ts";
 import { organizeWindow } from "./sort.ts";
@@ -9,6 +9,7 @@ import { organizeWindow } from "./sort.ts";
 export async function groupTabsByDomain(
   mode: "additive" | "rebuild" = "additive"
 ): Promise<void> {
+  const domainOf = await getDomainMapper();
   const useRules = await getUseRules();
   const rules = useRules ? await getRules() : [];
   const allTabs = await chrome.tabs.query({});
@@ -43,7 +44,7 @@ export async function groupTabsByDomain(
       if (!ruleGroupMap.has(rule.id)) ruleGroupMap.set(rule.id, { rule, tabs: [] });
       ruleGroupMap.get(rule.id)!.tabs.push(tab);
     } else if (tab.groupId === -1) {
-      const domain = getDomain(tab.url || "");
+      const domain = domainOf(tab.url || "");
       if (!domain) continue;
       if (!domainMap.has(domain)) domainMap.set(domain, []);
       domainMap.get(domain)!.push(tab);

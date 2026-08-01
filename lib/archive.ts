@@ -78,10 +78,15 @@ export async function clearArchive(): Promise<void> {
 // archive written before that has entries and no count — fall back to measuring it, and
 // backfill so the next read is cheap again.
 export async function getArchiveCount(): Promise<number> {
-  const data = await chrome.storage.local.get([COUNT_KEY, STORAGE_KEY]);
+  // Ask for the count ALONE. Requesting both keys in one get defeated the entire point of
+  // storing a count: chrome.storage deserializes every key you name, so the popup — which
+  // reads this on mount — paid for parsing up to MAX_ARCHIVE_SIZE entries on every open, and
+  // the cost grew with the archive. The fallback below is the only path that needs the array.
+  const data = await chrome.storage.local.get(COUNT_KEY);
   const count = data[COUNT_KEY];
   if (typeof count === "number") return count;
-  const archive: ArchivedTab[] = Array.isArray(data[STORAGE_KEY]) ? data[STORAGE_KEY] : [];
+  const legacy = await chrome.storage.local.get(STORAGE_KEY);
+  const archive: ArchivedTab[] = Array.isArray(legacy[STORAGE_KEY]) ? legacy[STORAGE_KEY] : [];
   await chrome.storage.local.set({ [COUNT_KEY]: archive.length }).catch(() => {});
   return archive.length;
 }

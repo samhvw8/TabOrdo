@@ -1,5 +1,5 @@
 import { getConfig, matchDomainToRule, isIgnoredUrl, isIgnoredGroupName } from "../../lib/rules.ts";
-import { getFullHostname, getDomain, sortTabsInWindow, pickMajorityWindow, GROUP_COLORS, hashCode } from "../../lib/tabs/index.ts";
+import { getFullHostname, getDomainMapper, sortTabsInWindow, pickMajorityWindow, GROUP_COLORS, hashCode } from "../../lib/tabs/index.ts";
 import { syncPinUrl } from "../../lib/pin.ts";
 import { findBounceTarget } from "../../lib/bounce.ts";
 import { logAction } from "../../lib/actionLog.ts";
@@ -143,20 +143,43 @@ async function tryGroupTab(tabId: number, groupId: number, title: string, color:
   }
 }
 
+/**
+ * Register a startup listener without letting one failure take the rest down with it.
+ *
+ * Every listener below runs at the top level of the service worker, so a throw in any of them
+ * aborts the whole script and every listener *after* it silently never registers. That is not
+ * hypothetical: `chrome.commands.onCommand.addListener` used to be the first statement here,
+ * unguarded, and an undefined `chrome.commands` — a build whose manifest lost the key, a
+ * non-Chrome target — would kill auto-group, auto-sort, auto-discard, the context menus and
+ * the AI runner in one go, leaving a single "Cannot read properties of undefined" in
+ * chrome://extensions as the only clue. A missing optional API should cost you that one
+ * feature, not all of them.
+ */
+function register(what: string, fn: () => void): void {
+  try {
+    fn();
+  } catch (e) {
+    console.error(`[TabOrdo] could not register ${what}:`, e);
+  }
+}
+
 export default defineBackground(() => {
-  chrome.commands.onCommand.addListener(async (command) => {
-    if (command === "open-dashboard") {
-      // The flag is consumed by the popup on mount. If openPopup fails (it needs Chrome 127+,
-      // and rejects when no window is focused) a stale flag would sit in session storage and
-      // silently steal search autofocus from the *next* ordinary Cmd+E open.
-      await chrome.storage.session.set({ openMode: "dashboard" });
-      try {
-        await chrome.action.openPopup();
-      } catch (e) {
-        console.warn("[TabOrdo] openPopup failed:", e);
-        await chrome.storage.session.remove("openMode").catch(() => {});
+  // Needs the manifest "commands" key; absent without it.
+  register("commands.onCommand", () => {
+    chrome.commands.onCommand.addListener(async (command) => {
+      if (command === "open-dashboard") {
+        // The flag is consumed by the popup on mount. If openPopup fails (it needs Chrome 127+,
+        // and rejects when no window is focused) a stale flag would sit in session storage and
+        // silently steal search autofocus from the *next* ordinary Cmd+E open.
+        await chrome.storage.session.set({ openMode: "dashboard" });
+        try {
+          await chrome.action.openPopup();
+        } catch (e) {
+          console.warn("[TabOrdo] openPopup failed:", e);
+          await chrome.storage.session.remove("openMode").catch(() => {});
+        }
       }
-    }
+    });
   });
 
   const recentTabs = new Map<number, number>();
@@ -296,7 +319,8 @@ export default defineBackground(() => {
               }
             }
             if (!grouped) {
-              const domain = getDomain(url);
+              const domainOf = await getDomainMapper();
+              const domain = domainOf(url);
               if (domain) {
                 const existingGroups = await chrome.tabGroups.query({ windowId: tab.windowId });
                 const match = existingGroups.find((g) => g.title === domain && !isSharedGroup(g));
@@ -304,7 +328,7 @@ export default defineBackground(() => {
                   await tryGroupTab(tabId, match.id, domain, GROUP_COLORS[Math.abs(hashCode(domain)) % GROUP_COLORS.length]);
                 } else {
                   const windowTabs = await chrome.tabs.query({ windowId: tab.windowId });
-                  const sameDomain = windowTabs.filter((t) => t.id !== tabId && t.groupId === -1 && getDomain(t.url || "") === domain);
+                  const sameDomain = windowTabs.filter((t) => t.id !== tabId && t.groupId === -1 && domainOf(t.url || "") === domain);
                   if (sameDomain.length > 0) {
                     const memberIds = [tabId, ...sameDomain.map((t) => t.id!)];
                     markSelfWrite(memberIds);

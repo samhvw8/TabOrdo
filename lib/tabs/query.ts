@@ -3,8 +3,9 @@
 import type { TabInfo } from "./types.ts";
 
 export async function getAllTabs(): Promise<TabInfo[]> {
-  const tabs = await chrome.tabs.query({});
-  const groups = await getAllGroups();
+  // The group query does not depend on the tab query; awaiting them in turn doubled the
+  // latency of the single call the popup blocks on before it can paint.
+  const [tabs, groups] = await Promise.all([chrome.tabs.query({}), getAllGroups()]);
   const groupMap = new Map(groups.map((g) => [g.id, g]));
 
   return tabs.map((tab) => {
