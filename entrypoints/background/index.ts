@@ -19,8 +19,19 @@ const groupCreatedAt = new Map<number, number>();
 const SELF_WRITE_TTL_MS = 1000;
 const selfWrites = new Map<number, number>();
 
+// Both ledgers only ever pruned an entry when the *same* id was queried again, so ids nobody
+// asks about again — a long AI run marks hundreds — sat there for the life of the worker. A
+// recycled tab id landing on one of them would then suppress a genuine external mutation.
+// Sweeping on write is enough: nothing reads an entry it wouldn't also have to write past.
+function sweepExpired(ledger: Map<number, number>, now: number): void {
+  for (const [id, t] of ledger) {
+    if (now - t > SELF_WRITE_TTL_MS) ledger.delete(id);
+  }
+}
+
 function markSelfWrite(tabIds: number[]): void {
   const now = Date.now();
+  sweepExpired(selfWrites, now);
   for (const id of tabIds) selfWrites.set(id, now);
 }
 
@@ -43,6 +54,7 @@ const pinSelfWrites = new Map<number, number>();
 
 function markPinSelfWrite(tabIds: number[]): void {
   const now = Date.now();
+  sweepExpired(pinSelfWrites, now);
   for (const id of tabIds) pinSelfWrites.set(id, now);
 }
 
@@ -183,291 +195,323 @@ export default defineBackground(() => {
   });
 
   const recentTabs = new Map<number, number>();
-  chrome.tabs.onCreated.addListener((tab) => {
-    if (tab.id) {
-      recentTabs.set(tab.id, Date.now());
-      setTimeout(() => recentTabs.delete(tab.id!), 2000);
-    }
+  register("tabs.onCreated", () => {
+    chrome.tabs.onCreated.addListener((tab) => {
+      if (tab.id) {
+        recentTabs.set(tab.id, Date.now());
+        setTimeout(() => recentTabs.delete(tab.id!), 2000);
+      }
+    });
   });
 
   // Track group ages for the settle-window guard. Groups created before this
   // worker session have no entry and are treated as settled.
-  chrome.tabGroups.onCreated.addListener((group) => {
-    groupCreatedAt.set(group.id, Date.now());
+  register("tabGroups.onCreated", () => {
+    chrome.tabGroups.onCreated.addListener((group) => {
+      groupCreatedAt.set(group.id, Date.now());
+    });
   });
-  chrome.tabGroups.onRemoved.addListener((group) => {
-    groupCreatedAt.delete(group.id);
+  register("tabGroups.onRemoved", () => {
+    chrome.tabGroups.onRemoved.addListener((group) => {
+      groupCreatedAt.delete(group.id);
+    });
   });
-  chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
-    recentTabs.delete(tabId);
-    if (removeInfo.isWindowClosing) return;
-    try {
-      const config = await getConfig();
-      if (!config.autoUngroup) return;
-      scheduleAutoUngroup(removeInfo.windowId);
-    } catch (e) {
-      console.error("[TabOrdo] onRemoved config read:", e);
-    }
+  register("tabs.onRemoved", () => {
+    chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
+      recentTabs.delete(tabId);
+      if (removeInfo.isWindowClosing) return;
+      try {
+        const config = await getConfig();
+        if (!config.autoUngroup) return;
+        scheduleAutoUngroup(removeInfo.windowId);
+      } catch (e) {
+        console.error("[TabOrdo] onRemoved config read:", e);
+      }
+    });
   });
 
   // Switch to an existing tab instead of keeping a fresh duplicate.
   // Fires only for brand-new (recentTabs) foreground tabs on their first navigation —
   // background-created tabs (restores, bulk loads, middle-click) are never bounced.
-  chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-    if (!changeInfo.url || !tab.active) return;
-    if (!recentTabs.has(tabId)) return;
-    try {
-      const config = await getConfig();
-      if (!config.switchToExisting) return;
-      if (await isBulkLocked()) return;
-      const allTabs = await chrome.tabs.query({});
-      const target = findBounceTarget(allTabs, tabId, changeInfo.url, tab.openerTabId);
-      if (!target) return;
-      await chrome.tabs.update(target.id, { active: true });
-      await chrome.windows.update(target.windowId, { focused: true });
-      await chrome.tabs.remove(tabId);
-    } catch (e) {
-      console.error("[TabOrdo] switch-to-existing error:", e);
-    }
+  register("tabs.onUpdated (switch-to-existing)", () => {
+    chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+      if (!changeInfo.url || !tab.active) return;
+      if (!recentTabs.has(tabId)) return;
+      try {
+        const config = await getConfig();
+        if (!config.switchToExisting) return;
+        if (await isBulkLocked()) return;
+        const allTabs = await chrome.tabs.query({});
+        const target = findBounceTarget(allTabs, tabId, changeInfo.url, tab.openerTabId);
+        if (!target) return;
+        await chrome.tabs.update(target.id, { active: true });
+        await chrome.windows.update(target.windowId, { focused: true });
+        await chrome.tabs.remove(tabId);
+      } catch (e) {
+        console.error("[TabOrdo] switch-to-existing error:", e);
+      }
+    });
   });
 
   // Tab moved between groups / in or out of a group — fires changeInfo.groupId
-  chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-    if (changeInfo.groupId === undefined) return;
-    if (isRecentSelfWrite(tabId)) return;
-    try {
-      const config = await getConfig();
-      if (config.autoUngroup) scheduleAutoUngroup(tab.windowId);
-    } catch (e) {
-      console.error("[TabOrdo] onUpdated groupId:", e);
-    }
+  register("tabs.onUpdated (groupId)", () => {
+    chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+      if (changeInfo.groupId === undefined) return;
+      if (isRecentSelfWrite(tabId)) return;
+      try {
+        const config = await getConfig();
+        if (config.autoUngroup) scheduleAutoUngroup(tab.windowId);
+      } catch (e) {
+        console.error("[TabOrdo] onUpdated groupId:", e);
+      }
+    });
   });
 
   // Sync pinned tab URL and title when a tab navigates or finishes loading
-  chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-    if (!changeInfo.url && !changeInfo.title) return;
-    try {
-      await syncPinUrl(tabId, tab.url || "", tab.title);
-    } catch (e) {
-      console.error("[TabOrdo] pin URL sync error:", e);
-    }
+  register("tabs.onUpdated (pin URL sync)", () => {
+    chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+      if (!changeInfo.url && !changeInfo.title) return;
+      try {
+        await syncPinUrl(tabId, tab.url || "", tab.title);
+      } catch (e) {
+        console.error("[TabOrdo] pin URL sync error:", e);
+      }
+    });
   });
 
   // Tab moved to another window — old window's group may have shrunk to 1
-  chrome.tabs.onDetached.addListener(async (_tabId, detachInfo) => {
-    try {
-      const config = await getConfig();
-      if (config.autoUngroup) scheduleAutoUngroup(detachInfo.oldWindowId);
-    } catch (e) {
-      console.error("[TabOrdo] onDetached:", e);
-    }
+  register("tabs.onDetached", () => {
+    chrome.tabs.onDetached.addListener(async (_tabId, detachInfo) => {
+      try {
+        const config = await getConfig();
+        if (config.autoUngroup) scheduleAutoUngroup(detachInfo.oldWindowId);
+      } catch (e) {
+        console.error("[TabOrdo] onDetached:", e);
+      }
+    });
   });
 
   // Sweep all windows when autoUngroup toggles ON, so existing 1-tab groups get dissolved
-  chrome.storage.onChanged.addListener(async (changes, area) => {
-    if (area !== "local" || !changes.rulesConfig) return;
-    const oldOn = changes.rulesConfig.oldValue?.autoUngroup === true;
-    const newOn = changes.rulesConfig.newValue?.autoUngroup === true;
-    if (oldOn || !newOn) return;
-    const wins = await chrome.windows.getAll().catch(() => []);
-    for (const w of wins) {
-      if (w.id !== undefined) scheduleAutoUngroup(w.id);
-    }
+  register("storage.onChanged", () => {
+    chrome.storage.onChanged.addListener(async (changes, area) => {
+      if (area !== "local" || !changes.rulesConfig) return;
+      const oldOn = changes.rulesConfig.oldValue?.autoUngroup === true;
+      const newOn = changes.rulesConfig.newValue?.autoUngroup === true;
+      if (oldOn || !newOn) return;
+      const wins = await chrome.windows.getAll().catch(() => []);
+      for (const w of wins) {
+        if (w.id !== undefined) scheduleAutoUngroup(w.id);
+      }
+    });
   });
 
   // Auto-group and other tab automations
-  chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-    if (!tab.url) return;
-    const isComplete = changeInfo.status === "complete";
-    const isUrlChange = !!changeInfo.url;
-    if (!isComplete && !isUrlChange) return;
+  register("tabs.onUpdated (auto-group/auto-sort)", () => {
+    chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+      if (!tab.url) return;
+      const isComplete = changeInfo.status === "complete";
+      const isUrlChange = !!changeInfo.url;
+      if (!isComplete && !isUrlChange) return;
 
-    const config = await getConfig();
+      const config = await getConfig();
 
-    // Auto-group by domain (or rules if enabled) — trigger on URL change for responsiveness
-    if (isUrlChange && config.autoGroup && !tab.pinned && !(await isBulkLocked())) {
-      try {
-        // For recently created tabs, wait so other extensions can group them first
-        const createdAt = recentTabs.get(tabId);
-        if (createdAt) {
-          const elapsed = Date.now() - createdAt;
-          if (elapsed < 300) await new Promise((r) => setTimeout(r, 300 - elapsed));
-        }
-        const freshTab = await chrome.tabs.get(tabId).catch(() => null);
-        if (freshTab && freshTab.groupId === -1) {
-          const url = freshTab.url || tab.url;
-          if (isIgnoredUrl(url, config.ignorePatterns)) return;
-          const hostname = getFullHostname(url);
-          if (hostname && !url.startsWith("chrome://")) {
-            let grouped = false;
-            if (config.useRules) {
-              const rule = matchDomainToRule(hostname, config.rules);
-              if (rule) {
-                const existingGroups = await chrome.tabGroups.query({ windowId: tab.windowId });
-                const match = existingGroups.find((g) => g.title === rule.name && !isSharedGroup(g));
-                if (match) {
-                  await tryGroupTab(tabId, match.id, rule.name, rule.color);
-                } else {
-                  markSelfWrite([tabId]);
-                  const groupId = await chrome.tabs.group({ tabIds: [tabId] }).catch((e) => { console.error("[TabOrdo] rule group create:", e); return null; });
-                  if (groupId) {
-                    await safeGroupUpdate(groupId, { title: rule.name, color: rule.color });
-                    await logAction("Created group", `"${rule.name}" (rule)`);
-                  }
-                }
-                grouped = true;
-              }
-            }
-            if (!grouped) {
-              const domainOf = await getDomainMapper();
-              const domain = domainOf(url);
-              if (domain) {
-                const existingGroups = await chrome.tabGroups.query({ windowId: tab.windowId });
-                const match = existingGroups.find((g) => g.title === domain && !isSharedGroup(g));
-                if (match) {
-                  await tryGroupTab(tabId, match.id, domain, GROUP_COLORS[Math.abs(hashCode(domain)) % GROUP_COLORS.length]);
-                } else {
-                  const windowTabs = await chrome.tabs.query({ windowId: tab.windowId });
-                  const sameDomain = windowTabs.filter((t) => t.id !== tabId && t.groupId === -1 && domainOf(t.url || "") === domain);
-                  if (sameDomain.length > 0) {
-                    const memberIds = [tabId, ...sameDomain.map((t) => t.id!)];
-                    markSelfWrite(memberIds);
-                    const groupId = await chrome.tabs.group({ tabIds: memberIds }).catch((e) => { console.error("[TabOrdo] domain group create:", e); return null; });
+      // Auto-group by domain (or rules if enabled) — trigger on URL change for responsiveness
+      if (isUrlChange && config.autoGroup && !tab.pinned && !(await isBulkLocked())) {
+        try {
+          // For recently created tabs, wait so other extensions can group them first
+          const createdAt = recentTabs.get(tabId);
+          if (createdAt) {
+            const elapsed = Date.now() - createdAt;
+            if (elapsed < 300) await new Promise((r) => setTimeout(r, 300 - elapsed));
+          }
+          const freshTab = await chrome.tabs.get(tabId).catch(() => null);
+          if (freshTab && freshTab.groupId === -1) {
+            const url = freshTab.url || tab.url;
+            const hostname = getFullHostname(url);
+            // An ignored URL only opts out of *grouping*. Returning here instead skipped the
+            // auto-ungroup and auto-sort below too, which the hostname guard beside it does not.
+            if (hostname && !url.startsWith("chrome://") && !isIgnoredUrl(url, config.ignorePatterns)) {
+              let grouped = false;
+              if (config.useRules) {
+                const rule = matchDomainToRule(hostname, config.rules);
+                if (rule) {
+                  const existingGroups = await chrome.tabGroups.query({ windowId: tab.windowId });
+                  const match = existingGroups.find((g) => g.title === rule.name && !isSharedGroup(g));
+                  if (match) {
+                    await tryGroupTab(tabId, match.id, rule.name, rule.color);
+                  } else {
+                    markSelfWrite([tabId]);
+                    const groupId = await chrome.tabs.group({ tabIds: [tabId] }).catch((e) => { console.error("[TabOrdo] rule group create:", e); return null; });
                     if (groupId) {
-                      await safeGroupUpdate(groupId, { title: domain, color: GROUP_COLORS[Math.abs(hashCode(domain)) % GROUP_COLORS.length] });
-                      await logAction("Created group", `"${domain}" (${memberIds.length} tabs)`);
+                      await safeGroupUpdate(groupId, { title: rule.name, color: rule.color });
+                      await logAction("Created group", `"${rule.name}" (rule)`);
+                    }
+                  }
+                  grouped = true;
+                }
+              }
+              if (!grouped) {
+                const domainOf = await getDomainMapper();
+                const domain = domainOf(url);
+                if (domain) {
+                  const existingGroups = await chrome.tabGroups.query({ windowId: tab.windowId });
+                  const match = existingGroups.find((g) => g.title === domain && !isSharedGroup(g));
+                  if (match) {
+                    await tryGroupTab(tabId, match.id, domain, GROUP_COLORS[Math.abs(hashCode(domain)) % GROUP_COLORS.length]);
+                  } else {
+                    const windowTabs = await chrome.tabs.query({ windowId: tab.windowId });
+                    const sameDomain = windowTabs.filter((t) => t.id !== tabId && t.groupId === -1 && domainOf(t.url || "") === domain);
+                    if (sameDomain.length > 0) {
+                      const memberIds = [tabId, ...sameDomain.map((t) => t.id!)];
+                      markSelfWrite(memberIds);
+                      const groupId = await chrome.tabs.group({ tabIds: memberIds }).catch((e) => { console.error("[TabOrdo] domain group create:", e); return null; });
+                      if (groupId) {
+                        await safeGroupUpdate(groupId, { title: domain, color: GROUP_COLORS[Math.abs(hashCode(domain)) % GROUP_COLORS.length] });
+                        await logAction("Created group", `"${domain}" (${memberIds.length} tabs)`);
+                      }
                     }
                   }
                 }
               }
             }
           }
+          if (config.autoUngroup) {
+            scheduleAutoUngroup(tab.windowId);
+          }
+        } catch (e) {
+          console.error("[TabOrdo] auto-group error:", e);
         }
-        if (config.autoUngroup) {
-          scheduleAutoUngroup(tab.windowId);
-        }
-      } catch (e) {
-        console.error("[TabOrdo] auto-group error:", e);
       }
-    }
 
-    // Auto-sort on tab load.
-    // Kept in this listener rather than its own: it is ordering-coupled to auto-group above,
-    // which is awaited first so the sort sees the group that was just created. Chrome does
-    // not await listeners, so splitting them would let the two interleave.
-    if (config.autoSort && changeInfo.status === "complete" && !(await isBulkLocked())) {
-      await sortTabsInWindow(tab.windowId);
-    }
+      // Auto-sort on tab load.
+      // Kept in this listener rather than its own: it is ordering-coupled to auto-group above,
+      // which is awaited first so the sort sees the group that was just created. Chrome does
+      // not await listeners, so splitting them would let the two interleave.
+      if (config.autoSort && changeInfo.status === "complete" && !(await isBulkLocked())) {
+        await sortTabsInWindow(tab.windowId);
+      }
+    });
   });
 
   // Auto pin follow — its own listener. It shares no state with the grouping automations,
   // and folding it into their guard made every pin toggle run their prologue first, paying
   // two storage round-trips to reach a branch that needs neither.
-  chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-    if (changeInfo.pinned === undefined || !tab.url) return;
-    if (pinSyncInProgress) return;
-    if (isRecentPinSelfWrite(tabId)) return;
-    if (!(await getConfig()).autoPinFollow) return;
+  register("tabs.onUpdated (pin follow)", () => {
+    chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+      if (changeInfo.pinned === undefined || !tab.url) return;
+      if (pinSyncInProgress) return;
+      if (isRecentPinSelfWrite(tabId)) return;
+      if (!(await getConfig()).autoPinFollow) return;
 
-    pinSyncInProgress = true;
-    try {
-      const allTabs = await chrome.tabs.query({});
-      const sameUrl = allTabs.filter((t) => t.id !== tabId && t.url === tab.url);
-      const stale = sameUrl.filter((t) => t.pinned !== changeInfo.pinned);
-      markPinSelfWrite(stale.map((t) => t.id!));
-      for (const t of stale) {
-        await chrome.tabs.update(t.id!, { pinned: changeInfo.pinned }).catch((e) => {
-          console.warn("[TabOrdo] pin follow update failed:", e);
-        });
+      pinSyncInProgress = true;
+      try {
+        const allTabs = await chrome.tabs.query({});
+        const sameUrl = allTabs.filter((t) => t.id !== tabId && t.url === tab.url);
+        const stale = sameUrl.filter((t) => t.pinned !== changeInfo.pinned);
+        markPinSelfWrite(stale.map((t) => t.id!));
+        for (const t of stale) {
+          await chrome.tabs.update(t.id!, { pinned: changeInfo.pinned }).catch((e) => {
+            console.warn("[TabOrdo] pin follow update failed:", e);
+          });
+        }
+      } catch (e) {
+        console.error("[TabOrdo] pin follow error:", e);
+      } finally {
+        pinSyncInProgress = false;
       }
-    } catch (e) {
-      console.error("[TabOrdo] pin follow error:", e);
-    } finally {
-      pinSyncInProgress = false;
-    }
+    });
   });
 
   // Auto-discard alarm
   const DISCARD_ALARM = "autoDiscard";
 
-  chrome.runtime.onInstalled.addListener(() => {
-    chrome.alarms.create(DISCARD_ALARM, { periodInMinutes: 5 });
+  register("runtime.onInstalled", () => {
+    chrome.runtime.onInstalled.addListener(() => {
+      chrome.alarms.create(DISCARD_ALARM, { periodInMinutes: 5 });
 
-    if (chrome.contextMenus) {
-      chrome.contextMenus.removeAll(() => {
-        chrome.contextMenus.create({ id: "tabOrdo-group-domain", title: "Group tabs by domain", contexts: ["action"] });
-        chrome.contextMenus.create({ id: "tabOrdo-dedup", title: "Remove duplicate tabs", contexts: ["action"] });
-        chrome.contextMenus.create({ id: "tabOrdo-sort", title: "Sort tabs by domain", contexts: ["action"] });
-        chrome.contextMenus.create({ type: "separator", id: "tabOrdo-sep1", contexts: ["action"] });
-        if (chrome.readingList) {
-          chrome.contextMenus.create({ id: "tabOrdo-readlater", title: "Save to Reading List", contexts: ["action"] });
-        }
-        chrome.contextMenus.create({ id: "tabOrdo-discard", title: "Discard inactive tabs", contexts: ["action"] });
-        if (chrome.sidePanel) {
-          chrome.contextMenus.create({ type: "separator", id: "tabOrdo-sep2", contexts: ["action"] });
-          chrome.contextMenus.create({ id: "tabOrdo-sidepanel", title: "Open in Side Panel", contexts: ["action"] });
-        }
-      });
-    }
+      if (chrome.contextMenus) {
+        chrome.contextMenus.removeAll(() => {
+          chrome.contextMenus.create({ id: "tabOrdo-group-domain", title: "Group tabs by domain", contexts: ["action"] });
+          chrome.contextMenus.create({ id: "tabOrdo-dedup", title: "Remove duplicate tabs", contexts: ["action"] });
+          chrome.contextMenus.create({ id: "tabOrdo-sort", title: "Sort tabs by domain", contexts: ["action"] });
+          chrome.contextMenus.create({ type: "separator", id: "tabOrdo-sep1", contexts: ["action"] });
+          if (chrome.readingList) {
+            chrome.contextMenus.create({ id: "tabOrdo-readlater", title: "Save to Reading List", contexts: ["action"] });
+          }
+          chrome.contextMenus.create({ id: "tabOrdo-discard", title: "Discard inactive tabs", contexts: ["action"] });
+          if (chrome.sidePanel) {
+            chrome.contextMenus.create({ type: "separator", id: "tabOrdo-sep2", contexts: ["action"] });
+            chrome.contextMenus.create({ id: "tabOrdo-sidepanel", title: "Open in Side Panel", contexts: ["action"] });
+          }
+        });
+      }
+    });
   });
 
   if (chrome.contextMenus) {
-    chrome.contextMenus.onClicked.addListener(async (info) => {
-      try {
-        switch (info.menuItemId) {
-          // These three do the same bulk rearranging the palette does, so they need the same
-          // suppression — without it the auto-group/sort/ungroup listeners react to the very
-          // mutations these are making. The palette wrapped them; this path never did.
-          case "tabOrdo-group-domain": {
-            const { groupTabsByDomain } = await import("../../lib/tabs/index.ts");
-            await withBulkLock(() => groupTabsByDomain("additive"));
-            break;
-          }
-          case "tabOrdo-dedup": {
-            const { removeDuplicates } = await import("../../lib/tabs/index.ts");
-            await withBulkLock(() => removeDuplicates());
-            break;
-          }
-          case "tabOrdo-sort": {
-            const win = await chrome.windows.getCurrent();
-            await withBulkLock(() => sortTabsInWindow(win.id!));
-            break;
-          }
-          case "tabOrdo-readlater": {
-            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-            if (tab?.url && tab.title) await addToReadingList(tab.url, tab.title);
-            break;
-          }
-          case "tabOrdo-discard": {
-            const tabs = await chrome.tabs.query({});
-            for (const tab of tabs) {
-              if (!tab.active && !tab.pinned && !tab.audible && !tab.discarded) {
-                await chrome.tabs.discard(tab.id!).catch(() => {});
+    register("contextMenus.onClicked", () => {
+      chrome.contextMenus.onClicked.addListener(async (info) => {
+        try {
+          switch (info.menuItemId) {
+            // These three do the same bulk rearranging the palette does, so they need the same
+            // suppression — without it the auto-group/sort/ungroup listeners react to the very
+            // mutations these are making. The palette wrapped them; this path never did.
+            case "tabOrdo-group-domain": {
+              const { groupTabsByDomain } = await import("../../lib/tabs/index.ts");
+              await withBulkLock(() => groupTabsByDomain("additive"));
+              break;
+            }
+            case "tabOrdo-dedup": {
+              const { removeDuplicates } = await import("../../lib/tabs/index.ts");
+              await withBulkLock(() => removeDuplicates());
+              break;
+            }
+            case "tabOrdo-sort": {
+              const win = await chrome.windows.getCurrent();
+              await withBulkLock(() => sortTabsInWindow(win.id!));
+              break;
+            }
+            case "tabOrdo-readlater": {
+              const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+              if (tab?.url && tab.title) await addToReadingList(tab.url, tab.title);
+              break;
+            }
+            case "tabOrdo-discard": {
+              const tabs = await chrome.tabs.query({});
+              for (const tab of tabs) {
+                if (!tab.active && !tab.pinned && !tab.audible && !tab.discarded) {
+                  await chrome.tabs.discard(tab.id!).catch(() => {});
+                }
               }
+              break;
             }
-            break;
+            case "tabOrdo-sidepanel":
+              if (chrome.sidePanel) {
+                await chrome.sidePanel.open({ windowId: (await chrome.windows.getCurrent()).id! });
+              }
+              break;
           }
-          case "tabOrdo-sidepanel":
-            if (chrome.sidePanel) {
-              await chrome.sidePanel.open({ windowId: (await chrome.windows.getCurrent()).id! });
-            }
-            break;
+        } catch (e) {
+          console.error("[TabOrdo] context menu error:", e);
         }
-      } catch (e) {
-        console.error("[TabOrdo] context menu error:", e);
-      }
+      });
     });
   }
 
-  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-    if (msg.type === "aigroup-start") {
-      runAIGroup().then((result) => sendResponse(result));
-      return true;
-    }
-    if (msg.type === "aigroup-status") {
-      getAIProgress().then((p) => sendResponse(p));
-      return true;
-    }
+  // The popup reads AI progress straight from session storage, so there is no status message
+  // to answer here — only the start request.
+  register("runtime.onMessage", () => {
+    chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+      if (!msg || typeof msg.type !== "string") return;
+      if (msg.type === "aigroup-start") {
+        // Without the catch, anything rejecting before the run's own try left sendResponse
+        // uncalled — the popup then waits on a port that will never answer.
+        runAIGroup()
+          .then((result) => sendResponse(result))
+          .catch((e) => sendResponse({ ok: false, message: String(e) }));
+        return true;
+      }
+    });
   });
 
   async function runAIGroup(): Promise<{ ok: boolean; message: string }> {
@@ -476,35 +520,40 @@ export default defineBackground(() => {
       return { ok: false, message: "AI grouping already in progress" };
     }
 
-    await setAIProgress({ ...defaultProgress(), status: "checking" });
-    const ai = await checkAIAvailability();
-    if (!ai.available) {
-      await setAIProgress({ ...defaultProgress(), status: "error", error: ai.reason });
-      return { ok: false, message: ai.reason };
-    }
-
-    const ungroupedTabs = (await chrome.tabs.query({})).filter(
-      (t) => t.groupId === -1 && !t.pinned && t.url && !t.url.startsWith("chrome://")
-    );
-    if (ungroupedTabs.length < 2) {
-      await setAIProgress({ ...defaultProgress(), status: "error", error: "Need 2+ ungrouped tabs" });
-      return { ok: false, message: "Need 2+ ungrouped tabs" };
-    }
-
-    const tabData = ungroupedTabs.map((t) => ({ id: t.id!, title: t.title || "", url: t.url || "" }));
-    await setAIProgress({
-      status: "prompting", total: tabData.length, processed: 0,
-      currentTab: `Sending ${tabData.length} tabs to on-device AI...`,
-      grouped: 0, groupCount: 0, error: "",
-    });
-
     // Hold the bulk lock for the whole run: the popup releases its own lock as soon as it
     // fires the message, so without this the auto-group/sort/ungroup listeners fight the AI.
     // The lease is ours alone — a popup finishing its own bulk action, or being reopened,
     // can no longer clear a lock this run is still holding.
+    //
+    // Taken before the availability check and the tab query rather than after: those can
+    // reject too, and outside the try their rejection skipped the release and left the whole
+    // profile suppressed for the ten-minute lease.
     const lockOwner = newLockOwner();
-    await acquireBulkLock(lockOwner, AI_LEASE_MS);
     try {
+      await acquireBulkLock(lockOwner, AI_LEASE_MS);
+
+      await setAIProgress({ ...defaultProgress(), status: "checking" });
+      const ai = await checkAIAvailability();
+      if (!ai.available) {
+        await setAIProgress({ ...defaultProgress(), status: "error", error: ai.reason });
+        return { ok: false, message: ai.reason };
+      }
+
+      const ungroupedTabs = (await chrome.tabs.query({})).filter(
+        (t) => t.groupId === -1 && !t.pinned && t.url && !t.url.startsWith("chrome://")
+      );
+      if (ungroupedTabs.length < 2) {
+        await setAIProgress({ ...defaultProgress(), status: "error", error: "Need 2+ ungrouped tabs" });
+        return { ok: false, message: "Need 2+ ungrouped tabs" };
+      }
+
+      const tabData = ungroupedTabs.map((t) => ({ id: t.id!, title: t.title || "", url: t.url || "" }));
+      await setAIProgress({
+        status: "prompting", total: tabData.length, processed: 0,
+        currentTab: `Sending ${tabData.length} tabs to on-device AI...`,
+        grouped: 0, groupCount: 0, error: "",
+      });
+
       const suggestions = await suggestGroups(tabData);
       if (suggestions.length === 0) {
         await setAIProgress({ ...defaultProgress(), status: "done", total: tabData.length, processed: tabData.length });
@@ -558,25 +607,29 @@ export default defineBackground(() => {
     }
   }
 
-  chrome.runtime.onStartup.addListener(async () => {
-    const alarm = await chrome.alarms.get(DISCARD_ALARM);
-    if (!alarm) {
-      chrome.alarms.create(DISCARD_ALARM, { periodInMinutes: 5 });
-    }
+  register("runtime.onStartup", () => {
+    chrome.runtime.onStartup.addListener(async () => {
+      const alarm = await chrome.alarms.get(DISCARD_ALARM);
+      if (!alarm) {
+        chrome.alarms.create(DISCARD_ALARM, { periodInMinutes: 5 });
+      }
+    });
   });
 
-  chrome.alarms.onAlarm.addListener(async (alarm) => {
-    if (alarm.name !== DISCARD_ALARM) return;
-    const config = await getConfig();
-    if (!config.autoDiscard) return;
-    const cutoff = Date.now() - 45 * 60 * 1000;
-    const tabs = await chrome.tabs.query({});
-    for (const tab of tabs) {
-      if (tab.active || tab.pinned || tab.audible || tab.discarded || (tab as any).frozen) continue;
-      if ((tab.lastAccessed || 0) < cutoff) {
-        await chrome.tabs.discard(tab.id!).catch(() => {});
+  register("alarms.onAlarm", () => {
+    chrome.alarms.onAlarm.addListener(async (alarm) => {
+      if (alarm.name !== DISCARD_ALARM) return;
+      const config = await getConfig();
+      if (!config.autoDiscard) return;
+      const cutoff = Date.now() - 45 * 60 * 1000;
+      const tabs = await chrome.tabs.query({});
+      for (const tab of tabs) {
+        if (tab.active || tab.pinned || tab.audible || tab.discarded || (tab as any).frozen) continue;
+        if ((tab.lastAccessed || 0) < cutoff) {
+          await chrome.tabs.discard(tab.id!).catch(() => {});
+        }
       }
-    }
+    });
   });
 
 });

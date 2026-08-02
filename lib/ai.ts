@@ -1,3 +1,5 @@
+import { AI_LEASE_MS } from "./bulklock.ts";
+
 interface AIGroupSuggestion {
   groupName: string;
   color: string;
@@ -12,9 +14,13 @@ export interface AIGroupProgress {
   grouped: number;
   groupCount: number;
   error: string;
+  /** When this record was written, stamped by setAIProgress. Absent on pre-0.6.0 records. */
+  startedAt?: number;
 }
 
 export const AI_PROGRESS_KEY = "tabOrdo_aiGroupProgress";
+
+const IN_FLIGHT: ReadonlySet<AIGroupProgress["status"]> = new Set(["checking", "prompting", "grouping"]);
 
 export function defaultProgress(): AIGroupProgress {
   return { status: "idle", total: 0, processed: 0, currentTab: "", grouped: 0, groupCount: 0, error: "" };
@@ -23,12 +29,23 @@ export function defaultProgress(): AIGroupProgress {
 export async function getAIProgress(): Promise<AIGroupProgress> {
   try {
     const data = await chrome.storage.session.get(AI_PROGRESS_KEY);
-    return data[AI_PROGRESS_KEY] ?? defaultProgress();
+    const progress = data[AI_PROGRESS_KEY] as AIGroupProgress | undefined;
+    if (!progress) return defaultProgress();
+    // The on-device prompt is the one stretch of a run that makes no chrome.* calls, so an MV3
+    // worker torn down mid-prompt leaves an in-flight record with nobody left to finish it —
+    // and runAIGroup refuses to start while one is there, until the browser restarts. Age it
+    // out on the same lease the run holds the bulk lock for. A record with no timestamp (an
+    // older shape still in session storage) is stale by the same test, which is the safe way
+    // for it to fail.
+    if (IN_FLIGHT.has(progress.status) && Date.now() - (progress.startedAt ?? 0) > AI_LEASE_MS) {
+      return defaultProgress();
+    }
+    return progress;
   } catch { return defaultProgress(); }
 }
 
 export async function setAIProgress(progress: AIGroupProgress): Promise<void> {
-  await chrome.storage.session.set({ [AI_PROGRESS_KEY]: progress });
+  await chrome.storage.session.set({ [AI_PROGRESS_KEY]: { ...progress, startedAt: Date.now() } });
 }
 
 // Chrome 150+ moved from window.ai.languageModel to global LanguageModel class.

@@ -11,6 +11,7 @@ export interface StubTab {
   active?: boolean;
   lastAccessed?: number;
   muted?: boolean;
+  highlighted?: boolean;
 }
 
 export interface StubGroup {
@@ -37,6 +38,7 @@ export interface ChromeStub {
   scriptedIds: number[];
   moves: { ids: number[]; windowId?: number; index?: number }[];
   groupUpdates: { id: number; title?: string; color?: string; collapsed?: boolean }[];
+  tabUpdates: { id: number; pinned?: boolean; url?: string; highlighted?: boolean; muted?: boolean; active?: boolean }[];
   failCreateUrls: Set<string>;
   /** Every storage.get, in order, with the keys it asked for. */
   storageReads: { area: string; keys: string[] }[];
@@ -98,6 +100,7 @@ export function installChromeStub(): ChromeStub {
     scriptedIds: [],
     moves: [],
     groupUpdates: [],
+    tabUpdates: [],
     failCreateUrls: new Set(),
     storageReads: [],
     changeListeners: [],
@@ -154,12 +157,18 @@ export function installChromeStub(): ChromeStub {
     },
     tabs: {
       query: async (
-        q: { windowId?: number; groupId?: number; currentWindow?: boolean; active?: boolean; pinned?: boolean } = {}
+        q: {
+          windowId?: number; groupId?: number; currentWindow?: boolean; lastFocusedWindow?: boolean;
+          active?: boolean; pinned?: boolean;
+        } = {}
       ) =>
         stub.openTabs.filter((t) => {
           if (q.windowId !== undefined && t.windowId !== q.windowId) return false;
           if (q.groupId !== undefined && t.groupId !== q.groupId) return false;
-          if (q.currentWindow && t.windowId !== stub.currentWindowId) return false;
+          // The stub has a single focused window, so lastFocusedWindow — which production uses
+          // to find the active tab — narrows to exactly what currentWindow does. Ignoring it
+          // matched every tab, so those queries silently picked the first tab in the strip.
+          if ((q.currentWindow || q.lastFocusedWindow) && t.windowId !== stub.currentWindowId) return false;
           // Without these two the `{active: true}` queries all matched every tab, so the
           // "active tab" every close/unite/isolate command pivots on was silently just the
           // first tab in the strip — and any test built on that would assert nothing.
@@ -210,9 +219,18 @@ export function installChromeStub(): ChromeStub {
         stub.removedIds.push(...arr);
         stub.openTabs = stub.openTabs.filter((t) => !arr.includes(t.id));
       },
-      update: async (id: number, props: { muted?: boolean; active?: boolean }) => {
+      // Everything but muted/active used to be dropped on the floor, so the pin-follow and
+      // navigate paths could not be observed at all: {pinned} and {url} left no trace.
+      update: async (
+        id: number,
+        props: { pinned?: boolean; url?: string; highlighted?: boolean; muted?: boolean; active?: boolean }
+      ) => {
+        stub.tabUpdates.push({ id, ...props });
         const t = stub.openTabs.find((x) => x.id === id);
         if (!t) return undefined;
+        if (props.pinned !== undefined) t.pinned = props.pinned;
+        if (props.url !== undefined) t.url = props.url;
+        if (props.highlighted !== undefined) t.highlighted = props.highlighted;
         if (props.muted !== undefined) t.muted = props.muted;
         if (props.active !== undefined) t.active = props.active;
         return t;
@@ -230,13 +248,17 @@ export function installChromeStub(): ChromeStub {
       },
       group: async (opts: { tabIds: number[]; groupId?: number; createProperties?: { windowId?: number } }) => {
         if (stub.failGroup) throw new Error("stub: Tabs cannot be edited right now");
+        const members = stub.openTabs.filter((t) => opts.tabIds.includes(t.id));
+        // Chrome refuses tab ids that span windows; callers are expected to consolidate first.
+        // Accepting them here let cross-window grouping pass in tests and fail in the browser.
+        const targetWindowId = opts.createProperties?.windowId ?? members[0]?.windowId;
+        if (members.some((t) => t.windowId !== targetWindowId)) {
+          throw new Error("Tabs can only be grouped in the same window.");
+        }
         const gid = opts.groupId ?? nextGroupId++;
-        for (const t of stub.openTabs) if (opts.tabIds.includes(t.id)) t.groupId = gid;
+        for (const t of members) t.groupId = gid;
         if (opts.groupId === undefined) {
-          const windowId =
-            opts.createProperties?.windowId ??
-            stub.openTabs.find((t) => opts.tabIds.includes(t.id))?.windowId;
-          stub.groups.push({ id: gid, windowId });
+          stub.groups.push({ id: gid, windowId: targetWindowId });
         }
         makeContiguous(stub, gid);
         return gid;
