@@ -15,7 +15,7 @@ import {
   stackWindows, collapseAllGroups, moveCurrentTab, moveGroup, pinCurrentTab, unpinCurrentTab,
   pinCurrentGroup, unpinCurrentGroup, type MoveGroupsResult,
 } from "./tabs/index.ts";
-import { archiveTabs } from "./archive.ts";
+import { archiveTabs, isArchivable } from "./archive.ts";
 import { snapshotBeforeClose, snapshotBeforeGroup } from "./undo.ts";
 import { focusMode, unfocusMode, exportTabsToFile } from "./workspace.ts";
 import { addTabsToReadingList, isReadingListAvailable } from "./readinglist.ts";
@@ -109,9 +109,16 @@ export const ACTION_HANDLERS: Record<string, ActionHandler> = {
 
   archive: async (ctx) => {
     if (ctx.tabIds.length === 0) return NOTHING;
-    const tabData = ctx.matchingTabs.map((t) => ({ url: t.url, title: t.title, groupName: t.groupTitle }));
+    // Close exactly what was archived. This closed every match while archiveTabs skipped
+    // urlless and newtab entries, so "Archived 8" could close 10 — and being the one
+    // destructive handler with no snapshot, Ctrl+Z then popped some unrelated older entry.
+    const eligible = ctx.matchingTabs.filter((t) => t.tabId !== undefined && isArchivable(t));
+    if (eligible.length === 0) return { message: "Nothing to archive", acted: false };
+    const tabIds = eligible.map((t) => t.tabId!);
+    await snapshotBeforeClose(tabIds);
+    const tabData = eligible.map((t) => ({ url: t.url, title: t.title, groupName: t.groupTitle }));
     const archived = await archiveTabs(tabData);
-    await closeTabs(ctx.tabIds);
+    await closeTabs(tabIds);
     return { message: `Archived ${archived} tab(s)`, acted: true };
   },
 
@@ -157,15 +164,23 @@ export const ACTION_HANDLERS: Record<string, ActionHandler> = {
     return { message: count > 0 ? `Removed ${count} duplicate(s)` : "No duplicates found", acted: true };
   },
 
+  // allSettled, like /reload above: the ids come from a list the popup built moments ago, and
+  // one that has since gone stale must not abort the rest of the batch.
   mute: (ctx) => onMatchesOrActive(
     ctx,
-    async (ids) => { for (const id of ids) await muteTab(id, true); return `Muted ${ids.length} tab(s)`; },
+    async (ids) => {
+      await Promise.allSettled(ids.map((id) => muteTab(id, true)));
+      return `Muted ${ids.length} tab(s)`;
+    },
     async (tab) => { await muteTab(tab.id!, true); return "Muted active tab"; }
   ),
 
   unmute: (ctx) => onMatchesOrActive(
     ctx,
-    async (ids) => { for (const id of ids) await muteTab(id, false); return `Unmuted ${ids.length} tab(s)`; },
+    async (ids) => {
+      await Promise.allSettled(ids.map((id) => muteTab(id, false)));
+      return `Unmuted ${ids.length} tab(s)`;
+    },
     async (tab) => { await muteTab(tab.id!, false); return "Unmuted active tab"; }
   ),
 

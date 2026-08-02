@@ -22,6 +22,12 @@ async function saveArchive(archive: ArchivedTab[]): Promise<void> {
   await chrome.storage.local.set({ [STORAGE_KEY]: archive, [COUNT_KEY]: archive.length });
 }
 
+/** What archiveTabs will actually keep. Exported so a caller that closes the tabs afterwards
+ *  can close exactly the ones that were archived, and no more. */
+export function isArchivable(tab: { url?: string }): boolean {
+  return !!tab.url && tab.url !== "chrome://newtab/";
+}
+
 export async function archiveTabs(
   tabs: { url: string; title: string; groupName?: string }[]
 ): Promise<number> {
@@ -29,7 +35,7 @@ export async function archiveTabs(
   const now = Date.now();
   let count = 0;
   for (const tab of tabs) {
-    if (!tab.url || tab.url === "chrome://newtab/") continue;
+    if (!isArchivable(tab)) continue;
     archive.push({
       id: crypto.randomUUID(),
       url: tab.url,

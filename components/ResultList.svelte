@@ -9,6 +9,7 @@
     currentWindowId = 0,
     windowIds = [] as number[],
     query = "",
+    listboxId = "palette-results",
     onselect,
     onclose,
   }: {
@@ -18,9 +19,14 @@
     currentWindowId?: number;
     windowIds?: number[];
     query?: string;
+    listboxId?: string;
     onselect: (item: SearchResult) => void;
     onclose: (item: SearchResult) => void;
   } = $props();
+
+  // Row ids the search input points aria-activedescendant at. The caller builds the same
+  // string, so keep the two in step.
+  const optionId = (i: number) => `${listboxId}-option-${i}`;
 
   function windowLabel(wid: number | undefined): string | null {
     if (!wid || !currentWindowId || windowIds.length <= 1) return null;
@@ -70,16 +76,21 @@
       <span class="text-text-muted/50 text-[10px]">Try a different search or press Esc to clear</span>
     </div>
   {:else}
+    <div id={listboxId} role="listbox" aria-label="Search results">
     {#each results as item, i}
       {#if item.type === "divider"}
-        <div class="flex items-center gap-2 px-2 py-1 mt-1">
+        <!-- Section label, not a row: options are what the listbox exposes, so keep this out
+             of the accessibility tree rather than announce it as a choice. -->
+        <div class="flex items-center gap-2 px-2 py-1 mt-1" role="presentation">
           <span class="text-[10px] font-semibold uppercase tracking-wider text-text-muted">{item.title}</span>
           <div class="flex-1 h-px bg-border/50"></div>
         </div>
       {:else}
       <div
-        role="button"
-        tabindex="0"
+        id={optionId(i)}
+        role="option"
+        aria-selected={i === selectedIndex}
+        tabindex="-1"
         use:scrollIntoView={i === selectedIndex}
         class="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left transition-colors group cursor-pointer
           {i === selectedIndex ? 'bg-surface-active' : 'hover:bg-surface-hover'}"
@@ -92,6 +103,7 @@
             alt=""
             class="w-4 h-4 shrink-0 rounded-sm"
             onerror={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+            onload={(e) => { (e.target as HTMLImageElement).style.display = ''; }}
           />
         {:else}
           <span class="w-4 h-4 shrink-0 text-center text-[10px] leading-4">{typeIcons[item.type] || "📄"}</span>
@@ -128,10 +140,14 @@
         </div>
 
         {#if item.type === "tab"}
+          <!-- Hover-only affordance, and an option can't legally contain a control. Keyboard
+               users get the same thing on Ctrl+Delete, so it stays out of the a11y tree. -->
           <button
             class="shrink-0 p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-accent-red/20 hover:text-accent-red transition-all"
             onclick={(e) => { e.stopPropagation(); onclose(item); }}
             title="Close tab (Ctrl+Delete)"
+            tabindex="-1"
+            aria-hidden="true"
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M18 6 6 18" /><path d="m6 6 12 12" />
@@ -141,5 +157,6 @@
       </div>
       {/if}
     {/each}
+    </div>
   {/if}
 </div>

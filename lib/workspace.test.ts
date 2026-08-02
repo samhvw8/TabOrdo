@@ -9,6 +9,8 @@ let created: { url?: string; pinned?: boolean; active?: boolean }[];
 let removed: number[];
 let windowsCreated: { url?: string }[];
 let discarded: number[];
+/** URLs chrome.tabs.create rejects — file://, view-source: and friends in the real browser. */
+let failCreateUrls: Set<string>;
 
 beforeEach(() => {
   storage = {};
@@ -17,6 +19,7 @@ beforeEach(() => {
   removed = [];
   windowsCreated = [];
   discarded = [];
+  failCreateUrls = new Set();
   globalThis.chrome = {
     storage: {
       local: {
@@ -37,6 +40,9 @@ beforeEach(() => {
     tabs: {
       query: async () => openTabs,
       create: async (props: { url?: string; pinned?: boolean; active?: boolean }) => {
+        if (props.url && failCreateUrls.has(props.url)) {
+          throw new Error(`stub: create failed for ${props.url}`);
+        }
         created.push(props);
         return { id: 1000 + created.length, url: props.url, pinned: props.pinned ?? false };
       },
@@ -110,6 +116,31 @@ describe("focusMode data safety", () => {
   });
 
   it("unfocus with nothing saved returns 0", async () => {
+    expect(await unfocusMode()).toBe(0);
+    expect(created).toEqual([]);
+  });
+});
+
+// One URL Chrome refuses to open used to throw out of the restore loop, so the popped stack
+// was never persisted — and the next /unfocus reopened everything that had already come back.
+describe("unfocus partial restore", () => {
+  beforeEach(async () => {
+    openTabs = [tab(1, "https://a.com"), tab(2, "file:///notes.txt"), tab(3, "https://c.com")];
+    await focusMode();
+    created = [];
+    failCreateUrls.add("file:///notes.txt");
+  });
+
+  it("reopens the rest of the workspace and reports what came back", async () => {
+    expect(await unfocusMode()).toBe(2);
+    expect(created.map((c) => c.url)).toEqual(["https://a.com", "https://c.com"]);
+  });
+
+  it("consumes the workspace, so a retry cannot duplicate the restored tabs", async () => {
+    await unfocusMode();
+    expect(await hasSavedWorkspace()).toBe(false);
+
+    created = [];
     expect(await unfocusMode()).toBe(0);
     expect(created).toEqual([]);
   });

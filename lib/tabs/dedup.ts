@@ -27,11 +27,18 @@ export async function removeDuplicates(): Promise<number> {
   const toClose: number[] = [];
 
   for (const [, tabs] of duplicates) {
-    const sorted = tabs.sort(
-      (a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0)
-    );
-    for (let i = 1; i < sorted.length; i++) {
-      toClose.push(sorted[i].id);
+    // A pinned tab is a deliberate keep. Picking the survivor purely by lastAccessed closed
+    // it whenever an unpinned copy had been touched more recently — the one copy the user
+    // asked to keep was the one that went.
+    const pinned = tabs.filter((t) => t.pinned);
+    const unpinned = tabs
+      .filter((t) => !t.pinned)
+      .sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0));
+    if (unpinned.length === 0) continue;
+    // A pinned copy is already the survivor, so every unpinned copy is a duplicate of it.
+    const firstToClose = pinned.length > 0 ? 0 : 1;
+    for (let i = firstToClose; i < unpinned.length; i++) {
+      toClose.push(unpinned[i].id);
     }
   }
 
@@ -46,11 +53,21 @@ export async function removeDuplicates(): Promise<number> {
   return toClose.length;
 }
 
+/** Params that identify the click, not the page — two copies of one article arriving from
+ *  different campaigns are still the same tab. */
+const TRACKING_PARAMS = new Set(["fbclid", "gclid"]);
+
 function normalizeUrl(url: string): string | null {
   try {
     const u = new URL(url);
     if (u.protocol === "chrome:" || u.protocol === "chrome-extension:") return null;
-    return `${u.protocol}//${u.host}${u.pathname}`;
+    // The query and hash are part of the page's identity: keying on the path alone made
+    // youtube.com/watch?v=A and ?v=B the same tab, and closed one of them. Tracking cruft is
+    // the exception — stripping it keeps a shared link deduping against the original.
+    for (const key of [...u.searchParams.keys()]) {
+      if (key.startsWith("utm_") || TRACKING_PARAMS.has(key)) u.searchParams.delete(key);
+    }
+    return `${u.protocol}//${u.host}${u.pathname}${u.search}${u.hash}`;
   } catch {
     return null;
   }

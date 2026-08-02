@@ -9,6 +9,13 @@ interface ClosedTabData {
   url: string;
   pinned: boolean;
   windowId: number;
+  // Optional: entries persisted by older versions have none. Without them a restore dropped
+  // the tab at the end of the strip and outside whatever group it was closed from — the
+  // group snapshot has always recorded index, and a close is no less a position change.
+  index?: number;
+  groupId?: number;
+  groupTitle?: string;
+  groupColor?: string;
 }
 
 interface GroupAssignment {
@@ -28,10 +35,10 @@ export const UNDO_KEY = "tabOrdo_undoStack";
 const stack: UndoEntry[] = [];
 const MAX_STACK = 20;
 
+/** Throws on a failed write. pushUndo's contract is durability, so its callers have to be
+ *  able to see the failure and abandon the destructive action they were about to take. */
 async function persistStack(): Promise<void> {
-  try {
-    await chrome.storage.session?.set({ [UNDO_KEY]: [...stack] });
-  } catch {}
+  await chrome.storage.session?.set({ [UNDO_KEY]: [...stack] });
 }
 
 /**
@@ -55,16 +62,27 @@ export async function loadUndoStack(): Promise<void> {
   await syncFromStorage();
 }
 
+// Every push is a read-modify-write of one shared array, and syncFromStorage rewrites it in
+// place. Serializing them keeps two snapshots taken back to back from racing, where the
+// second sync lands before the first write and silently drops it — same shape as the config
+// write chain in rules.ts.
+let writeChain: Promise<unknown> = Promise.resolve();
+
 /**
  * Await this before doing the thing being undone. The write has to be durable while the
  * caller is still alive: Chrome tears the popup down on any focus loss, so a fire-and-forget
  * persist can lose the snapshot for anything that hands off to the background (/aigroup).
+ * A failed write rejects — do NOT close anything you could not snapshot.
  */
 export async function pushUndo(entry: UndoEntry): Promise<void> {
-  await syncFromStorage();
-  stack.push(entry);
-  if (stack.length > MAX_STACK) stack.shift();
-  await persistStack();
+  const run = writeChain.then(async () => {
+    await syncFromStorage();
+    stack.push(entry);
+    if (stack.length > MAX_STACK) stack.shift();
+    await persistStack();
+  });
+  writeChain = run.catch(() => {});
+  return run;
 }
 
 export function peekUndo(): UndoEntry | null {
@@ -74,7 +92,9 @@ export function peekUndo(): UndoEntry | null {
 export async function popUndo(): Promise<UndoEntry | null> {
   await syncFromStorage();
   const entry = stack.pop() || null;
-  await persistStack();
+  // Survivable here, unlike on push: the entry is already out of the mirror and the undo it
+  // drives runs either way. Failing the pop would only cost the user their undo.
+  await persistStack().catch(() => {});
   return entry;
 }
 
@@ -90,11 +110,22 @@ export async function snapshotBeforeClose(tabIds: number[]): Promise<void> {
 }
 
 export async function snapshotClosedTabs(tabs: chrome.tabs.Tab[]): Promise<void> {
-  const data: ClosedTabData[] = tabs.map((t) => ({
-    url: t.url || "",
-    pinned: t.pinned,
-    windowId: t.windowId,
-  }));
+  const groupMap = new Map<number, chrome.tabGroups.TabGroup>();
+  try {
+    for (const g of await chrome.tabGroups.query({})) groupMap.set(g.id, g);
+  } catch {}
+  const data: ClosedTabData[] = tabs.map((t) => {
+    const g = groupMap.get(t.groupId);
+    return {
+      url: t.url || "",
+      pinned: t.pinned,
+      windowId: t.windowId,
+      index: t.index,
+      groupId: t.groupId,
+      groupTitle: g?.title,
+      groupColor: g?.color,
+    };
+  });
   await pushUndo({
     type: "close",
     label: `Closed ${data.length} tab(s)`,
@@ -144,17 +175,75 @@ export async function executeUndo(): Promise<string> {
         }
       } catch {}
       let reopened = 0;
+      const regrouped: { tabId: number; data: ClosedTabData }[] = [];
       for (const t of tabs) {
         if (!t.url || t.url === "chrome://newtab/") continue;
+        const sameWindow = openWindows.has(t.windowId);
         try {
-          await chrome.tabs.create({
+          // The recorded index only means anything in the window it was recorded from; a tab
+          // whose window is gone goes wherever the focused one has room.
+          const created = await chrome.tabs.create({
             url: t.url,
             pinned: t.pinned,
             active: false,
-            ...(openWindows.has(t.windowId) ? { windowId: t.windowId } : {}),
+            ...(sameWindow ? { windowId: t.windowId } : {}),
+            ...(sameWindow && t.index !== undefined ? { index: t.index } : {}),
           });
           reopened++;
+          if (created?.id !== undefined && t.groupId !== undefined && t.groupId !== -1) {
+            regrouped.push({ tabId: created.id, data: t });
+          }
         } catch {}
+      }
+
+      // Put the restored tabs back in their group. Same bucketing as the "group" case below:
+      // window plus title plus colour, because chrome.tabs.group rejects ids spanning windows
+      // and two same-named groups in different windows are different groups.
+      const byGroup = new Map<string, { title: string; color: string; windowId?: number; tabIds: number[] }>();
+      for (const { tabId, data } of regrouped) {
+        const windowId = openWindows.has(data.windowId) ? data.windowId : undefined;
+        const key = `${windowId ?? "?"}:${data.groupTitle || ""}:${data.groupColor || ""}`;
+        if (!byGroup.has(key)) {
+          byGroup.set(key, { title: data.groupTitle || "", color: data.groupColor || "", windowId, tabIds: [] });
+        }
+        byGroup.get(key)!.tabIds.push(tabId);
+      }
+      if (byGroup.size > 0) {
+        // Closing one tab out of a group leaves the group standing, so rejoin it rather than
+        // building a second group beside it with the same name.
+        const liveGroups = await chrome.tabGroups.query({}).catch(() => []);
+        for (const [, info] of byGroup) {
+          // Only ever rejoin a group in the window the tab is actually going back to —
+          // chrome.tabs.group rejects ids that span windows.
+          const match =
+            info.windowId === undefined
+              ? undefined
+              : liveGroups.find(
+                  (g) =>
+                    g.windowId === info.windowId &&
+                    (g.title || "") === info.title &&
+                    (g.color || "") === info.color
+                );
+          try {
+            const gid = await chrome.tabs.group(
+              match
+                ? { tabIds: info.tabIds, groupId: match.id }
+                : {
+                    tabIds: info.tabIds,
+                    ...(info.windowId !== undefined ? { createProperties: { windowId: info.windowId } } : {}),
+                  }
+            );
+            if (!match) {
+              await chrome.tabGroups.update(gid, {
+                title: info.title,
+                color: info.color as chrome.tabGroups.ColorEnum,
+              });
+            }
+          } catch (e) {
+            // A group Chrome refuses to rebuild must not turn a successful reopen into a failure.
+            console.warn("[TabOrdo] undo: could not regroup restored tabs", info.title, e);
+          }
+        }
       }
       return `Reopened ${reopened} tab(s)`;
     }

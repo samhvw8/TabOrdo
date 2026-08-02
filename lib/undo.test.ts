@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { installChromeStub, type ChromeStub } from "./testing/chrome-stub.ts";
-import { pushUndo, peekUndo, popUndo, undoStackSize, loadUndoStack, snapshotClosedTabs, snapshotBeforeGroup, executeUndo } from "./undo.ts";
+import { pushUndo, peekUndo, popUndo, undoStackSize, loadUndoStack, snapshotBeforeClose, snapshotClosedTabs, snapshotBeforeGroup, executeUndo } from "./undo.ts";
 
 let stub: ChromeStub;
 
@@ -90,6 +90,72 @@ describe("executeUndo — close", () => {
   it("returns a message for unknown entry types", async () => {
     await pushUndo(entry("mystery"));
     expect(await executeUndo()).toBe("Unknown undo type");
+  });
+
+  // The snapshot recorded url/pinned/window only, so an undone close came back at the end of
+  // the strip and outside its group — the tab was reopened, its place was not.
+  it("puts a restored tab back at its index and into the group it was closed from", async () => {
+    stub.openTabs = [
+      { id: 1, url: "https://a.com", pinned: false, windowId: 1, groupId: 7, index: 0 },
+      { id: 2, url: "https://b.com", pinned: false, windowId: 1, groupId: 7, index: 1 },
+      { id: 3, url: "https://c.com", pinned: false, windowId: 1, groupId: -1, index: 2 },
+    ];
+    stub.groups = [{ id: 7, title: "Work", color: "blue", windowId: 1 }];
+
+    await snapshotBeforeClose([2]);
+    await chrome.tabs.remove(2);
+
+    expect(await executeUndo()).toBe("Reopened 1 tab(s)");
+    expect(stub.created).toEqual([
+      { url: "https://b.com", pinned: false, active: false, windowId: 1, index: 1 },
+    ]);
+    // The group survived the close, so the tab rejoins it rather than getting a second
+    // "Work" group built beside it.
+    const restored = stub.openTabs.find((t) => t.url === "https://b.com")!;
+    expect(restored.groupId).toBe(7);
+    expect(stub.groups).toHaveLength(1);
+  });
+
+  it("rebuilds the group when closing the tab took the whole group with it", async () => {
+    stub.openTabs = [{ id: 1, url: "https://a.com", pinned: false, windowId: 1, groupId: 7, index: 0 }];
+    stub.groups = [{ id: 7, title: "Work", color: "blue", windowId: 1 }];
+
+    await snapshotBeforeClose([1]);
+    await chrome.tabs.remove(1);
+    stub.groups = []; // Chrome drops a group once its last tab closes
+
+    expect(await executeUndo()).toBe("Reopened 1 tab(s)");
+    const restored = stub.openTabs.find((t) => t.url === "https://a.com")!;
+    expect(restored.groupId).not.toBe(-1);
+    expect(stub.groupUpdates).toEqual([expect.objectContaining({ title: "Work", color: "blue" })]);
+  });
+
+  it("leaves an ungrouped tab ungrouped", async () => {
+    stub.openTabs = [{ id: 1, url: "https://a.com", pinned: false, windowId: 1, groupId: -1, index: 0 }];
+    await snapshotBeforeClose([1]);
+    await chrome.tabs.remove(1);
+
+    await executeUndo();
+    expect(stub.openTabs.find((t) => t.url === "https://a.com")!.groupId).toBe(-1);
+    expect(stub.groupUpdates).toEqual([]);
+  });
+});
+
+describe("pushUndo durability", () => {
+  // The write was fire-and-forget behind a bare catch, so a rejected session write left the
+  // caller closing tabs it had no snapshot for.
+  it("rejects when the stack cannot be persisted", async () => {
+    stub.failWrites = true;
+    await expect(pushUndo(entry("close", "x"))).rejects.toThrow();
+  });
+
+  // syncFromStorage rewrites the shared module-level array, so two unserialized pushes each
+  // reloaded the same pre-write state and the first entry vanished.
+  it("does not drop an entry when two pushes overlap", async () => {
+    stub.sessionData["tabOrdo_undoStack"] = [entry("close", "theirs")];
+    await Promise.all([pushUndo(entry("close", "a")), pushUndo(entry("close", "b"))]);
+    const persisted = stub.sessionData["tabOrdo_undoStack"] as { data: unknown }[];
+    expect(persisted.map((e) => e.data)).toEqual(["theirs", "a", "b"]);
   });
 });
 

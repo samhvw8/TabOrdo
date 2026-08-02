@@ -246,10 +246,22 @@ export function isCompiledPattern(rule: Pick<IgnoreRule, "pattern" | "isRegex">)
   return !!rule.isRegex || rule.pattern.includes("*");
 }
 
+// The length cap alone doesn't save us: `(a+)+$` is six characters and backtracks
+// exponentially inside a single re.test, freezing the popup with no way out. Reject a
+// quantifier applied to a group that already contains one — the classic catastrophic shape.
+// Best-effort by design: this is a heuristic, not a regex parser, so it can miss exotic
+// constructions and can refuse a harmless pattern like `([ab]+)+x`.
+const NESTED_QUANTIFIER = /\([^()]*(?:[*+]|\{\d+(?:,\d*)?\})[^()]*\)\s*(?:[*+]|\{\d+(?:,\d*)?\})/;
+
+export function hasNestedQuantifier(pattern: string): boolean {
+  return NESTED_QUANTIFIER.test(pattern);
+}
+
 export function ruleMatches(input: string, rule: IgnoreRule): boolean {
   const flags = rule.caseSensitive ? "" : "i";
   if (rule.isRegex) {
     if (rule.pattern.length > MAX_PATTERN_LENGTH) return false;
+    if (hasNestedQuantifier(rule.pattern)) return false;
     try { return new RegExp(rule.pattern, flags).test(input); } catch { return false; }
   }
   const p = rule.pattern;

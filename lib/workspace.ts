@@ -41,12 +41,22 @@ export async function unfocusMode(): Promise<number> {
   const stack = await getWorkspaceStack();
   const workspace = stack.pop();
   if (!workspace) return 0;
+  let restored = 0;
   for (const t of workspace.tabs) {
-    await chrome.tabs.create({ url: t.url, pinned: t.pinned, active: false });
+    try {
+      await chrome.tabs.create({ url: t.url, pinned: t.pinned, active: false });
+      restored++;
+    } catch (e) {
+      // One URL Chrome refuses to open (file://, view-source:) used to throw out of the loop,
+      // so the popped stack was never persisted — and the retry reopened every tab that had
+      // already come back, on top of itself.
+      console.warn("[TabOrdo] unfocus: could not reopen", t.url, e);
+    }
   }
-  // Persist after restoring: a failure mid-restore keeps the workspace recoverable.
+  // Persist unconditionally: the workspace has been consumed either way, and leaving it on
+  // the stack is what made a partial restore duplicate tabs.
   await saveWorkspaceStack(stack);
-  return workspace.tabs.length;
+  return restored;
 }
 
 export async function hasSavedWorkspace(): Promise<boolean> {

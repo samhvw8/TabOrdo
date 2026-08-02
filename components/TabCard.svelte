@@ -50,6 +50,7 @@
       alt=""
       class="w-4 h-4 shrink-0 rounded-sm"
       onerror={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+      onload={(e) => { (e.target as HTMLImageElement).style.display = ''; }}
     />
   {:else}
     <span class="w-4 h-4 shrink-0 rounded-sm bg-surface-active flex items-center justify-center text-[9px] text-text-muted">

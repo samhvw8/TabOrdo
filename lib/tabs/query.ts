@@ -46,5 +46,7 @@ export async function switchToTab(tabId: number): Promise<void> {
 }
 
 export async function closeTabs(tabIds: number[]): Promise<void> {
-  await chrome.tabs.remove(tabIds);
+  // Per id, not one remove(array): Chrome rejects the whole array on the first id that has
+  // already gone, so a single stale tab in the popup's list left every other tab open.
+  await Promise.allSettled(tabIds.map((id) => chrome.tabs.remove(id)));
 }

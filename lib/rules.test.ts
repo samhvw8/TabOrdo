@@ -136,6 +136,27 @@ describe("isIgnoredGroupName", () => {
   });
 });
 
+// The length cap does not help here: `(a+)+$` is six characters and never returns from the
+// single re.test it triggers, which freezes the popup outright.
+describe("nested-quantifier guard", () => {
+  const evil = (pattern: string): IgnoreRule => ({ pattern, enabled: true, isRegex: true });
+
+  it("refuses a quantified group that already contains a quantifier", () => {
+    const bait = "a".repeat(40) + "!";
+    expect(ruleMatches(bait, evil("(a+)+$"))).toBe(false);
+    expect(ruleMatches(bait, evil("(a*)*$"))).toBe(false);
+    expect(ruleMatches(bait, evil("(\\d+){3,}"))).toBe(false);
+    expect(isIgnoredGroupName(bait, [evil("(a+)+$")])).toBe(false);
+  });
+
+  it("leaves ordinary regex rules working", () => {
+    expect(ruleMatches("re42", evil("re\\d+"))).toBe(true);
+    expect(ruleMatches("Claude (MCP)", evil("Claude \\(MCP\\)"))).toBe(true);
+    expect(ruleMatches("abcabc", evil("(abc)+"))).toBe(true);
+    expect(ruleMatches("aaa", evil("a+"))).toBe(true);
+  });
+});
+
 describe("ruleToRegex", () => {
   it("exact pattern becomes anchored escaped regex", () => {
     expect(ruleToRegex({ pattern: "example.com", enabled: true })).toBe("^example\\.com$");
