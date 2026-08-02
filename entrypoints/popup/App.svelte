@@ -225,6 +225,17 @@
   // recency list, so results[0] on an empty query is the tab you were on before this one.
   let jumpTarget = $derived(!query && results.length > 0 ? results[0] : null);
 
+  // The search box and the result list are siblings, so the combobox pairing is by id:
+  // aria-activedescendant has to name the row the highlight is on. ResultList builds its row
+  // ids from the same base, so the two stay in step.
+  const RESULTS_LISTBOX_ID = "palette-results";
+  let paletteVisible = $derived(showPalette && !showHelp && activeSection === "dashboard");
+  let activeOptionId = $derived(
+    paletteVisible && paletteMode === "search" && results[selectedIndex] && results[selectedIndex].type !== "divider"
+      ? `${RESULTS_LISTBOX_ID}-option-${selectedIndex}`
+      : undefined
+  );
+
   const groupColors: Record<string, string> = {
     blue: "border-accent-blue/40", cyan: "border-accent-cyan/40", green: "border-accent-green/40",
     yellow: "border-accent-yellow/40", orange: "border-accent-orange/40", pink: "border-accent-pink/40",
@@ -330,11 +341,11 @@
             ...(bookmarkResults.length > 0 ? [{ type: "divider" as const, id: "div-bookmarks", title: "Bookmarks", url: "" }, ...bookmarkResults] : []),
             ...(historyResults.length > 0 ? [{ type: "divider" as const, id: "div-history", title: "History", url: "" }, ...historyResults] : []),
           ];
-          selectedIndex = 0;
+          selectedIndex = firstSelectable();
         }, 200);
       }
     }
-    selectedIndex = 0;
+    selectedIndex = firstSelectable();
   }
 
   async function handlePrefixSearch(prefix: string, searchQuery: string) {
@@ -439,7 +450,7 @@
       }
     } finally {
       loading = false;
-      selectedIndex = 0;
+      selectedIndex = firstSelectable();
     }
   }
 
@@ -629,7 +640,7 @@
           else { const n = await focusMode(); hasWorkspace = await hasSavedWorkspace(); return n > 0 ? `Saved ${n}, focused` : "No tabs to save"; }
         }); break;
       case "save": goBack(); exportTabsToFile(); flashStatus("Exporting...", 2000); break;
-      case "load": fileInputEl?.click(); break;
+      case "load": requestFilePicker(); break;
       case "archive": chrome.tabs.create({ url: chrome.runtime.getURL("/archive.html") }); break;
       case "feedback": chrome.tabs.create({ url: FEEDBACK_URL }); break;
       case "sort": goBack(); dashAction(async () => { await snapshotBeforeGroup(); await sortTabsInWindow(currentWindowId); return "Sorted"; }); break;
@@ -686,7 +697,7 @@
           tabIds: matchingTabs.map((t) => t.tabId!),
           currentWindowId,
           rankTabs,
-          requestFilePicker: () => fileInputEl?.click(),
+          requestFilePicker,
         });
         if (!outcome) return;
 
@@ -709,6 +720,31 @@
     }
   }
 
+  /**
+   * Step the palette selection one row in `dir`, stepping over the divider rows that the
+   * bookmark/history tail and the @triage overview interleave. Dividers aren't selectable —
+   * landing on one hides the highlight and makes Enter a no-op — so walk past them, and at
+   * either end stay on a real row rather than come to rest on a label.
+   */
+  /** Same rule for a fresh list: @triage and a bookmarks-only match both open on a divider. */
+  function firstSelectable(): number {
+    const i = results.findIndex((r) => r.type !== "divider");
+    return i < 0 ? 0 : i;
+  }
+
+  function nextSelectable(from: number, dir: 1 | -1): number {
+    for (let i = from + dir; i >= 0 && i < results.length; i += dir) {
+      if (results[i].type !== "divider") return i;
+    }
+    if (results[from]?.type !== "divider") return from;
+    // Already parked on a divider (a triage list opens on one) with nothing past it — take
+    // the nearest real row the other way instead of sitting there.
+    for (let i = from - dir; i >= 0 && i < results.length; i -= dir) {
+      if (results[i].type !== "divider") return i;
+    }
+    return from;
+  }
+
   async function handleSelect(item: SearchResult) {
     if (item.tabId) { await switchToTab(item.tabId); window.close(); }
     else if (item.url) { await chrome.tabs.create({ url: item.url }); window.close(); }
@@ -724,6 +760,9 @@
       await closeTabs([item.tabId]);
       canUndo = true;
       results = results.filter((r) => r.id !== item.id);
+      // Closing the last row used to leave the selection past the end of the list, so the
+      // palette stopped responding to Enter until the query changed.
+      selectedIndex = Math.max(0, Math.min(selectedIndex, results.length - 1));
       allTabs = allTabs.filter((t) => t.id !== item.id);
       searchHaystack = buildSearchHaystack(allTabs);
       searchTitleHaystack = buildTitleHaystack(allTabs);
@@ -792,7 +831,7 @@
         tabIds: [],
         currentWindowId,
         rankTabs,
-        requestFilePicker: () => fileInputEl?.click(),
+        requestFilePicker,
       });
       if (outcome?.workspaceChanged) hasWorkspace = await hasSavedWorkspace();
       return outcome?.message;
@@ -818,6 +857,20 @@
     } else {
       await dashAction(() => pinCurrentTab(toTop ? "^" : ""));
     }
+  }
+
+  /**
+   * Open the file picker — but only where it can actually finish. The OS picker takes focus,
+   * and Chrome tears the action popup down the moment it loses focus (same reason the mount
+   * comment below batches its reads), so `onchange` never fires and the load dies silently.
+   * The side panel persists, so there it works.
+   */
+  function requestFilePicker() {
+    if (!fluid) {
+      flashStatus("Load from File needs the side panel — the popup closes when the file picker opens.", 5000);
+      return;
+    }
+    fileInputEl?.click();
   }
 
   async function handleFileLoad(e: Event) {
@@ -953,8 +1006,15 @@
       oninput={onQueryChange}
       placeholder="Search tabs... (/ commands, @ triage)"
       autofocus={searchAutofocus}
+      listboxId={RESULTS_LISTBOX_ID}
+      expanded={paletteVisible && paletteMode === "search" && results.length > 0}
+      activeDescendant={activeOptionId}
       onfocuschange={(f) => { inputFocused = f; }}
       onkeydown={(e) => {
+        // Mid-composition the IME owns these keys: arrows walk the pinyin candidate list and
+        // Enter commits the word. Acting on them here moved the result selection and switched
+        // tabs out from under someone half way through typing a query.
+        if (e.isComposing || e.keyCode === 229) return;
         if (e.key === "Tab" && !e.shiftKey) {
           e.preventDefault();
           const hints = matchCommands(query);
@@ -964,10 +1024,14 @@
           }
         } else if (e.key === "ArrowDown") {
           e.preventDefault();
-          selectedIndex = Math.min(selectedIndex + 1, (paletteMode === "commands" ? commandHints.length : results.length) - 1);
+          selectedIndex = paletteMode === "commands"
+            ? Math.min(selectedIndex + 1, commandHints.length - 1)
+            : nextSelectable(selectedIndex, 1);
         } else if (e.key === "ArrowUp") {
           e.preventDefault();
-          selectedIndex = Math.max(selectedIndex - 1, 0);
+          selectedIndex = paletteMode === "commands"
+            ? Math.max(selectedIndex - 1, 0)
+            : nextSelectable(selectedIndex, -1);
         } else if (e.key === "Enter") {
           e.preventDefault();
           const { prefix, query: searchQuery } = parseCommand(query);
@@ -1181,7 +1245,7 @@
     {#if paletteMode === "commands"}
       <CommandHints commands={commandHints} {selectedIndex} onselect={handleCommandSelect} />
     {:else}
-      <ResultList {results} {selectedIndex} {loading} {currentWindowId} windowIds={windows.map(w => w.windowId)} query={highlightQuery} onselect={handleSelect} onclose={handleClose} />
+      <ResultList {results} {selectedIndex} {loading} {currentWindowId} windowIds={windows.map(w => w.windowId)} query={highlightQuery} listboxId={RESULTS_LISTBOX_ID} onselect={handleSelect} onclose={handleClose} />
     {/if}
   {:else}
     <!-- Dashboard mode -->
@@ -1397,7 +1461,10 @@
             </div>
             {#if !collapsed}
               <div class="p-1 grid gap-0.5">
-                {#each group.tabs as tab}
+                <!-- Keyed: TabCard owns per-instance state (an open volume slider), so an
+                     unkeyed list re-binds that slider to whatever tab lands on the index
+                     after an action reorders things. -->
+                {#each group.tabs as tab (tab.id)}
                   <TabCard {tab} selected={selectedTabs.has(tab.id)}
                     positionPinned={!!getPinForTab(tab.url, group.title, pinnedTabs)}
                     ontoggle={() => toggleSelect(tab.id)}
@@ -1428,7 +1495,7 @@
             </div>
             {#if !ungroupedCollapsed}
               <div class="p-1 grid gap-0.5">
-                {#each w.ungrouped as tab}
+                {#each w.ungrouped as tab (tab.id)}
                   <TabCard {tab} selected={selectedTabs.has(tab.id)}
                     ontoggle={() => toggleSelect(tab.id)}
                     onclose={() => dashAction(async () => { await snapshotBeforeClose([tab.id]); await closeTabs([tab.id]); })}

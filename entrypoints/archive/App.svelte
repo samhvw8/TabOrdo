@@ -7,7 +7,10 @@
   let searchQuery = $state("");
   let selectedIds = $state<Set<string>>(new Set());
   let statusMessage = $state("");
-  let expandedGroups = $state<Set<string>>(new Set());
+  // Tracks what is closed, not what is open. The other way round needed an empty set to mean
+  // "everything is expanded", so collapsing the last open group emptied the set and sprang
+  // them all back open.
+  let collapsedGroups = $state<Set<string>>(new Set());
 
   let filtered = $derived.by(() => {
     if (!searchQuery.trim()) return archive;
@@ -55,14 +58,13 @@
   let uniqueGroups = $derived(new Set(archive.filter((a) => a.groupName).map((a) => a.groupName!)).size);
 
   function isGroupExpanded(dateKey: string): boolean {
-    if (expandedGroups.size === 0) return true;
-    return expandedGroups.has(dateKey);
+    return !collapsedGroups.has(dateKey);
   }
 
   function toggleGroup(dateKey: string) {
-    const next = new Set(expandedGroups.size === 0 ? grouped.map((g) => g.dateKey) : expandedGroups);
+    const next = new Set(collapsedGroups);
     if (next.has(dateKey)) next.delete(dateKey); else next.add(dateKey);
-    expandedGroups = next;
+    collapsedGroups = next;
   }
 
   async function reload() {
@@ -259,7 +261,9 @@
                       <input type="checkbox" checked={isSelected} tabindex={-1} />
                     </div>
                     <div class="tab-favicon">
-                      <img src={faviconUrl(item)} alt="" onerror={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+                      <img src={faviconUrl(item)} alt=""
+                        onerror={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                        onload={(e) => { (e.target as HTMLImageElement).style.display = ''; }} />
                     </div>
                     <div class="tab-info">
                       <div class="tab-title">{item.title}</div>
