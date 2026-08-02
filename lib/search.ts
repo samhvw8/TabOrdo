@@ -1,6 +1,7 @@
 import uFuzzy from "@leeoniya/ufuzzy";
 import type { TabInfo } from "./tabs/index.ts";
 import { pinyinVariants, hasChinese } from "./pinyin.ts";
+import { hasNestedQuantifier } from "./rules.ts";
 import { TRIAGE_COMMANDS } from "./commands.ts";
 
 export interface SearchResult {
@@ -251,6 +252,9 @@ function prefixSearch(haystack: string[], needle: string, limit: number): number
 
 function regexSearch(haystack: string[], needle: string, limit: number): number[] {
   if (needle.length > 100) return [];
+  // The deadline below only helps between tests — a single test on a nested quantifier such
+  // as `(a+)+$` never returns to be timed. Best-effort heuristic; see rules.ts.
+  if (hasNestedQuantifier(needle)) return [];
   let re: RegExp;
   try {
     re = new RegExp(needle, "i");

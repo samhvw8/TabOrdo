@@ -136,3 +136,92 @@ describe("groupTabsByDomain", () => {
     expect(stub.ungroupedIds.sort()).toEqual([1, 2]);
   });
 });
+
+// The ignore lists were enforced only on the background's auto-group path, so the very
+// commands the user reaches for by hand walked straight over them.
+describe("ignore lists", () => {
+  const withConfig = (config: Record<string, unknown>) => {
+    stub.localData["rulesConfig"] = { rules: [], ...config };
+  };
+
+  it("groupTabsByDomain skips tabs whose URL is ignored", async () => {
+    withConfig({ ignorePatterns: [{ pattern: "example.com", enabled: true }] });
+    stub.openTabs = [
+      tab({ id: 1, url: "https://example.com/one", index: 0 }),
+      tab({ id: 2, url: "https://example.com/two", index: 1 }),
+      tab({ id: 3, url: "https://github.com/one", index: 2 }),
+      tab({ id: 4, url: "https://github.com/two", index: 3 }),
+    ];
+    await groupTabsByDomain();
+    expect(stub.openTabs.find((t) => t.id === 1)!.groupId).toBe(-1);
+    expect(stub.openTabs.find((t) => t.id === 2)!.groupId).toBe(-1);
+    expect(stub.openTabs.find((t) => t.id === 3)!.groupId).not.toBe(-1);
+    expect(stub.groupUpdates.some((u) => u.title === "example.com")).toBe(false);
+  });
+
+  it("honours wildcard ignore patterns", async () => {
+    withConfig({ ignorePatterns: [{ pattern: "*.example.com", enabled: true }] });
+    stub.openTabs = [
+      tab({ id: 1, url: "https://docs.example.com/one", index: 0 }),
+      tab({ id: 2, url: "https://docs.example.com/two", index: 1 }),
+    ];
+    await groupTabsByDomain();
+    expect(stub.openTabs.every((t) => t.groupId === -1)).toBe(true);
+  });
+
+  it("rebuild mode leaves an ignored group standing", async () => {
+    withConfig({ ignoreGroupNames: [{ pattern: "Claude", enabled: true }] });
+    stub.openTabs = [
+      tab({ id: 1, url: "https://claude.ai/a", index: 0, groupId: 70 }),
+      tab({ id: 2, url: "https://claude.ai/b", index: 1, groupId: 70 }),
+      tab({ id: 3, url: "https://a.com/one", index: 2, groupId: 80 }),
+    ];
+    stub.groups = [
+      { id: 70, title: "Claude", color: "purple", windowId: 1 },
+      { id: 80, title: "Mine", color: "blue", windowId: 1 },
+    ];
+    await groupTabsByDomain("rebuild");
+    expect(stub.ungroupedIds).not.toContain(1);
+    expect(stub.ungroupedIds).not.toContain(2);
+    expect(stub.openTabs.find((t) => t.id === 1)!.groupId).toBe(70);
+  });
+
+  it("ungroupAll leaves an ignored group standing", async () => {
+    withConfig({ ignoreGroupNames: [{ pattern: "Claude", enabled: true }] });
+    stub.openTabs = [
+      tab({ id: 1, index: 0, groupId: 70 }),
+      tab({ id: 2, index: 1, groupId: 80 }),
+    ];
+    stub.groups = [
+      { id: 70, title: "Claude", color: "purple", windowId: 1 },
+      { id: 80, title: "Mine", color: "blue", windowId: 1 },
+    ];
+    await ungroupAll();
+    expect(stub.ungroupedIds).toEqual([2]);
+    expect(stub.openTabs.find((t) => t.id === 1)!.groupId).toBe(70);
+  });
+
+  it("a rule does not pull a tab out of an ignored group", async () => {
+    withConfig({
+      useRules: true,
+      rules: [{ id: "r1", name: "Claude", color: "purple", patterns: ["claude.ai"] }],
+      ignoreGroupNames: [{ pattern: "Personal", enabled: true }],
+    });
+    stub.openTabs = [
+      tab({ id: 1, url: "https://claude.ai/chat", index: 0, groupId: 70 }),
+      tab({ id: 2, url: "https://claude.ai/docs", index: 1 }),
+    ];
+    stub.groups = [{ id: 70, title: "Personal", color: "grey", windowId: 1 }];
+    await groupTabsByDomain();
+    expect(stub.ungroupedIds).not.toContain(1);
+    expect(stub.openTabs.find((t) => t.id === 1)!.groupId).toBe(70);
+  });
+
+  it("still ungroups everything when no group name is ignored", async () => {
+    withConfig({ ignoreGroupNames: [] });
+    stub.openTabs = [tab({ id: 1, index: 0, groupId: 70 })];
+    stub.groups = [{ id: 70, title: "Mine", color: "blue", windowId: 1 }];
+    await ungroupAll();
+    expect(stub.ungroupedIds).toEqual([1]);
+  });
+});

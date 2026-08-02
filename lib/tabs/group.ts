@@ -1,6 +1,6 @@
 // Creating, rebuilding and collapsing tab groups.
 
-import { getRules, getUseRules, matchDomainToRule } from "../rules.ts";
+import { getConfig, isIgnoredGroupName, isIgnoredUrl, matchDomainToRule, type IgnoreRule } from "../rules.ts";
 import { getDomainMapper, getFullHostname, hashCode } from "../url.ts";
 import { applyAllGroupPins } from "../pin.ts";
 import { GROUP_COLORS } from "./types.ts";
@@ -10,12 +10,17 @@ export async function groupTabsByDomain(
   mode: "additive" | "rebuild" = "additive"
 ): Promise<void> {
   const domainOf = await getDomainMapper();
-  const useRules = await getUseRules();
-  const rules = useRules ? await getRules() : [];
+  // One config read for the whole run: rules, useRules and both ignore lists come from the
+  // same object, and getRules/getUseRules were two round-trips for one of its fields.
+  const config = await getConfig();
+  const rules = config.useRules ? config.rules : [];
   const allTabs = await chrome.tabs.query({});
+  const protectedGroups = await ignoredGroupIds(config.ignoreGroupNames);
 
   if (mode === "rebuild") {
-    const grouped = allTabs.filter((t) => !t.pinned && t.groupId !== -1);
+    const grouped = allTabs.filter(
+      (t) => !t.pinned && t.groupId !== -1 && !protectedGroups.has(t.groupId)
+    );
     if (grouped.length > 0) {
       await chrome.tabs.ungroup(grouped.map((t) => t.id!));
     }
@@ -29,7 +34,16 @@ export async function groupTabsByDomain(
   const domainMap = new Map<string, chrome.tabs.Tab[]>();
   const toUngroup: number[] = [];
 
-  const candidates = freshTabs.filter((t) => !t.pinned);
+  // The ignore list was only ever enforced on the background's auto-group path, so /group
+  // and the Group button happily grouped the very sites the user had excluded. Membership in
+  // a protected group exempts a tab too — the rule path below would otherwise pull tabs out
+  // of the very groups the name list protects.
+  const candidates = freshTabs.filter(
+    (t) =>
+      !t.pinned &&
+      !protectedGroups.has(t.groupId) &&
+      !isIgnoredUrl(t.url || "", config.ignorePatterns)
+  );
   for (const tab of candidates) {
     const hostname = getFullHostname(tab.url || "");
     if (!hostname) continue;
@@ -128,9 +142,23 @@ export function pickMajorityWindow(tabs: chrome.tabs.Tab[]): number {
   return best;
 }
 
+/** Groups the user's ignore list protects. Empty list means no query at all — this runs on
+ *  every group/ungroup and most profiles have no ignored names. */
+async function ignoredGroupIds(ignoreGroupNames: IgnoreRule[]): Promise<Set<number>> {
+  if (ignoreGroupNames.length === 0) return new Set();
+  const groups = await chrome.tabGroups.query({});
+  return new Set(
+    groups.filter((g) => isIgnoredGroupName(g.title || "", ignoreGroupNames)).map((g) => g.id)
+  );
+}
+
 export async function ungroupAll(): Promise<void> {
+  const config = await getConfig();
+  const protectedGroups = await ignoredGroupIds(config.ignoreGroupNames);
   const allTabs = await chrome.tabs.query({});
-  const grouped = allTabs.filter((t) => !t.pinned && t.groupId !== -1);
+  const grouped = allTabs.filter(
+    (t) => !t.pinned && t.groupId !== -1 && !protectedGroups.has(t.groupId)
+  );
   if (grouped.length > 0) {
     await chrome.tabs.ungroup(grouped.map((t) => t.id!));
   }

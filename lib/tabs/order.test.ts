@@ -100,6 +100,48 @@ describe("moveCurrentTab", () => {
     });
   });
 
+  // organizeWindow lays the strip out as pinned | groups | ungrouped, so the ungrouped run
+  // does not start at pinnedCount. Deriving the target from pinnedCount and tabs.length
+  // dropped the tab inside the first group instead of moving it within its own run.
+  describe("an ungrouped tab with groups sitting between it and the pinned tabs", () => {
+    beforeEach(() => {
+      stub.openTabs = [
+        { id: 1, url: "https://pin.com", pinned: true, windowId: 1, groupId: -1, index: 0 },
+        { id: 2, url: "https://g1.com", pinned: false, windowId: 1, groupId: 50, index: 1 },
+        { id: 3, url: "https://g2.com", pinned: false, windowId: 1, groupId: 50, index: 2 },
+        { id: 4, url: "https://u1.com", pinned: false, windowId: 1, groupId: -1, index: 3 },
+        { id: 5, url: "https://u2.com", pinned: false, windowId: 1, groupId: -1, index: 4 },
+        { id: 6, url: "https://u3.com", pinned: false, windowId: 1, groupId: -1, index: 5, active: true },
+      ];
+      stub.groups = [{ id: 50, title: "Work", color: "blue", windowId: 1 }];
+    });
+
+    it("^ lands at the head of the ungrouped run, not inside the group", async () => {
+      expect(await moveCurrentTab("^")).toBe("Moved tab to position first");
+      expect(strip()).toEqual([1, 2, 3, 6, 4, 5]);
+      expect(stub.openTabs.find((t) => t.id === 6)!.groupId).toBe(-1);
+    });
+
+    it("$ lands at the tail of the ungrouped run", async () => {
+      stub.openTabs[5].active = false;
+      stub.openTabs[3].active = true;
+      expect(await moveCurrentTab("$")).toBe("Moved tab to position last");
+      expect(strip()).toEqual([1, 2, 3, 5, 6, 4]);
+    });
+
+    it("a number counts from the head of the ungrouped run", async () => {
+      expect(await moveCurrentTab("2")).toBe("Moved tab to position 2");
+      expect(strip()).toEqual([1, 2, 3, 4, 6, 5]);
+    });
+
+    it("clamps a large number to the tail of the ungrouped run", async () => {
+      stub.openTabs[5].active = false;
+      stub.openTabs[3].active = true;
+      await moveCurrentTab("99");
+      expect(strip()).toEqual([1, 2, 3, 5, 6, 4]);
+    });
+  });
+
   describe("a grouped tab moves within its own group", () => {
     beforeEach(() => {
       stub.openTabs = [

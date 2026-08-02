@@ -96,4 +96,20 @@ describe("closeTabs", () => {
     await closeTabs([]);
     expect(stub.openTabs).toHaveLength(3);
   });
+
+  // chrome.tabs.remove(array) rejects the whole call on the first id that has already gone,
+  // so one stale entry in the popup's list used to leave every other matched tab open.
+  it("closes the live tabs even when one id is already gone", async () => {
+    const realRemove = chrome.tabs.remove;
+    (chrome.tabs as unknown as { remove: (ids: number | number[]) => Promise<void> }).remove =
+      async (ids) => {
+        const arr = Array.isArray(ids) ? ids : [ids];
+        if (arr.includes(999)) throw new Error("No tab with id: 999");
+        return realRemove(ids as number[]);
+      };
+
+    await expect(closeTabs([1, 999, 3])).resolves.toBeUndefined();
+    expect(stub.removedIds).toEqual([1, 3]);
+    expect(stub.openTabs.map((t) => t.id)).toEqual([2]);
+  });
 });

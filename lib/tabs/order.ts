@@ -32,7 +32,6 @@ export async function moveCurrentTab(posStr: string): Promise<string> {
   if (!active?.id) return "No active tab";
 
   const tabs = await chrome.tabs.query({ currentWindow: true });
-  const pinnedCount = tabs.filter((t) => t.pinned).length;
 
   if (active.groupId !== -1) {
     const groupTabs = tabs.filter((t) => t.groupId === active.groupId).sort((a, b) => a.index - b.index);
@@ -48,10 +47,16 @@ export async function moveCurrentTab(posStr: string): Promise<string> {
   } else {
     const ungrouped = tabs.filter((t) => !t.pinned && t.groupId === -1).sort((a, b) => a.index - b.index);
     if (ungrouped.length === 0) return "No ungrouped tabs";
+    // Bounds come from the ungrouped run itself, the same way the grouped branch above uses
+    // minIdx/maxIdx. Deriving them from pinnedCount and tabs.length assumed the strip was
+    // pinned-then-ungrouped, but organizeWindow lays the groups in between — so "^" dropped
+    // the tab inside the first group.
+    const minIdx = ungrouped[0].index;
+    const maxIdx = ungrouped[ungrouped.length - 1].index;
     let targetIndex: number;
-    if (position === "first") targetIndex = pinnedCount;
-    else if (position === "last") targetIndex = -1;
-    else targetIndex = Math.min(pinnedCount + position - 1, tabs.length - 1);
+    if (position === "first") targetIndex = minIdx;
+    else if (position === "last") targetIndex = maxIdx;
+    else targetIndex = Math.min(minIdx + position - 1, maxIdx);
     await chrome.tabs.move(active.id, { index: targetIndex });
     return `Moved tab to position ${position === "first" ? "first" : position === "last" ? "last" : position}`;
   }

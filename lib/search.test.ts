@@ -52,6 +52,22 @@ describe("recency ordering for score-less modes", () => {
   });
 });
 
+// /re compiles whatever the user types. The 50ms deadline in regexSearch only helps between
+// tests — a single test against a nested quantifier never returns to be timed.
+describe("regex mode ReDoS guard", () => {
+  const bait = ["a".repeat(40) + "!"];
+
+  it("returns nothing for a nested quantifier instead of hanging", () => {
+    expect(search(bait, "(a+)+$", "regex")).toEqual([]);
+    expect(search(bait, "(a*)*$", "regex")).toEqual([]);
+  });
+
+  it("still runs ordinary patterns", () => {
+    expect(search(bait, "a+!", "regex")).toEqual([0]);
+    expect(search(haystack, "(Alpha|Beta) Docs", "regex")).toEqual([0, 1]);
+  });
+});
+
 describe("rankedSearch", () => {
   const hay = [
     "GitHub home https://github.com", // "git" word-start -> prefix tier

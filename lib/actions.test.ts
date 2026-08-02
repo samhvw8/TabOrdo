@@ -112,6 +112,38 @@ describe("/archive", () => {
     expect(await runAction("archive", ctx({ query: "zzz" }))).toEqual({ acted: false });
     expect(await getArchive()).toEqual([]);
   });
+
+  // It closed every match while archiveTabs kept only the ones with a real URL, so
+  // "Archived 1" could close two — and the second one was gone for good.
+  it("closes only the tabs it actually archived", async () => {
+    const r = await runAction("archive", ctx({
+      matchingTabs: [
+        asResult({ id: 2, url: "https://b.com", title: "B" }),
+        asResult({ id: 3, url: "chrome://newtab/", title: "New Tab" }),
+      ],
+    }));
+    expect(r).toEqual({ message: "Archived 1 tab(s)", acted: true });
+    expect(stub.removedIds).toEqual([2]);
+    expect(stub.openTabs.map((t) => t.id)).toEqual([1, 3]);
+  });
+
+  // The only destructive handler that took no snapshot: Ctrl+Z after /archive popped whatever
+  // older entry happened to be on the stack.
+  it("snapshots the close so undo can bring the tabs back", async () => {
+    await runAction("archive", ctx({ matchingTabs: [asResult({ id: 2, url: "https://b.com", title: "B" })] }));
+    const top = peekUndo();
+    expect(top?.type).toBe("close");
+    expect((top?.data as { url: string }[]).map((d) => d.url)).toEqual(["https://b.com"]);
+  });
+
+  it("reports, and closes nothing, when no match can be archived", async () => {
+    const r = await runAction("archive", ctx({
+      matchingTabs: [asResult({ id: 3, url: "chrome://newtab/", title: "New Tab" })],
+    }));
+    expect(r).toEqual({ message: "Nothing to archive", acted: false });
+    expect(stub.removedIds).toEqual([]);
+    expect(await getArchive()).toEqual([]);
+  });
 });
 
 describe("/group and /ungroup", () => {
@@ -187,6 +219,21 @@ describe("/mute and /unmute", () => {
 
   it("stays put when a query matched nothing", async () => {
     expect(await runAction("mute", ctx({ query: "zzz" }))).toEqual({ acted: false });
+  });
+
+  // The loop awaited each update in turn, so the first id that had gone stale threw and the
+  // tabs after it in the list were never touched.
+  it("mutes the rest of the batch when one tab is already gone", async () => {
+    const realUpdate = chrome.tabs.update;
+    (chrome.tabs as unknown as { update: (id: number, props: object) => Promise<unknown> }).update =
+      async (id, props) => {
+        if (id === 2) throw new Error("No tab with id: 2");
+        return realUpdate(id, props);
+      };
+
+    const r = await runAction("mute", ctx({ matchingTabs: [asResult({ id: 2 }), asResult({ id: 3 })] }));
+    expect(r?.message).toBe("Muted 2 tab(s)");
+    expect(stub.openTabs.find((t) => t.id === 3)!.muted).toBe(true);
   });
 });
 
