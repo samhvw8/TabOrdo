@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { getPinnedTabs, getPinnedGroups, savePinnedTabs, pinTab, unpinTab, unpinGroup, reorderPins, applyPinsToGroup, stripPinBadge, type PinnedTabEntry, type PinnedGroupEntry } from "../lib/pin.ts";
-  import { switchToTab, setTitleBadge } from "../lib/tabs/index.ts";
+  import { switchToTab, setTitleBadge, getFullHostname } from "../lib/tabs/index.ts";
+  import { getSortRules, setSortRules, type SortRule } from "../lib/rules.ts";
   import { faviconCacheUrl } from "../lib/favicon.ts";
 
   let pinnedTabs = $state<PinnedTabEntry[]>([]);
@@ -12,6 +13,24 @@
   let dragGroup = $state<string | null>(null);
   let dragIndex = $state<number | null>(null);
   let dropIndex = $state<number | null>(null);
+
+  let sortRules = $state<SortRule[]>([]);
+  let newSortDomain = $state("");
+  /** Per-rule text of the "add pattern" box, keyed by rule id. */
+  let patternDrafts = $state<Record<string, string>>({});
+  let ruleDragIndex = $state<number | null>(null);
+  let ruleDropIndex = $state<number | null>(null);
+
+  // Mirrors buildSortRanker's numbering: counted over rank-first rules only, so the badges the
+  // user reads here are the positions the sort will actually apply.
+  let rankNumbers = $derived.by<Map<string, number>>(() => {
+    const map = new Map<string, number>();
+    let n = 0;
+    for (const rule of sortRules) {
+      if (rule.enabled && rule.domain && rule.rankFirst) map.set(rule.id, n++);
+    }
+    return map;
+  });
 
   interface GroupedPins {
     groupName: string;
@@ -79,10 +98,119 @@
 
     if (needsSave) await savePinnedTabs(raw);
     pinnedTabs = raw;
+    sortRules = await getSortRules();
     pinnedGroups = await getPinnedGroups();
     openTabs = allTabs;
     const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
     activeTabId = active?.id ?? null;
+  }
+
+  // --- Sort priority ------------------------------------------------------
+  // Ordering rules, not locks: nothing is held at an absolute index, so these only bite when a
+  // sort runs. Every mutation writes straight through — there is no Save button to forget.
+
+  async function saveSortRules() {
+    await setSortRules(sortRules);
+  }
+
+  /** Accept a pasted URL as readily as a bare host — both are how people name a site. */
+  function normalizeDomainInput(raw: string): string {
+    const trimmed = raw.trim();
+    if (!trimmed) return "";
+    if (trimmed.includes("://")) return getFullHostname(trimmed) || trimmed;
+    return trimmed.replace(/^www\./, "");
+  }
+
+  async function addSortRule() {
+    const domain = normalizeDomainInput(newSortDomain);
+    if (!domain) return;
+    newSortDomain = "";
+    // A duplicate entry would be dead weight: buildSortRanker takes the first match and the
+    // second could never fire.
+    if (sortRules.some((r) => r.domain.toLowerCase() === domain.toLowerCase())) return;
+    sortRules = [...sortRules, { id: crypto.randomUUID(), domain, rankFirst: false, patterns: [], enabled: true }];
+    await saveSortRules();
+  }
+
+  async function removeSortRule(id: string) {
+    sortRules = sortRules.filter((r) => r.id !== id);
+    delete patternDrafts[id];
+    await saveSortRules();
+  }
+
+  async function toggleRankFirst(rule: SortRule) {
+    rule.rankFirst = !rule.rankFirst;
+    await saveSortRules();
+  }
+
+  async function toggleRuleEnabled(rule: SortRule) {
+    rule.enabled = !rule.enabled;
+    await saveSortRules();
+  }
+
+  async function addPattern(rule: SortRule) {
+    const pattern = (patternDrafts[rule.id] || "").trim();
+    if (!pattern) return;
+    patternDrafts[rule.id] = "";
+    if (rule.patterns.includes(pattern)) return;
+    rule.patterns = [...rule.patterns, pattern];
+    await saveSortRules();
+  }
+
+  async function removePattern(rule: SortRule, index: number) {
+    rule.patterns = rule.patterns.filter((_, i) => i !== index);
+    await saveSortRules();
+  }
+
+  // Buttons rather than drag: the pattern rows sit inside an already-draggable rule row, and
+  // nesting a second drag context there makes both of them unreliable.
+  async function movePattern(rule: SortRule, index: number, delta: number) {
+    const target = index + delta;
+    if (target < 0 || target >= rule.patterns.length) return;
+    const next = [...rule.patterns];
+    [next[index], next[target]] = [next[target], next[index]];
+    rule.patterns = next;
+    await saveSortRules();
+  }
+
+  function onRuleDragStart(index: number, e: DragEvent) {
+    ruleDragIndex = index;
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", "");
+    }
+  }
+
+  function onRuleDragOver(index: number, e: DragEvent) {
+    if (ruleDragIndex === null) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+    ruleDropIndex = index;
+  }
+
+  async function onRuleDrop(e: DragEvent) {
+    e.preventDefault();
+    const from = ruleDragIndex;
+    const to = ruleDropIndex;
+    resetRuleDrag();
+    if (from === null || to === null || from === to) return;
+    const next = [...sortRules];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    sortRules = next;
+    await saveSortRules();
+  }
+
+  function resetRuleDrag() {
+    ruleDragIndex = null;
+    ruleDropIndex = null;
+  }
+
+  /** Enter submits, except mid-IME-composition where Enter is picking a candidate. */
+  function submitOnEnter(e: KeyboardEvent, run: () => void) {
+    if (e.key !== "Enter" || e.isComposing) return;
+    e.preventDefault();
+    run();
   }
 
   function findOpenTab(url: string, tabId?: number): chrome.tabs.Tab | undefined {
@@ -215,6 +343,148 @@
         class="text-[10px] text-primary hover:text-primary-hover transition-colors"
         onclick={load}
       >Refresh</button>
+    </div>
+  </div>
+
+  <!-- Sort Priority (ordering rules, not locks) -->
+  <div class="mb-3">
+    <div class="flex items-center gap-2 mb-1.5">
+      <span class="text-[10px] font-semibold uppercase tracking-wider text-accent-green">Sort Priority</span>
+      <div class="flex-1 h-px bg-border/50"></div>
+      <span class="text-[10px] text-text-muted">{sortRules.length}</span>
+    </div>
+    <div class="text-[9px] text-text-muted px-2 pb-1.5 leading-relaxed">
+      Applies when sorting by domain. Drag to reorder — “first” domains lead the strip in this
+      order, and each domain’s patterns order its own tabs.
+    </div>
+
+    {#if sortRules.length > 0}
+      <div
+        class="grid gap-1 mb-1.5"
+        ondrop={onRuleDrop}
+        ondragover={(e) => e.preventDefault()}
+        role="list"
+      >
+        {#each sortRules as rule, i (rule.id)}
+          {@const rank = rankNumbers.get(rule.id)}
+          <div
+            class="rounded-md border border-border bg-surface-hover transition-colors
+              {ruleDragIndex === i ? 'opacity-40' : ''}
+              {ruleDragIndex !== null && ruleDropIndex === i && ruleDragIndex !== i ? 'border-t-2 border-t-primary' : ''}
+              {rule.enabled ? '' : 'opacity-50'}"
+            role="listitem"
+          >
+            <div class="flex items-center gap-1.5 px-1.5 py-1">
+              <div
+                class="shrink-0 w-4 flex items-center justify-center cursor-grab active:cursor-grabbing text-text-muted hover:text-text select-none"
+                draggable="true"
+                ondragstart={(e) => onRuleDragStart(i, e)}
+                ondragover={(e) => onRuleDragOver(i, e)}
+                ondragend={resetRuleDrag}
+                title="Drag to reorder"
+                role="button"
+                tabindex="0"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
+                  <circle cx="5" cy="3" r="1.5"/><circle cx="11" cy="3" r="1.5"/>
+                  <circle cx="5" cy="8" r="1.5"/><circle cx="11" cy="8" r="1.5"/>
+                  <circle cx="5" cy="13" r="1.5"/><circle cx="11" cy="13" r="1.5"/>
+                </svg>
+              </div>
+
+              <span class="text-[10px] font-mono w-6 text-center shrink-0 {rank === undefined ? 'text-text-muted' : 'text-accent-yellow'}">
+                {rank === undefined ? "–" : `#${rank + 1}`}
+              </span>
+
+              <span class="text-xs text-text truncate flex-1" title={rule.domain}>{rule.domain}</span>
+
+              <button
+                class="shrink-0 text-[9px] px-1.5 py-0.5 rounded border transition-colors
+                  {rule.rankFirst
+                    ? 'border-accent-yellow text-accent-yellow bg-accent-yellow/10'
+                    : 'border-border text-text-muted hover:text-text'}"
+                onclick={() => toggleRankFirst(rule)}
+                aria-pressed={rule.rankFirst}
+                title={rule.rankFirst
+                  ? "This domain leads the strip. Click to leave it in alphabetical order."
+                  : "Alphabetical. Click to move this domain ahead of unlisted ones."}
+              >first</button>
+
+              <button
+                class="shrink-0 text-[9px] px-1.5 py-0.5 rounded border transition-colors
+                  {rule.enabled
+                    ? 'border-accent-green text-accent-green bg-accent-green/10'
+                    : 'border-border text-text-muted hover:text-text'}"
+                onclick={() => toggleRuleEnabled(rule)}
+                aria-pressed={rule.enabled}
+                title={rule.enabled ? "Active — click to disable without deleting" : "Disabled — click to re-enable"}
+              >{rule.enabled ? "on" : "off"}</button>
+
+              <button
+                class="shrink-0 px-1 text-[10px] text-accent-red hover:text-accent-red/80 transition-colors"
+                onclick={() => removeSortRule(rule.id)}
+                title="Delete this rule"
+                aria-label="Delete rule for {rule.domain}"
+              >×</button>
+            </div>
+
+            <div class="pl-7 pr-1.5 pb-1.5">
+              {#each rule.patterns as pattern, pi (pattern)}
+                <div class="flex items-center gap-1 py-0.5">
+                  <span class="text-[9px] font-mono text-accent-cyan w-5 text-center shrink-0">#{pi + 1}</span>
+                  <span class="text-[10px] font-mono text-text truncate flex-1" title={pattern}>{pattern}</span>
+                  <button
+                    class="shrink-0 px-1 text-[9px] text-text-muted hover:text-text disabled:opacity-30 disabled:hover:text-text-muted"
+                    onclick={() => movePattern(rule, pi, -1)}
+                    disabled={pi === 0}
+                    title="Move up"
+                    aria-label="Move {pattern} up"
+                  >↑</button>
+                  <button
+                    class="shrink-0 px-1 text-[9px] text-text-muted hover:text-text disabled:opacity-30 disabled:hover:text-text-muted"
+                    onclick={() => movePattern(rule, pi, 1)}
+                    disabled={pi === rule.patterns.length - 1}
+                    title="Move down"
+                    aria-label="Move {pattern} down"
+                  >↓</button>
+                  <button
+                    class="shrink-0 px-1 text-[9px] text-accent-red hover:text-accent-red/80"
+                    onclick={() => removePattern(rule, pi)}
+                    title="Remove this pattern"
+                    aria-label="Remove pattern {pattern}"
+                  >×</button>
+                </div>
+              {/each}
+              <div class="flex items-center gap-1 mt-0.5">
+                <input
+                  class="flex-1 min-w-0 px-1.5 py-0.5 text-[10px] font-mono rounded bg-surface border border-border text-text placeholder:text-text-muted focus:outline-none focus:border-primary"
+                  placeholder="path pattern, e.g. /truyen/* or */pulls*"
+                  bind:value={patternDrafts[rule.id]}
+                  onkeydown={(e) => submitOnEnter(e, () => addPattern(rule))}
+                />
+                <button
+                  class="shrink-0 px-1.5 py-0.5 text-[10px] rounded border border-border text-primary hover:text-primary-hover hover:border-primary transition-colors"
+                  onclick={() => addPattern(rule)}
+                  aria-label="Add path pattern for {rule.domain}"
+                >+</button>
+              </div>
+            </div>
+          </div>
+        {/each}
+      </div>
+    {/if}
+
+    <div class="flex items-center gap-1 px-0.5">
+      <input
+        class="flex-1 min-w-0 px-1.5 py-1 text-[10px] rounded bg-surface border border-border text-text placeholder:text-text-muted focus:outline-none focus:border-primary"
+        placeholder="domain, e.g. github.com"
+        bind:value={newSortDomain}
+        onkeydown={(e) => submitOnEnter(e, addSortRule)}
+      />
+      <button
+        class="shrink-0 text-[10px] px-2 py-1 rounded border border-border text-primary hover:text-primary-hover hover:border-primary transition-colors"
+        onclick={addSortRule}
+      >Add</button>
     </div>
   </div>
 

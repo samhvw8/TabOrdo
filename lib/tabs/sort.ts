@@ -2,6 +2,17 @@
 
 import { getDomainMapper, type DomainMapper } from "../url.ts";
 import { getPinnedTabs, applyGroupPinsToWindow, type PinnedTabEntry } from "../pin.ts";
+import { getSortRules, buildSortRanker, noSortRanking, type SortRanker } from "../rules.ts";
+
+/**
+ * Sort rules only reorder *within* a domain block and *between* domains, so they mean nothing
+ * to a flat title or url sort. Skipping the build there also skips a storage read on the
+ * auto-sort path, which fires on every tab that finishes loading.
+ */
+async function rankerFor(by: "title" | "url" | "domain"): Promise<SortRanker> {
+  if (by !== "domain") return noSortRanking;
+  return buildSortRanker(await getSortRules());
+}
 
 export async function sortTabsInWindow(
   windowId: number,
@@ -18,9 +29,10 @@ export async function sortTabsInGroup(
   const tabs = await chrome.tabs.query({ groupId });
   const group = (await chrome.tabGroups.query({})).find((g) => g.id === groupId);
   const domainOf = await getDomainMapper();
+  const rank = await rankerFor(by);
   const ordered = group?.title
-    ? pinAwareSortTabs(tabs, group.title, await getPinnedTabs(), by, domainOf)
-    : tabs.sort((a, b) => compareTabs(a, b, by, domainOf));
+    ? pinAwareSortTabs(tabs, group.title, await getPinnedTabs(), by, domainOf, rank)
+    : tabs.sort((a, b) => compareTabs(a, b, by, domainOf, rank));
   const ids = ordered.map((t) => t.id!);
   if (ids.length > 0) {
     await chrome.tabs.move(ids, { index: -1 });
@@ -36,6 +48,7 @@ export async function organizeWindow(
   const groups = await chrome.tabGroups.query({ windowId });
   const allPins = await getPinnedTabs();
   const domainOf = await getDomainMapper();
+  const rank = await rankerFor(by);
   const pinnedCount = tabs.filter((t) => t.pinned).length;
 
   const groupMap = new Map<number, { group: chrome.tabGroups.TabGroup; tabs: chrome.tabs.Tab[] }>();
@@ -60,10 +73,10 @@ export async function organizeWindow(
 
   for (const entry of sortedGroups) {
     entry.tabs = entry.group.title
-      ? pinAwareSortTabs(entry.tabs, entry.group.title, allPins, by, domainOf)
-      : entry.tabs.sort((a, b) => compareTabs(a, b, by, domainOf));
+      ? pinAwareSortTabs(entry.tabs, entry.group.title, allPins, by, domainOf, rank)
+      : entry.tabs.sort((a, b) => compareTabs(a, b, by, domainOf, rank));
   }
-  ungrouped.sort((a, b) => compareTabs(a, b, by, domainOf));
+  ungrouped.sort((a, b) => compareTabs(a, b, by, domainOf, rank));
 
   let index = pinnedCount;
 
@@ -87,10 +100,11 @@ function pinAwareSortTabs(
   groupTitle: string,
   allPins: PinnedTabEntry[],
   by: "title" | "url" | "domain",
-  domainOf: DomainMapper
+  domainOf: DomainMapper,
+  rank: SortRanker
 ): chrome.tabs.Tab[] {
   const groupPins = allPins.filter((p) => p.groupName === groupTitle);
-  if (groupPins.length === 0) return tabs.sort((a, b) => compareTabs(a, b, by, domainOf));
+  if (groupPins.length === 0) return tabs.sort((a, b) => compareTabs(a, b, by, domainOf, rank));
 
   const tabIdMap = new Map(groupPins.filter((p) => p.tabId).map((p) => [p.tabId!, p.position]));
   const urlMap = new Map(groupPins.map((p) => [p.url, p.position]));
@@ -107,7 +121,7 @@ function pinAwareSortTabs(
   }
 
   pinned.sort((a, b) => a.pos - b.pos);
-  unpinned.sort((a, b) => compareTabs(a, b, by, domainOf));
+  unpinned.sort((a, b) => compareTabs(a, b, by, domainOf, rank));
 
   const result: chrome.tabs.Tab[] = [];
   let ui = 0;
@@ -133,7 +147,8 @@ function compareTabs(
   a: chrome.tabs.Tab,
   b: chrome.tabs.Tab,
   by: "title" | "url" | "domain",
-  domainOf: DomainMapper
+  domainOf: DomainMapper,
+  rank: SortRanker
 ): number {
   switch (by) {
     case "title":
@@ -141,9 +156,16 @@ function compareTabs(
     case "url":
       return (a.url || "").localeCompare(b.url || "");
     case "domain": {
-      const domA = domainOf(a.url || "");
-      const domB = domainOf(b.url || "");
-      return domA.localeCompare(domB) || (a.title || "").localeCompare(b.title || "");
+      const ra = rank(a.url || "");
+      const rb = rank(b.url || "");
+      // Rank-first domains lead the strip, in the order the Sort Priority list shows them.
+      if (ra.domain !== rb.domain) return ra.domain < rb.domain ? -1 : 1;
+      // Domain still wins before path tier, or a rule on one domain would interleave its tabs
+      // with another domain's and break up the blocks the whole sort exists to produce.
+      const dom = domainOf(a.url || "").localeCompare(domainOf(b.url || ""));
+      if (dom !== 0) return dom;
+      if (ra.path !== rb.path) return ra.path < rb.path ? -1 : 1;
+      return (a.title || "").localeCompare(b.title || "");
     }
   }
 }

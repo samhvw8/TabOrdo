@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { domainMatches, matchDomainToRule, ruleMatches, ruleToRegex, longestCommonSubstring, generalizePatterns, isIgnoredGroupName, isCompiledPattern, MAX_PATTERN_LENGTH, type IgnoreRule, type GroupRule } from "./rules.ts";
+import { domainMatches, matchDomainToRule, ruleMatches, ruleToRegex, longestCommonSubstring, generalizePatterns, isIgnoredGroupName, isCompiledPattern, MAX_PATTERN_LENGTH, pathMatches, sortPathOf, buildSortRanker, noSortRanking, UNRANKED, type IgnoreRule, type GroupRule, type SortRule } from "./rules.ts";
 
 describe("domainMatches", () => {
   it("exact match", () => {
@@ -339,5 +339,106 @@ describe("matchDomainToRule", () => {
   it("skips rules whose patterns array is missing", () => {
     const broken = { id: "x", name: "x", color: "blue" } as unknown as GroupRule;
     expect(matchDomainToRule("github.com", [broken, rule("ok", ["github.com"])])?.id).toBe("ok");
+  });
+});
+
+describe("pathMatches", () => {
+  it("anchors at the start and stays open at the end", () => {
+    expect(pathMatches("/inbox/42", "/inbox")).toBe(true);
+    expect(pathMatches("/inbox", "/inbox")).toBe(true);
+    expect(pathMatches("/mail/inbox", "/inbox")).toBe(false);
+  });
+
+  it("matches anywhere behind a leading star", () => {
+    expect(pathMatches("/org/repo/pulls/12", "*/pulls*")).toBe(true);
+    expect(pathMatches("/org/repo/issues/9", "*/pulls*")).toBe(false);
+  });
+
+  it("is case-insensitive", () => {
+    expect(pathMatches("/Truyen/9", "/truyen/*")).toBe(true);
+  });
+
+  // Paths get pasted straight out of the address bar, query string and all. An unescaped `?`
+  // would make the preceding character optional instead of matching literally.
+  it("treats a query-string ? as a literal", () => {
+    expect(pathMatches("/search?q=svelte", "/search?q=*")).toBe(true);
+    expect(pathMatches("/searc", "/search?q=*")).toBe(false);
+  });
+
+  it("refuses an over-long pattern rather than compiling it", () => {
+    expect(pathMatches("/a", "/" + "a".repeat(MAX_PATTERN_LENGTH))).toBe(false);
+  });
+
+  it("never matches on an empty pattern", () => {
+    expect(pathMatches("/anything", "")).toBe(false);
+  });
+});
+
+describe("sortPathOf", () => {
+  it("keeps the path and the query, drops the host and hash", () => {
+    expect(sortPathOf("https://x.com/a/b?c=1#frag")).toBe("/a/b?c=1");
+  });
+
+  it("is empty for something that is not a URL", () => {
+    expect(sortPathOf("not a url")).toBe("");
+  });
+});
+
+describe("buildSortRanker", () => {
+  const sortRule = (over: Partial<SortRule> & { domain: string }): SortRule =>
+    ({ id: over.domain, rankFirst: false, patterns: [], enabled: true, ...over });
+
+  it("returns the shared no-op ranker when nothing is configured", () => {
+    expect(buildSortRanker([])).toBe(noSortRanking);
+    expect(buildSortRanker([sortRule({ domain: "a.com", enabled: false })])).toBe(noSortRanking);
+  });
+
+  it("numbers rank-first domains in list order", () => {
+    const rank = buildSortRanker([
+      sortRule({ domain: "sangtacviet.vip", rankFirst: true }),
+      sortRule({ domain: "apple.com", rankFirst: true }),
+    ]);
+    expect(rank("https://sangtacviet.vip/x").domain).toBe(0);
+    expect(rank("https://apple.com/x").domain).toBe(1);
+    expect(rank("https://zebra.com/x").domain).toBe(UNRANKED);
+  });
+
+  // The panel prints "rank #n" off this numbering, so a rule that opts out of ranking must not
+  // consume a slot and leave the visible sequence with a hole in it.
+  it("skips non-ranking rules when numbering", () => {
+    const rank = buildSortRanker([
+      sortRule({ domain: "github.com", patterns: ["*/pulls*"] }),
+      sortRule({ domain: "apple.com", rankFirst: true }),
+    ]);
+    expect(rank("https://apple.com/x").domain).toBe(0);
+    expect(rank("https://github.com/o/r/pulls/1").domain).toBe(UNRANKED);
+  });
+
+  it("ranks a path by the first pattern it matches", () => {
+    const rank = buildSortRanker([
+      sortRule({ domain: "github.com", patterns: ["*/pulls*", "*/issues*"] }),
+    ]);
+    expect(rank("https://github.com/o/r/pulls/12").path).toBe(0);
+    expect(rank("https://github.com/o/r/issues/9").path).toBe(1);
+    expect(rank("https://github.com/settings").path).toBe(UNRANKED);
+  });
+
+  it("applies a rule to subdomains of its domain", () => {
+    const rank = buildSortRanker([sortRule({ domain: "google.com", rankFirst: true })]);
+    expect(rank("https://mail.google.com/u/0").domain).toBe(0);
+  });
+
+  it("lets a specific rule listed first beat a broader one below it", () => {
+    const rank = buildSortRanker([
+      sortRule({ domain: "mail.google.com", rankFirst: true }),
+      sortRule({ domain: "google.com", rankFirst: true }),
+    ]);
+    expect(rank("https://mail.google.com/u/0").domain).toBe(0);
+    expect(rank("https://docs.google.com/d/1").domain).toBe(1);
+  });
+
+  it("leaves a URL with no hostname unranked", () => {
+    const rank = buildSortRanker([sortRule({ domain: "a.com", rankFirst: true })]);
+    expect(rank("chrome://newtab")).toEqual({ domain: UNRANKED, path: UNRANKED });
   });
 });

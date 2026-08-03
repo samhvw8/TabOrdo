@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { installChromeStub, type ChromeStub } from "../testing/chrome-stub.ts";
 import { sortTabsInWindow, sortTabsInGroup } from "./sort.ts";
 import { pinTab } from "../pin.ts";
+import { setSortRules, type SortRule } from "../rules.ts";
 
 let stub: ChromeStub;
 
@@ -148,6 +149,119 @@ describe("sortTabsInWindow with position locks", () => {
 
     await sortTabsInWindow(1, "domain");
     expect(strip()[0]).toBe(3);
+  });
+});
+
+describe("sortTabsInWindow with sort rules", () => {
+  const sortRule = (over: Partial<SortRule> & { domain: string }): SortRule =>
+    ({ id: over.domain, rankFirst: false, patterns: [], enabled: true, ...over });
+
+  it("lifts rank-first domains to the head, in list order", async () => {
+    stub.openTabs = [
+      tab({ id: 1, url: "https://apple.com/a", index: 0 }),
+      tab({ id: 2, url: "https://sangtacviet.vip/x", index: 1 }),
+      tab({ id: 3, url: "https://banana.com/b", index: 2 }),
+    ];
+    await setSortRules([
+      sortRule({ domain: "sangtacviet.vip", rankFirst: true }),
+      sortRule({ domain: "apple.com", rankFirst: true }),
+    ]);
+    await sortTabsInWindow(1, "domain");
+    expect(strip()).toEqual([2, 1, 3]);
+  });
+
+  it("orders paths inside a domain without moving the domain itself", async () => {
+    stub.openTabs = [
+      tab({ id: 1, url: "https://github.com/settings", title: "Settings", index: 0 }),
+      tab({ id: 2, url: "https://github.com/o/r/issues/9", title: "Issue", index: 1 }),
+      tab({ id: 3, url: "https://github.com/o/r/pulls/12", title: "PR", index: 2 }),
+      tab({ id: 4, url: "https://apple.com/a", title: "Apple", index: 3 }),
+    ];
+    await setSortRules([
+      sortRule({ domain: "github.com", patterns: ["*/pulls*", "*/issues*"] }),
+    ]);
+    await sortTabsInWindow(1, "domain");
+    // apple.com still sorts ahead of github.com; only github's own run is reordered.
+    expect(strip()).toEqual([4, 3, 2, 1]);
+  });
+
+  it("combines a rank-first domain with its own path order", async () => {
+    stub.openTabs = [
+      tab({ id: 1, url: "https://apple.com/a", title: "Apple", index: 0 }),
+      tab({ id: 2, url: "https://sangtacviet.vip/about", title: "About", index: 1 }),
+      tab({ id: 3, url: "https://sangtacviet.vip/truyen/9", title: "Truyen", index: 2 }),
+    ];
+    await setSortRules([
+      sortRule({ domain: "sangtacviet.vip", rankFirst: true, patterns: ["/truyen/*"] }),
+    ]);
+    await sortTabsInWindow(1, "domain");
+    expect(strip()).toEqual([3, 2, 1]);
+  });
+
+  // Two rank-first domains must not interleave: the rank decides which block leads, and the
+  // domain comparison still has to hold each block together.
+  it("keeps each rank-first domain's tabs contiguous", async () => {
+    stub.openTabs = [
+      tab({ id: 1, url: "https://apple.com/a", title: "A", index: 0 }),
+      tab({ id: 2, url: "https://sangtacviet.vip/x", title: "X", index: 1 }),
+      tab({ id: 3, url: "https://apple.com/b", title: "B", index: 2 }),
+      tab({ id: 4, url: "https://sangtacviet.vip/y", title: "Y", index: 3 }),
+    ];
+    await setSortRules([
+      sortRule({ domain: "sangtacviet.vip", rankFirst: true }),
+      sortRule({ domain: "apple.com", rankFirst: true }),
+    ]);
+    await sortTabsInWindow(1, "domain");
+    expect(strip()).toEqual([2, 4, 1, 3]);
+  });
+
+  it("ignores a disabled rule", async () => {
+    stub.openTabs = [
+      tab({ id: 1, url: "https://zebra.com/a", index: 0 }),
+      tab({ id: 2, url: "https://apple.com/b", index: 1 }),
+    ];
+    await setSortRules([sortRule({ domain: "zebra.com", rankFirst: true, enabled: false })]);
+    await sortTabsInWindow(1, "domain");
+    expect(strip()).toEqual([2, 1]);
+  });
+
+  // Rules describe domain blocks, and a title sort has none — applying them there would make
+  // /sort title quietly stop sorting by title.
+  it("leaves a title sort alone", async () => {
+    stub.openTabs = [
+      tab({ id: 1, url: "https://apple.com/a", title: "Alpha", index: 0 }),
+      tab({ id: 2, url: "https://zebra.com/b", title: "Bravo", index: 1 }),
+    ];
+    await setSortRules([sortRule({ domain: "zebra.com", rankFirst: true })]);
+    await sortTabsInWindow(1, "title");
+    expect(strip()).toEqual([1, 2]);
+  });
+
+  it("applies inside a group too", async () => {
+    stub.openTabs = [
+      tab({ id: 1, url: "https://github.com/settings", title: "Settings", index: 0, groupId: 50 }),
+      tab({ id: 2, url: "https://github.com/o/r/pulls/12", title: "PR", index: 1, groupId: 50 }),
+    ];
+    stub.groups = [{ id: 50, title: "Work", color: "blue", windowId: 1 }];
+    await setSortRules([sortRule({ domain: "github.com", patterns: ["*/pulls*"] })]);
+    await sortTabsInGroup(50, "domain");
+    const inGroup = stub.openTabs.filter((t) => t.groupId === 50).sort((a, b) => a.index! - b.index!);
+    expect(inGroup.map((t) => t.id)).toEqual([2, 1]);
+  });
+
+  // A lock is an absolute index; a sort rule only changes comparisons. When both apply the
+  // lock has to win, or "locked" would mean nothing on a domain that also has rules.
+  it("still yields to a position lock", async () => {
+    stub.openTabs = [
+      tab({ id: 1, url: "https://github.com/settings", title: "Settings", index: 0, groupId: 50 }),
+      tab({ id: 2, url: "https://github.com/o/r/pulls/12", title: "PR", index: 1, groupId: 50 }),
+    ];
+    stub.groups = [{ id: 50, title: "Work", color: "blue", windowId: 1 }];
+    await setSortRules([sortRule({ domain: "github.com", patterns: ["*/pulls*"] })]);
+    await pinTab("https://github.com/settings", "Work", 0, "Settings", 1);
+
+    await sortTabsInWindow(1, "domain");
+    expect(strip()).toEqual([1, 2]);
   });
 });
 

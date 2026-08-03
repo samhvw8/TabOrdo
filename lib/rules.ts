@@ -14,6 +14,25 @@ export interface IgnoreRule {
   isRegex?: boolean;
 }
 
+/**
+ * Per-domain sort customisation. Two independent knobs, both read off the order of this list:
+ *  - `rankFirst` lifts the domain ahead of every unlisted domain, in list order.
+ *  - `patterns` orders tabs *inside* that domain — the first pattern a URL matches is its tier.
+ *
+ * This is not a position lock (lib/pin.ts). Nothing is held at an absolute index and no tab is
+ * badged; the tabs just compare differently, so a sort with no matching tabs is a no-op.
+ */
+export interface SortRule {
+  id: string;
+  /** Hostname pattern, matched with domainMatches — so `example.com` covers its subdomains. */
+  domain: string;
+  /** Ahead of unlisted domains? Off keeps the domain in its alphabetical slot. */
+  rankFirst: boolean;
+  /** Ordered path globs, matched against pathname+search. */
+  patterns: string[];
+  enabled: boolean;
+}
+
 export interface RulesConfig {
   rules: GroupRule[];
   autoGroup: boolean;
@@ -26,6 +45,7 @@ export interface RulesConfig {
   useAI: boolean;
   ignorePatterns: IgnoreRule[];
   ignoreGroupNames: IgnoreRule[];
+  sortRules: SortRule[];
 }
 
 const STORAGE_KEY = "groupRules";
@@ -46,6 +66,24 @@ function normalizeIgnoreRules(raw: unknown): IgnoreRule[] {
     }
     return null;
   }).filter((x): x is IgnoreRule => x !== null);
+}
+
+function normalizeSortRules(raw: unknown): SortRule[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((item: unknown) => {
+    if (!item || typeof item !== "object") return null;
+    const r = item as Record<string, unknown>;
+    if (typeof r.domain !== "string" || !r.domain) return null;
+    return {
+      id: typeof r.id === "string" && r.id ? r.id : crypto.randomUUID(),
+      domain: r.domain,
+      rankFirst: r.rankFirst === true,
+      patterns: Array.isArray(r.patterns)
+        ? r.patterns.filter((p: unknown): p is string => typeof p === "string" && p.length > 0)
+        : [],
+      enabled: r.enabled !== false,
+    };
+  }).filter((x): x is SortRule => x !== null);
 }
 
 // The service worker wakes for every tab event and several listeners each need the config,
@@ -83,11 +121,12 @@ export async function getConfig(fresh = false): Promise<RulesConfig> {
       useAI: stored.useAI ?? false,
       ignorePatterns: normalizeIgnoreRules(stored.ignorePatterns),
       ignoreGroupNames: normalizeIgnoreRules(stored.ignoreGroupNames),
+      sortRules: normalizeSortRules(stored.sortRules),
     };
     cachedConfig = normalized;
     return structuredClone(normalized);
   }
-  const config: RulesConfig = { rules: [], autoGroup: false, autoUngroup: false, useRules: false, autoSort: false, autoPinFollow: false, autoDiscard: false, switchToExisting: false, useAI: false, ignorePatterns: [], ignoreGroupNames: [] };
+  const config: RulesConfig = { rules: [], autoGroup: false, autoUngroup: false, useRules: false, autoSort: false, autoPinFollow: false, autoDiscard: false, switchToExisting: false, useAI: false, ignorePatterns: [], ignoreGroupNames: [], sortRules: [] };
   await saveConfig(config);
   return structuredClone(config);
 }
@@ -209,6 +248,15 @@ export async function getIgnoreGroupNames(): Promise<IgnoreRule[]> {
 
 export async function setIgnoreGroupNames(names: IgnoreRule[]): Promise<void> {
   await updateConfig((config) => { config.ignoreGroupNames = names; });
+}
+
+export async function getSortRules(): Promise<SortRule[]> {
+  const config = await getConfig();
+  return config.sortRules ?? [];
+}
+
+export async function setSortRules(rules: SortRule[]): Promise<void> {
+  await updateConfig((config) => { config.sortRules = rules; });
 }
 
 export function isIgnoredUrl(url: string, ignorePatterns: IgnoreRule[]): boolean {
@@ -395,4 +443,110 @@ export function domainMatches(domain: string, pattern: string, caseSensitive?: b
   if (caseSensitive) return domain === pattern || domain.endsWith("." + pattern);
   const d = domain.toLowerCase(), p = pattern.toLowerCase();
   return d === p || d.endsWith("." + p);
+}
+
+// ---------------------------------------------------------------------------
+// Sort rules: domain ranking + per-domain path ordering. Consumed by lib/tabs/sort.ts.
+// ---------------------------------------------------------------------------
+
+/** Sorts after everything ranked. A sentinel rather than Infinity so `a - b` never yields NaN. */
+export const UNRANKED = Number.MAX_SAFE_INTEGER;
+
+export interface SortRank {
+  /** Position among rank-first domains, or UNRANKED when the domain isn't lifted. */
+  domain: number;
+  /** Index of the first path pattern the URL matched, or UNRANKED. */
+  path: number;
+}
+
+export type SortRanker = (url: string) => SortRank;
+
+const NO_RANK: SortRank = { domain: UNRANKED, path: UNRANKED };
+
+/** The ranker for "no rules configured" — every URL is unranked, so sorting is unchanged. */
+export const noSortRanking: SortRanker = () => NO_RANK;
+
+const pathRegexCache = new Map<string, RegExp>();
+
+// Path globs anchor at the START and stay open at the end, so `/inbox` matches `/inbox/42` —
+// that is what "this section of the site comes first" means to someone typing a rule. A leading
+// star matches anywhere, which is how you reach a segment in the middle of a path: the pattern
+// star-slash-pulls-star catches github.com/org/repo/pulls/12.
+//
+// `?` is escaped along with the usual metacharacters, unlike domainMatches — a path pattern is
+// routinely pasted straight out of the address bar with a query string on it, and an unescaped
+// `?` would silently turn the preceding character optional. Same MAX_PATTERN_LENGTH cap: these
+// compile to a RegExp and run on every comparison.
+//
+// Line comments, not a doc block: the wildcard examples this needs to spell out contain the
+// sequence that would close one early.
+export function pathMatches(path: string, pattern: string): boolean {
+  if (!pattern || pattern.length > MAX_PATTERN_LENGTH) return false;
+  let re = pathRegexCache.get(pattern);
+  if (!re) {
+    const escaped = pattern
+      .replace(/[?.+^${}()|[\]\\]/g, "\\$&")
+      .replace(/\*/g, ".*");
+    re = new RegExp(`^${escaped}`, "i");
+    pathRegexCache.set(pattern, re);
+  }
+  return re.test(path);
+}
+
+/** The part of a URL a path pattern is tested against. Non-URLs (chrome://newtab et al) yield "". */
+export function sortPathOf(url: string): string {
+  try {
+    const u = new URL(url);
+    return u.pathname + u.search;
+  } catch {
+    return "";
+  }
+}
+
+function pathTier(url: string, patterns: string[]): number {
+  if (patterns.length === 0) return UNRANKED;
+  const path = sortPathOf(url);
+  for (let i = 0; i < patterns.length; i++) {
+    if (pathMatches(path, patterns[i])) return i;
+  }
+  return UNRANKED;
+}
+
+/**
+ * Resolve the configured rules into a per-URL rank, once per sort. Disabled rules drop out
+ * entirely, and the returned function memoises — a comparator asks about the same handful of
+ * URLs O(n log n) times, same reasoning as getDomainMapper's cache.
+ */
+export function buildSortRanker(rules: SortRule[]): SortRanker {
+  const active = rules.filter((r) => r.enabled && r.domain);
+  if (active.length === 0) return noSortRanking;
+
+  // Rank positions are counted over the rank-first rules only, so switching one off closes the
+  // gap instead of leaving a hole in the numbering the panel displays.
+  const domainRank = new Map<string, number>();
+  let next = 0;
+  for (const rule of active) {
+    if (rule.rankFirst) domainRank.set(rule.id, next++);
+  }
+
+  const memo = new Map<string, SortRank>();
+  return (url: string): SortRank => {
+    const hit = memo.get(url);
+    if (hit) return hit;
+    const hostname = getFullHostname(url);
+    let rank = NO_RANK;
+    if (hostname) {
+      // First match wins, so a specific `mail.google.com` entry listed above a broad
+      // `google.com` one takes precedence rather than being shadowed by it.
+      const rule = active.find((r) => domainMatches(hostname, r.domain));
+      if (rule) {
+        rank = {
+          domain: rule.rankFirst ? domainRank.get(rule.id)! : UNRANKED,
+          path: pathTier(url, rule.patterns),
+        };
+      }
+    }
+    memo.set(url, rank);
+    return rank;
+  };
 }
