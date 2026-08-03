@@ -25,15 +25,29 @@
 //     already gone. Background-originated writes were covered by the separate selfWrites
 //     ledger; popup-originated ones were covered by nothing.
 //
-// So: a SET of leases keyed by owner, and release DECAYS its own entry to a short grace
-// window rather than deleting it. Acquire always succeeds, so no operation can end up
-// unsuppressed. Read-modify-write races remain — no CAS exists — but every outcome now fails
-// toward suppressing slightly too long, which self-heals on expiry, instead of toward running
-// an unsuppressed bulk operation.
+// A SET of leases in one shared map fixed both, but left one lost-update race standing:
+// acquire and release each rewrote the whole map, so a release whose read predated a
+// concurrent acquire wrote the map back without the new lease — silently dropping, say, the
+// AI run's ten-minute lease at the exact popup→background hand-off, leaving the run
+// unsuppressed for its full duration. (The old header claimed every race "fails toward
+// suppressing slightly too long"; that interleaving failed the other way.)
+//
+// So: one lease PER OWNER, each in its own storage key, and release DECAYS its own entry to
+// a short grace window rather than deleting it. Acquire always succeeds, so no operation can
+// end up unsuppressed — and since no writer ever touches another owner's key, there is no
+// shared map to lose an update on. Expired keys are swept opportunistically, and only once
+// they are stale by a wide margin, so a sweep can never race a live renewal.
 
-const LOCK_KEY = "bulkOpLock";
+const LOCK_PREFIX = "bulkOpLock:";
+/** The pre-per-owner-key shape (single owner or owner→expiry map) under one shared key.
+ *  Still honoured on read so a lease from before an extension reload keeps suppressing. */
+const LEGACY_LOCK_KEY = "bulkOpLock";
+/** Sweep a key only once it has been expired at least this long — no live flow renews or
+ *  releases a lease this stale, so sweeping can't clobber a concurrent write. */
+const SWEEP_SLACK_MS = 60 * 1000;
 
-/** Long enough to outlive an on-device AI run; only matters if the holder dies. */
+/** Ceiling for one heartbeat interval of an AI run — the run renews while live (see
+ *  runAIGroup), so this only bounds suppression if the holder dies. */
 export const AI_LEASE_MS = 10 * 60 * 1000;
 /** Popup-driven bulk actions are sub-second in practice. */
 export const UI_LEASE_MS = 60 * 1000;
@@ -51,63 +65,81 @@ export function newLockOwner(): string {
   }
 }
 
-async function readLeases(): Promise<Leases> {
+/** Every lease in session storage, plus the keys stale enough to sweep. */
+async function readAllLeases(): Promise<{ leases: Leases; staleKeys: string[] }> {
   try {
-    const data = await chrome.storage.session.get(LOCK_KEY);
-    const raw = data[LOCK_KEY];
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
-    // A lease written by the previous single-owner shape, still in session storage after an
-    // extension reload. Honour its expiry rather than dropping suppression on the floor.
-    if (typeof raw.owner === "string" && typeof raw.expiresAt === "number") {
-      return { [raw.owner]: raw.expiresAt };
+    const all = await chrome.storage.session.get(null);
+    const leases: Leases = {};
+    const staleKeys: string[] = [];
+    const staleCutoff = Date.now() - SWEEP_SLACK_MS;
+    for (const [key, value] of Object.entries(all)) {
+      if (key.startsWith(LOCK_PREFIX)) {
+        if (typeof value === "number") {
+          leases[key.slice(LOCK_PREFIX.length)] = value;
+          if (value < staleCutoff) staleKeys.push(key);
+        } else {
+          staleKeys.push(key);
+        }
+      } else if (key === LEGACY_LOCK_KEY && value && typeof value === "object" && !Array.isArray(value)) {
+        const raw = value as Record<string, unknown>;
+        let allStale = true;
+        if (typeof raw.owner === "string" && typeof raw.expiresAt === "number") {
+          leases[raw.owner] = raw.expiresAt;
+          allStale = raw.expiresAt < staleCutoff;
+        } else {
+          for (const [owner, expiresAt] of Object.entries(raw)) {
+            if (typeof expiresAt === "number") {
+              leases[owner] = expiresAt;
+              if (expiresAt >= staleCutoff) allStale = false;
+            }
+          }
+        }
+        if (allStale) staleKeys.push(key);
+      }
     }
-    const out: Leases = {};
-    for (const [owner, expiresAt] of Object.entries(raw)) {
-      if (typeof expiresAt === "number") out[owner] = expiresAt;
-    }
-    return out;
+    return { leases, staleKeys };
   } catch {
-    return {};
+    return { leases: {}, staleKeys: [] };
   }
-}
-
-async function writeLeases(leases: Leases): Promise<void> {
-  const now = Date.now();
-  const live: Leases = {};
-  for (const [owner, expiresAt] of Object.entries(leases)) {
-    if (expiresAt > now) live[owner] = expiresAt;
-  }
-  try {
-    if (Object.keys(live).length === 0) await chrome.storage.session.remove(LOCK_KEY);
-    else await chrome.storage.session.set({ [LOCK_KEY]: live });
-  } catch {}
 }
 
 /**
  * Add this owner's lease. Always succeeds — concurrent holders are the point, and an acquire
- * that could fail was the bug. Never shortens a lease this owner already holds.
+ * that could fail was the bug. Never shortens a lease this owner already holds. Touches only
+ * this owner's key, so it cannot race another owner's acquire or release.
  */
 export async function acquireBulkLock(owner: string, ttlMs: number): Promise<void> {
-  const leases = await readLeases();
-  leases[owner] = Math.max(leases[owner] ?? 0, Date.now() + ttlMs);
-  await writeLeases(leases);
+  const key = LOCK_PREFIX + owner;
+  try {
+    const data = await chrome.storage.session.get(key);
+    const existing = typeof data[key] === "number" ? (data[key] as number) : 0;
+    await chrome.storage.session.set({ [key]: Math.max(existing, Date.now() + ttlMs) });
+  } catch {}
 }
 
 /**
  * Give up this owner's lease, but leave suppression standing for ECHO_GRACE_MS so the
  * listeners don't wake on the echoes of the operation that just finished. Other owners'
- * leases are untouched — a short operation can no longer cut a long one short.
+ * leases live in their own keys and are never touched.
  */
 export async function releaseBulkLock(owner: string): Promise<void> {
-  const leases = await readLeases();
-  if (leases[owner] === undefined) return;
-  leases[owner] = Math.min(leases[owner], Date.now() + ECHO_GRACE_MS);
-  await writeLeases(leases);
+  const key = LOCK_PREFIX + owner;
+  try {
+    const data = await chrome.storage.session.get(key);
+    if (typeof data[key] !== "number") return;
+    await chrome.storage.session.set({ [key]: Math.min(data[key] as number, Date.now() + ECHO_GRACE_MS) });
+  } catch {}
 }
 
 export async function isBulkLocked(): Promise<boolean> {
+  const { leases, staleKeys } = await readAllLeases();
+  if (staleKeys.length > 0) {
+    try {
+      void chrome.storage.session.remove(staleKeys);
+    } catch {}
+  }
   const now = Date.now();
-  return Object.values(await readLeases()).some((expiresAt) => expiresAt > now);
+  return Object.values(leases).some((expiresAt) => expiresAt > now);
 }
 
 /** Run `fn` under suppression, dropping this call's lease (not anyone else's) afterwards. */

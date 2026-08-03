@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { installChromeStub, type ChromeStub } from "./testing/chrome-stub.ts";
-import { groupStartIndex, buildGroupOrder, pinTab, unpinTab, getPinnedTabs } from "./pin.ts";
+import { groupStartIndex, buildGroupOrder, pinTab, unpinTab, getPinnedTabs, syncPinUrl, clearPinTabIds, PIN_BADGE } from "./pin.ts";
 
 // 2 pinned tabs, then group A (1), group B (2), group C (3).
 function strip(): chrome.tabs.Tab[] {
@@ -93,6 +93,59 @@ describe("unpinTab", () => {
   it("returns false when nothing matches", async () => {
     await pinTab("https://a.com", "Work", 0, "A", 42);
     expect(await unpinTab("https://b.com", "Work", 99)).toBe(false);
+    expect(await getPinnedTabs()).toHaveLength(1);
+  });
+});
+
+describe("syncPinUrl", () => {
+  beforeEach(() => {
+    installChromeStub();
+  });
+
+  it("returns null when no pin tracks the tab", async () => {
+    await pinTab("https://a.com", "Work", 0, "A", 42);
+    expect(await syncPinUrl(99, "https://b.com", "B")).toBeNull();
+  });
+
+  it("follows the tab through a navigation and returns the entry", async () => {
+    await pinTab("https://a.com", "Work", 0, "A", 42);
+    const pin = await syncPinUrl(42, "https://a.com/deep", "Deep");
+    expect(pin).toMatchObject({ url: "https://a.com/deep", title: "Deep" });
+    expect(await getPinnedTabs()).toEqual([
+      expect.objectContaining({ url: "https://a.com/deep", title: "Deep" }),
+    ]);
+  });
+
+  it("strips the title badge before storing — applying the 📌 is not a rename", async () => {
+    await pinTab("https://a.com", "Work", 0, "A", 42);
+    const pin = await syncPinUrl(42, "https://a.com", `${PIN_BADGE}A`);
+    expect(pin?.title).toBe("A");
+    expect((await getPinnedTabs())[0].title).toBe("A");
+  });
+});
+
+describe("clearPinTabIds", () => {
+  beforeEach(() => {
+    installChromeStub();
+  });
+
+  // Tab ids are per-browser-session; a stale one collides with an unrelated tab in the next
+  // session, and syncPinUrl (tabId-only match) then rewrites the pin to wherever it goes.
+  it("sheds every stored tabId and keeps the rest of each entry", async () => {
+    await pinTab("https://a.com", "Work", 0, "A", 42);
+    await pinTab("https://b.com", "Work", 1, "B", 43);
+    await clearPinTabIds();
+    const pins = await getPinnedTabs();
+    expect(pins).toHaveLength(2);
+    for (const p of pins) expect(p.tabId).toBeUndefined();
+    expect(pins[0]).toMatchObject({ url: "https://a.com", groupName: "Work", position: 0, title: "A" });
+    // The hijack scenario end-to-end: the old id now belongs to some other tab.
+    expect(await syncPinUrl(42, "https://evil.example", "Evil")).toBeNull();
+  });
+
+  it("is a no-op when nothing stores a tabId", async () => {
+    await pinTab("https://a.com", "Work", 0);
+    await clearPinTabIds();
     expect(await getPinnedTabs()).toHaveLength(1);
   });
 });

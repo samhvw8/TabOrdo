@@ -1,9 +1,7 @@
 // Position locks: hold a tab or group at an index, with the title badge that marks it.
 
 import { pinTab, unpinTab, getPinnedTabs, applyPinsToGroup, pinGroup, unpinGroup,
-         applyGroupPinsToWindow, buildGroupOrder } from "../pin.ts";
-
-const PIN_BADGE = "📌 ";
+         applyGroupPinsToWindow, buildGroupOrder, PIN_BADGE } from "../pin.ts";
 
 // Injected into the page. Prepends a pin badge to document.title and keeps it
 // applied across SPA title changes via a MutationObserver stored on window.
@@ -30,7 +28,9 @@ function removeTitleBadgeInPage(badge: string): void {
   if (document.title.startsWith(badge)) document.title = document.title.slice(badge.length);
 }
 
-async function setTitleBadge(tabId: number, on: boolean): Promise<void> {
+/** Exported for the background's pin URL sync listener (a navigation wipes the injected
+ *  badge) and the pins panel's unpin button. Injection failures are logged, never thrown. */
+export async function setTitleBadge(tabId: number, on: boolean): Promise<void> {
   try {
     await chrome.scripting.executeScript({
       target: { tabId },

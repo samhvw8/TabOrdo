@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { getPinnedTabs, getPinnedGroups, savePinnedTabs, unpinTab, unpinGroup, reorderPins, applyPinsToGroup, type PinnedTabEntry, type PinnedGroupEntry } from "../lib/pin.ts";
-  import { switchToTab } from "../lib/tabs/index.ts";
+  import { getPinnedTabs, getPinnedGroups, savePinnedTabs, pinTab, unpinTab, unpinGroup, reorderPins, applyPinsToGroup, stripPinBadge, type PinnedTabEntry, type PinnedGroupEntry } from "../lib/pin.ts";
+  import { switchToTab, setTitleBadge } from "../lib/tabs/index.ts";
   import { faviconCacheUrl } from "../lib/favicon.ts";
 
   let pinnedTabs = $state<PinnedTabEntry[]>([]);
@@ -59,8 +59,17 @@
       const matchByUrl = !openTab ? allTabs.find((t) => t.url === pin.url) : undefined;
       const match = openTab || matchByUrl;
       if (match) {
-        if (match.id && pin.tabId !== match.id) { pin.tabId = match.id; needsSave = true; }
-        if (match.title && pin.title !== match.title) { pin.title = match.title; needsSave = true; }
+        if (match.id && pin.tabId !== match.id) {
+          pin.tabId = match.id;
+          needsSave = true;
+          // A backfilled id means this session never badged the tab (ids reset at startup,
+          // and the URL match is how the pin found it again) — put the 📌 back.
+          void setTitleBadge(match.id, true);
+        }
+        // The badge is part of the page title while the lock is live; storing it verbatim
+        // put "📌 " inside the pin's own saved title.
+        const cleanTitle = stripPinBadge(match.title);
+        if (cleanTitle && pin.title !== cleanTitle) { pin.title = cleanTitle; needsSave = true; }
         if (match.url && pin.url !== match.url) { pin.url = match.url; needsSave = true; }
       } else if (!pin.tabId) {
         const byUrl = allTabs.find((t) => t.url === pin.url);
@@ -84,19 +93,38 @@
     return openTabs.find((t) => t.url === url);
   }
 
-  async function handleSwitchTo(url: string, tabId: number | undefined, shiftKey: boolean) {
-    const tab = findOpenTab(url, tabId);
+  async function handleSwitchTo(pin: PinnedTabEntry) {
+    const tab = findOpenTab(pin.url, pin.tabId);
     if (tab?.id) {
       await switchToTab(tab.id);
-    } else if (shiftKey) {
-      // Reopen a closed pinned tab at its URL
-      await chrome.tabs.create({ url, active: true });
-      await load();
+      return;
     }
+    // Closed: a plain click reopens it. This list is the only place the tab still exists, and
+    // a dead row that only shift-click revived read as broken.
+    const created = await chrome.tabs.create({ url: pin.url, active: true });
+    if (created.id) {
+      // Re-point the entry at the new tab BEFORE regrouping: while the navigation is still
+      // committing, tab.url is empty, so applyPinsToGroup and the badge sync can only find
+      // the tab by id.
+      await pinTab(pin.url, pin.groupName, pin.position, pin.title, created.id);
+      const group = (await chrome.tabGroups.query({})).find((g) => g.title === pin.groupName);
+      if (group) {
+        await chrome.tabs.group({ tabIds: [created.id], groupId: group.id });
+        await applyPinsToGroup(group.id, pin.groupName);
+        // The group may live in another window — follow the tab there.
+        await switchToTab(created.id);
+      }
+    }
+    await load();
   }
 
-  async function handleUnpinTab(url: string, groupName: string) {
-    await unpinTab(url, groupName);
+  async function handleUnpinTab(pin: PinnedTabEntry) {
+    // Pass the tabId so resolution matches getPinForTab's tabId-first order (see unpinTab).
+    const removed = await unpinTab(pin.url, pin.groupName, pin.tabId);
+    // The /unpin palette path clears the badge; without this the panel's unpin left the 📌
+    // on the page until the next navigation.
+    const tab = findOpenTab(pin.url, pin.tabId);
+    if (removed && tab?.id) await setTitleBadge(tab.id, false);
     await load();
   }
 
@@ -284,8 +312,8 @@
                 <!-- Clickable area → switch to tab (shift-click reopens if closed) -->
                 <button
                   class="flex-1 min-w-0 text-left py-1.5 pr-1 cursor-pointer hover:bg-surface-hover {openTab ? '' : 'opacity-60'}"
-                  onclick={(e) => handleSwitchTo(pin.url, pin.tabId, e.shiftKey)}
-                  title={openTab ? `Switch to: ${displayTitle}` : `Closed — shift-click to reopen: ${pin.url}`}
+                  onclick={() => handleSwitchTo(pin)}
+                  title={openTab ? `Switch to: ${displayTitle}` : `Closed — click to reopen: ${pin.url}`}
                 >
                   <div class="text-[10px] text-text truncate">{displayTitle}</div>
                   <div class="text-[9px] text-text-muted truncate">{pin.url}</div>
@@ -294,7 +322,7 @@
                 <!-- Unpin -->
                 <button
                   class="shrink-0 px-2 self-stretch text-[10px] text-accent-red hover:text-accent-red/80 hover:bg-accent-red/5 transition-colors"
-                  onclick={() => handleUnpinTab(pin.url, pin.groupName)}
+                  onclick={() => handleUnpinTab(pin)}
                   title="Unpin this tab"
                 >unpin</button>
               </div>

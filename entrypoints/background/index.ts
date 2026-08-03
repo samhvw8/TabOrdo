@@ -1,6 +1,6 @@
 import { getConfig, matchDomainToRule, isIgnoredUrl, isIgnoredGroupName } from "../../lib/rules.ts";
-import { getFullHostname, getDomainMapper, sortTabsInWindow, pickMajorityWindow, GROUP_COLORS, hashCode } from "../../lib/tabs/index.ts";
-import { syncPinUrl } from "../../lib/pin.ts";
+import { getFullHostname, getDomainMapper, sortTabsInWindow, pickMajorityWindow, GROUP_COLORS, hashCode, setTitleBadge } from "../../lib/tabs/index.ts";
+import { syncPinUrl, clearPinTabIds } from "../../lib/pin.ts";
 import { findBounceTarget } from "../../lib/bounce.ts";
 import { logAction } from "../../lib/actionLog.ts";
 import { addToReadingList } from "../../lib/readinglist.ts";
@@ -8,6 +8,10 @@ import { checkAIAvailability, suggestGroups, setAIProgress, getAIProgress, defau
 import { isBulkLocked, acquireBulkLock, releaseBulkLock, newLockOwner, withBulkLock, AI_LEASE_MS } from "../../lib/bulklock.ts";
 let pinSyncInProgress = false;
 const ungroupTimers = new Map<number, ReturnType<typeof setTimeout>>();
+
+// How often a live AI run re-ups its bulk-lock lease (see runAIGroup). Far inside
+// AI_LEASE_MS, so suppression can't lapse between ticks.
+const AI_LEASE_RENEW_MS = 60 * 1000;
 
 // Never dissolve a group younger than this — another manager (or our own
 // create→title two-step) may still be filling/titling it.
@@ -270,9 +274,14 @@ export default defineBackground(() => {
   // Sync pinned tab URL and title when a tab navigates or finishes loading
   register("tabs.onUpdated (pin URL sync)", () => {
     chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-      if (!changeInfo.url && !changeInfo.title) return;
+      const navDone = changeInfo.status === "complete";
+      if (!changeInfo.url && !changeInfo.title && !navDone) return;
       try {
-        await syncPinUrl(tabId, tab.url || "", tab.title);
+        const pin = await syncPinUrl(tabId, tab.url || "", tab.title);
+        // A full navigation tears down the injected MutationObserver with the page, leaving
+        // the pin live but unbadged — re-apply once the new document has settled. Idempotent
+        // in-page, so the title echo this causes converges instead of looping.
+        if (pin && navDone) await setTitleBadge(tabId, true);
       } catch (e) {
         console.error("[TabOrdo] pin URL sync error:", e);
       }
@@ -529,6 +538,13 @@ export default defineBackground(() => {
     // reject too, and outside the try their rejection skipped the release and left the whole
     // profile suppressed for the ten-minute lease.
     const lockOwner = newLockOwner();
+    // Renew the lease while the run is live. A single fixed lease silently lapsed under a
+    // first-use model download or an oversized tab set, leaving the rest of the run
+    // unsuppressed; the interval keeps it standing however long suggestGroups takes.
+    let renewInFlight: Promise<void> = Promise.resolve();
+    const renewTimer = setInterval(() => {
+      renewInFlight = acquireBulkLock(lockOwner, AI_LEASE_MS);
+    }, AI_LEASE_RENEW_MS);
     try {
       await acquireBulkLock(lockOwner, AI_LEASE_MS);
 
@@ -603,12 +619,22 @@ export default defineBackground(() => {
       await setAIProgress({ ...defaultProgress(), status: "error", error: err });
       return { ok: false, message: err };
     } finally {
+      clearInterval(renewTimer);
+      // A renewal whose read landed before this release would write the full lease back
+      // after it — wait out any in-flight tick so the release is the last word.
+      await renewInFlight;
       await releaseBulkLock(lockOwner);
     }
   }
 
   register("runtime.onStartup", () => {
     chrome.runtime.onStartup.addListener(async () => {
+      // Tab ids are per-browser-session, and the new session reuses the same small range —
+      // a stale pin.tabId therefore lands on an unrelated tab, and syncPinUrl (tabId-only
+      // match) would rewrite the pin to wherever that tab goes. Shed them; URL matching
+      // backfills fresh ids. Deliberately not in onInstalled: an extension reload keeps the
+      // browser session, so the stored ids are still the right tabs there.
+      await clearPinTabIds().catch((e) => console.error("[TabOrdo] pin tabId reset:", e));
       const alarm = await chrome.alarms.get(DISCARD_ALARM);
       if (!alarm) {
         chrome.alarms.create(DISCARD_ALARM, { periodInMinutes: 5 });

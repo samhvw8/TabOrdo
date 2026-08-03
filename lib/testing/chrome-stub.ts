@@ -114,7 +114,12 @@ export function installChromeStub(): ChromeStub {
   let nextWindowId = 900;
 
   const storageArea = (data: Record<string, unknown>, areaName: string) => ({
-    get: async (keys: string | string[]) => {
+    get: async (keys: string | string[] | null) => {
+      // null = the whole area, exactly like real chrome.storage. Recorded as "*".
+      if (keys === null) {
+        stub.storageReads.push({ area: areaName, keys: ["*"] });
+        return { ...data };
+      }
       const arr = Array.isArray(keys) ? keys : [keys];
       // Recorded so tests can assert *which* keys a read pulls in. chrome.storage
       // deserializes every key you name, so naming a big one you don't need is a real cost.
@@ -136,11 +141,15 @@ export function installChromeStub(): ChromeStub {
         void Promise.resolve().then(() => fn(structuredClone(changes), areaName));
       }
     },
-    remove: async (key: string) => {
-      const oldValue = data[key];
-      delete data[key];
+    remove: async (keys: string | string[]) => {
+      const arr = Array.isArray(keys) ? keys : [keys];
+      const changes: Record<string, { oldValue?: unknown }> = {};
+      for (const k of arr) {
+        changes[k] = { oldValue: data[k] };
+        delete data[k];
+      }
       for (const fn of stub.changeListeners) {
-        void Promise.resolve().then(() => fn({ [key]: { oldValue } }, areaName));
+        void Promise.resolve().then(() => fn(structuredClone(changes), areaName));
       }
     },
   });

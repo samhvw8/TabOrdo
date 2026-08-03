@@ -137,6 +137,40 @@ describe("bulk lock", () => {
     expect(await isBulkLocked()).toBe(true);
   });
 
+  // The lost-update race the shared-map shape allowed: acquire and release each rewrote the
+  // whole map, so a release whose read predated a concurrent acquire wrote the map back
+  // without the new lease — dropping the AI run's, at the exact popup→background hand-off.
+  // Per-owner keys make the interleaving harmless.
+  it("a concurrent release cannot drop another owner's fresh lease", async () => {
+    vi.useFakeTimers();
+    const popup = newLockOwner();
+    const ai = newLockOwner();
+    await acquireBulkLock(popup, 60_000);
+
+    await Promise.all([acquireBulkLock(ai, 10 * 60_000), releaseBulkLock(popup)]);
+
+    // Past the popup's grace AND its original lease — only the AI lease can be holding this.
+    vi.advanceTimersByTime(90_000);
+    expect(await isBulkLocked()).toBe(true);
+  });
+
+  it("sweeps an expired key only once it is stale by a wide margin", async () => {
+    vi.useFakeTimers();
+    const stub = installChromeStub();
+    await acquireBulkLock(newLockOwner(), 1_000);
+
+    // Expired but fresh: reported unlocked, key retained (a live flow could still renew it).
+    vi.advanceTimersByTime(2_000);
+    expect(await isBulkLocked()).toBe(false);
+    expect(Object.keys(stub.sessionData)).toHaveLength(1);
+
+    // Stale past the slack: the next read sweeps it.
+    vi.advanceTimersByTime(61_000);
+    expect(await isBulkLocked()).toBe(false);
+    await Promise.resolve();
+    expect(Object.keys(stub.sessionData)).toHaveLength(0);
+  });
+
   it("honours a lease left behind in the previous single-owner shape", async () => {
     vi.useFakeTimers();
     const stub = installChromeStub();

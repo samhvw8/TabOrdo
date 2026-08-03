@@ -9,6 +9,15 @@ export interface PinnedTabEntry {
 
 const STORAGE_KEY = "pinnedTabs";
 
+/** Prefix the injected title badge adds (see lib/tabs/lock.ts). Lives here so the sync paths
+ *  can strip it before storing a title — otherwise the onUpdated echo of applying the badge
+ *  writes "📌 Title" into the pin entry itself. */
+export const PIN_BADGE = "📌 ";
+
+export function stripPinBadge(title?: string): string | undefined {
+  return title?.startsWith(PIN_BADGE) ? title.slice(PIN_BADGE.length) : title;
+}
+
 export async function getPinnedTabs(): Promise<PinnedTabEntry[]> {
   const data = await chrome.storage.local.get(STORAGE_KEY);
   return Array.isArray(data[STORAGE_KEY]) ? data[STORAGE_KEY] : [];
@@ -74,15 +83,36 @@ export function getPinForTab(url: string, groupName: string, pins: PinnedTabEntr
   return pins.find((p) => p.url === url && p.groupName === groupName);
 }
 
-export async function syncPinUrl(tabId: number, newUrl: string, newTitle?: string): Promise<boolean> {
+/** Returns the pin tracking `tabId` (updated in place), or null if the tab isn't pinned —
+ *  the caller uses that to know whether to re-apply the title badge after a navigation. */
+export async function syncPinUrl(tabId: number, newUrl: string, newTitle?: string): Promise<PinnedTabEntry | null> {
   const pins = await getPinnedTabs();
   const pin = pins.find((p) => p.tabId === tabId);
-  if (!pin) return false;
+  if (!pin) return null;
+  const cleanTitle = stripPinBadge(newTitle);
   let changed = false;
   if (newUrl && pin.url !== newUrl) { pin.url = newUrl; changed = true; }
-  if (newTitle && pin.title !== newTitle) { pin.title = newTitle; changed = true; }
+  if (cleanTitle && pin.title !== cleanTitle) { pin.title = cleanTitle; changed = true; }
   if (changed) await savePinnedTabs(pins);
-  return changed;
+  return pin;
+}
+
+/**
+ * Called from runtime.onStartup. Tab ids do not survive a browser restart, and Chrome hands
+ * the new session's ids out from the same small range — so a stale pin.tabId will collide
+ * with an unrelated tab, and syncPinUrl (which matches by tabId alone) would then rewrite
+ * the pin to wherever that tab navigates. URL matching backfills fresh ids afterwards.
+ */
+export async function clearPinTabIds(): Promise<void> {
+  const pins = await getPinnedTabs();
+  let changed = false;
+  for (const p of pins) {
+    if (p.tabId !== undefined) {
+      delete p.tabId;
+      changed = true;
+    }
+  }
+  if (changed) await savePinnedTabs(pins);
 }
 
 export async function applyPinsToGroup(
