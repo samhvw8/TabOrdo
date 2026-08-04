@@ -93,11 +93,29 @@ The dashboard shows a live 🔊 banner when any tabs are playing audio — click
 | Section | Description |
 |---------|-------------|
 | Home | Dashboard with action buttons, toggles, and tab overview |
-| Pins | Manage position-pinned tabs |
+| Locks | Position locks for tabs and groups, plus per-domain sort priority |
 | Rules | Custom grouping rules editor |
+| AI | On-device grouping with Gemini Nano |
 | More | All available actions with ★ toggle for dashboard |
 | Settings | Ignore lists for auto-group/ungroup |
 | Archive | Opens full-page archive in a new tab |
+
+## Sort Priority
+
+Locks hold a tab at a fixed slot. Sort priority instead changes the order a domain sort
+produces, without holding anything — a locked tab still wins. Two knobs per domain, both set
+by the order of the list in the Locks panel:
+
+| Knob | Effect |
+|------|--------|
+| `first` | That domain leads the strip, ahead of every unlisted domain, in list order |
+| Path patterns | Order tabs within that domain — the first pattern a URL matches decides |
+
+Patterns match from the start of the path and stay open at the end, so `/inbox` matches
+`/inbox/42`. Lead with `*` to match a segment in the middle: `*/pulls*` catches
+`github.com/org/repo/pulls/12`. A domain entry also covers its subdomains, and rules higher in
+the list take precedence. Each row shows how many open tabs it currently matches, so a pattern
+that matches nothing is visible immediately.
 
 ## Triage Views
 

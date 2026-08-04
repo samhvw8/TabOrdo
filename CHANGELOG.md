@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.6.0 — 2026-07-27
+## 0.6.0 — 2026-08-04
 
 ### Renamed
 
@@ -10,6 +10,7 @@
 
 ### New Features
 
+- **Sort priority per domain** — the Locks panel can now customise what a domain sort produces, in two independent ways. A domain marked `first` leads the strip ahead of every unlisted domain, in the order you drag them; path patterns under a domain order that domain's own tabs, first matching pattern wins. Neither is a lock: nothing is held at a fixed slot, and a locked tab still takes precedence. Patterns match from the start of the path (`/inbox` matches `/inbox/42`) and take a leading `*` to reach a segment in the middle (`*/pulls*`); a domain entry covers its subdomains, and rules higher in the list win. Each row reports how many open tabs it matches, so a pattern that matches nothing says so instead of silently never firing
 - **Abbreviation search** — `yt` now finds YouTube and `gh` finds GitHub. Matching added an in-order character tier, ranked by the tightest window containing the query, so a real match still outranks a scattered coincidence
 - **Rule tester** — the Rules editor can now test a URL against your rules and reports which one claims it and via which pattern. It also names rules that match but sit later in the list, which can never fire: rule order decides the winner, and nothing in the editor showed that before
 - **Automation activity on the dashboard** — the most recent background group/ungroup now appears directly beneath the toggles that caused it, so "why did my tab move" has an answer next to the switch rather than only in Settings
@@ -19,6 +20,21 @@
 
 ### Bug Fixes
 
+- **Fix a wildcard rule pattern being able to hang the extension** — glob patterns compiled to a regex whose repeated `.*` segments backtrack superlinearly on a near miss: a 21-character pattern took 8.3 seconds against a 40-character input, and the cap allowed patterns five times that long. Ignore rules and domain rules run on every tab event, and sort rules run on the auto-sort path, so one such pattern froze the service worker on every page load. Wildcards are now matched without compiling a regex at all, which cannot backtrack: the worst pattern the cap allows now returns instantly
+- **Fix a rule pattern starting with `?` throwing** — `?` reached the regex unescaped, where it is a quantifier rather than a character, so a leading one raised an uncaught "Nothing to repeat" straight out of a tab-event listener and `a?` matched the empty string. `?` is now literal in every wildcard pattern, which is what someone pasting a query string means by it
+- **Fix the palette firing actions mid-IME-composition** — Enter while picking a pinyin candidate ran the selected command instead of accepting the candidate
+- **Fix the volume slider's state bleeding onto the wrong tab** — tab lists were unkeyed, so re-rendering reused a row's component for a different tab
+- **Fix Load from File silently doing nothing in the popup** — the file picker steals focus, which Chrome treats as a reason to close the popup, taking the pending read with it. It now says to use the side panel instead
+- **Fix arrow navigation stopping on divider rows**, and the selection index being left past the end after `Ctrl+Delete`
+- **Fix `/aigroup` staying unavailable until a browser restart** — a service worker killed mid-model-call left an in-flight record nothing would ever clear. Runs now carry a start time and expire
+- **Fix auto-ungroup and auto-sort being skipped for an ignored URL** — the ignore check wrapped all three automations rather than the grouping it was meant to guard
+- **Fix a listener registration failure taking down the rest** — all 17 top-level registrations are now individually guarded
+- **Fix deduplication treating distinct pages as duplicates** — it keyed on the path alone, so two URLs differing only by query string or fragment collapsed into one. It now uses the full URL, stripping only `utm_*`, `fbclid` and `gclid`, and never closes a Chrome-pinned tab
+- **Fix undo after a close losing the tab's place** — restored tabs came back at the end, ungrouped. Undo now restores the strip index and rejoins a matching live group
+- **Fix `/archive` closing more than it archived**, and not recording an undo snapshot at all
+- **Fix manual grouping ignoring the ignore lists** — group, regroup and ungroup all bypassed both lists, including pulling tabs out of protected groups
+- **Fix a failed undo snapshot letting the destructive action proceed anyway** — snapshots are now serialized, and a failure aborts the action rather than leaving it unundoable
+- **Fix position locks losing their badge after a browser restart** — tab ids do not survive a restart, so a lock that found its tab again by URL never re-applied the 📌, and the badge could be stored into the lock's own saved title
 - **Fix two AI runs starting at once and moving the same tabs** — the AI progress field doubles as the mutex deciding whether a run is already in flight, and the popup wrote to it: dismissing a finished run's panel, or a side panel that had been open since before the run started, blanked the mutex and let a second concurrent run begin. The popup no longer writes that key at all; the background owns it outright
 - **Fix stale state in a side panel left open** — every cross-realm value was read once when the surface mounted and never again, so a side panel could sit there offering to start an AI run that was already running, showing settings toggled elsewhere, or an undo button that no longer matched the stack. All three now update live. This also retires the AI progress poller and its "has the background written yet?" timeout heuristic
 - **Fix undo after removing duplicates never reopening the tabs** — deduplication closed tabs but recorded a *group* snapshot, which it never changes, so undo restored grouping and left every closed duplicate gone. The snapshot now lives inside the deduplication itself, which also covers the action-menu entry that recorded nothing at all
