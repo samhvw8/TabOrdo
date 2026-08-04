@@ -30,4 +30,8 @@ jobs:
         with:
           name: tab-ordo-chrome
           path: .output/*.zip
+          # `.output` is a dotted directory, and upload-artifact treats everything under one as
+          # hidden. Without this the step found no files and warned rather than failed, so every
+          # build on main has silently uploaded nothing.
+          include-hidden-files: true
           retention-days: 30
