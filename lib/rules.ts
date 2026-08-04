@@ -283,13 +283,17 @@ export function isIgnoredGroupName(title: string, ignoreGroupNames: IgnoreRule[]
   return false;
 }
 
-// Same cap the palette's /re search uses: an unbounded hand-typed pattern is a backtracking
-// hazard on every tab event. It applies ONLY to patterns that get compiled into a RegExp —
-// a plain literal is one string comparison at any length, and capping those silently
+// Same cap the palette's /re search uses. It applies ONLY to patterns with wildcard or regex
+// syntax — a plain literal is one string comparison at any length, and capping those silently
 // disabled legitimate rules for long URLs.
+//
+// The cap is load-bearing for `isRegex` patterns, which really are compiled and really can
+// backtrack. Globs no longer compile at all (see globMatches), so for them it now only bounds
+// how much pattern a user can type, not a runtime hazard. Kept rather than lifted so the limit
+// the Settings panel advertises stays the limit that applies.
 export const MAX_PATTERN_LENGTH = 100;
 
-/** True when this rule compiles to a RegExp, and so is subject to MAX_PATTERN_LENGTH. */
+/** True when this rule uses wildcard or regex syntax, and so is subject to MAX_PATTERN_LENGTH. */
 export function isCompiledPattern(rule: Pick<IgnoreRule, "pattern" | "isRegex">): boolean {
   return !!rule.isRegex || rule.pattern.includes("*");
 }
@@ -305,9 +309,57 @@ export function hasNestedQuantifier(pattern: string): boolean {
   return NESTED_QUANTIFIER.test(pattern);
 }
 
+/**
+ * Glob matching without compiling a RegExp: split on the wildcard and walk the input with
+ * indexOf, taking the leftmost placement of each literal run. That is optimal when the only
+ * wildcard is `*` (it matches anything, so an earlier anchor never rules out a later one), and
+ * it cannot backtrack.
+ *
+ * Compiling instead — the obvious `*` to `.*` expansion — produces the classic `.*a.*a.*a`
+ * shape, which backtracks superlinearly on a near miss: at MAX_PATTERN_LENGTH/5 characters it
+ * measured 8.3 seconds on a 40-character input. That runs on the auto-sort path, on the single
+ * thread of an MV3 service worker, for every tab that finishes loading. hasNestedQuantifier
+ * does not catch it, because a glob escapes every bracket before compiling and so never
+ * contains a group for that heuristic to see.
+ *
+ * `anchorEnd` distinguishes the two shapes in use: ignore/domain rules match the whole string,
+ * path rules match a prefix (see pathMatches).
+ */
+export function globMatches(
+  input: string,
+  pattern: string,
+  anchorEnd: boolean,
+  caseSensitive?: boolean
+): boolean {
+  const hay = caseSensitive ? input : input.toLowerCase();
+  const pat = caseSensitive ? pattern : pattern.toLowerCase();
+  const parts = pat.split("*");
+
+  if (parts.length === 1) return anchorEnd ? hay === pat : hay.startsWith(pat);
+
+  const head = parts[0];
+  if (head && !hay.startsWith(head)) return false;
+  let pos = head.length;
+
+  for (let i = 1; i < parts.length - 1; i++) {
+    const part = parts[i];
+    if (!part) continue;
+    const at = hay.indexOf(part, pos);
+    if (at === -1) return false;
+    pos = at + part.length;
+  }
+
+  const tail = parts[parts.length - 1];
+  if (!tail) return true;
+  // The tail has to sit at the very end and still clear everything already consumed, or
+  // `ab*ba` would accept "aba" by letting the two literals overlap.
+  if (anchorEnd) return hay.endsWith(tail) && hay.length - tail.length >= pos;
+  return hay.indexOf(tail, pos) !== -1;
+}
+
 export function ruleMatches(input: string, rule: IgnoreRule): boolean {
-  const flags = rule.caseSensitive ? "" : "i";
   if (rule.isRegex) {
+    const flags = rule.caseSensitive ? "" : "i";
     if (rule.pattern.length > MAX_PATTERN_LENGTH) return false;
     if (hasNestedQuantifier(rule.pattern)) return false;
     try { return new RegExp(rule.pattern, flags).test(input); } catch { return false; }
@@ -315,8 +367,7 @@ export function ruleMatches(input: string, rule: IgnoreRule): boolean {
   const p = rule.pattern;
   if (p.includes("*")) {
     if (p.length > MAX_PATTERN_LENGTH) return false;
-    const escaped = p.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
-    return new RegExp(`^${escaped}$`, flags).test(input);
+    return globMatches(input, p, true, rule.caseSensitive);
   }
   return rule.caseSensitive ? p === input : p.toLowerCase() === input.toLowerCase();
 }
@@ -423,22 +474,12 @@ export function matchDomainToRule(
   return null;
 }
 
-const regexCache = new Map<string, RegExp>();
-
 export function domainMatches(domain: string, pattern: string, caseSensitive?: boolean): boolean {
-  const flags = caseSensitive ? "" : "i";
-  const cacheKey = `${pattern}:${flags}`;
   if (pattern.includes("*")) {
     if (pattern.length > MAX_PATTERN_LENGTH) return false;
-    let re = regexCache.get(cacheKey);
-    if (!re) {
-      const escaped = pattern
-        .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-        .replace(/\*/g, ".*");
-      re = new RegExp(`^${escaped}$`, flags);
-      regexCache.set(cacheKey, re);
-    }
-    return re.test(domain);
+    // globMatches rather than a compiled `.*` expansion, for the backtracking reason spelled
+    // out on globMatches. This one runs per tab event through isIgnoredUrl.
+    return globMatches(domain, pattern, true, caseSensitive);
   }
   if (caseSensitive) return domain === pattern || domain.endsWith("." + pattern);
   const d = domain.toLowerCase(), p = pattern.toLowerCase();
@@ -455,7 +496,11 @@ export const UNRANKED = Number.MAX_SAFE_INTEGER;
 export interface SortRank {
   /** Position among rank-first domains, or UNRANKED when the domain isn't lifted. */
   domain: number;
-  /** Index of the first path pattern the URL matched, or UNRANKED. */
+  /**
+   * Tier of the first path pattern the URL matched, or UNRANKED. Numbered across every rule
+   * rather than within one, so two tabs ranked by different rules are still on one scale —
+   * see buildSortRanker.
+   */
   path: number;
 }
 
@@ -466,31 +511,19 @@ const NO_RANK: SortRank = { domain: UNRANKED, path: UNRANKED };
 /** The ranker for "no rules configured" — every URL is unranked, so sorting is unchanged. */
 export const noSortRanking: SortRanker = () => NO_RANK;
 
-const pathRegexCache = new Map<string, RegExp>();
-
 // Path globs anchor at the START and stay open at the end, so `/inbox` matches `/inbox/42` —
 // that is what "this section of the site comes first" means to someone typing a rule. A leading
 // star matches anywhere, which is how you reach a segment in the middle of a path: the pattern
 // star-slash-pulls-star catches github.com/org/repo/pulls/12.
 //
-// `?` is escaped along with the usual metacharacters, unlike domainMatches — a path pattern is
-// routinely pasted straight out of the address bar with a query string on it, and an unescaped
-// `?` would silently turn the preceding character optional. Same MAX_PATTERN_LENGTH cap: these
-// compile to a RegExp and run on every comparison.
+// Every character other than the wildcard is literal, `?` included, since a path pattern is
+// routinely pasted straight out of the address bar with a query string still attached.
 //
 // Line comments, not a doc block: the wildcard examples this needs to spell out contain the
 // sequence that would close one early.
 export function pathMatches(path: string, pattern: string): boolean {
   if (!pattern || pattern.length > MAX_PATTERN_LENGTH) return false;
-  let re = pathRegexCache.get(pattern);
-  if (!re) {
-    const escaped = pattern
-      .replace(/[?.+^${}()|[\]\\]/g, "\\$&")
-      .replace(/\*/g, ".*");
-    re = new RegExp(`^${escaped}`, "i");
-    pathRegexCache.set(pattern, re);
-  }
-  return re.test(path);
+  return globMatches(path, pattern, false);
 }
 
 /** The part of a URL a path pattern is tested against. Non-URLs (chrome://newtab et al) yield "". */
@@ -513,6 +546,23 @@ function pathTier(url: string, patterns: string[]): number {
 }
 
 /**
+ * Rule id to its displayed rank position. Counted over rank-first rules only, so switching one
+ * off closes the gap instead of leaving a hole in the numbering.
+ *
+ * Exported because the panel prints these positions as badges: when the sort and the panel each
+ * derived them separately, the two could drift and the badge would quietly start lying about
+ * the order the sort actually produces.
+ */
+export function rankPositionsOf(rules: SortRule[]): Map<string, number> {
+  const positions = new Map<string, number>();
+  let next = 0;
+  for (const rule of rules) {
+    if (rule.enabled && rule.domain && rule.rankFirst) positions.set(rule.id, next++);
+  }
+  return positions;
+}
+
+/**
  * Resolve the configured rules into a per-URL rank, once per sort. Disabled rules drop out
  * entirely, and the returned function memoises — a comparator asks about the same handful of
  * URLs O(n log n) times, same reasoning as getDomainMapper's cache.
@@ -521,12 +571,20 @@ export function buildSortRanker(rules: SortRule[]): SortRanker {
   const active = rules.filter((r) => r.enabled && r.domain);
   if (active.length === 0) return noSortRanking;
 
-  // Rank positions are counted over the rank-first rules only, so switching one off closes the
-  // gap instead of leaving a hole in the numbering the panel displays.
-  const domainRank = new Map<string, number>();
-  let next = 0;
+  const domainRank = rankPositionsOf(rules);
+
+  // Path tiers are numbered across ALL rules, not within each one. Two rules can match tabs
+  // that share a registrable domain (`mail.google.com` and `docs.google.com` both land in the
+  // google.com block), and comparing their local indices would rank a second-listed rule's
+  // first pattern above a first-listed rule's second one. It would also break the comparator
+  // outright: a per-rule index is not a property of the tab alone, so mixing "same rule, compare
+  // tiers" with "different rule, compare titles" admits A<B<C<A cycles, which is undefined
+  // behaviour inside Array.prototype.sort. One scale, ordered by rule position, avoids both.
+  const tierBase = new Map<string, number>();
+  let base = 0;
   for (const rule of active) {
-    if (rule.rankFirst) domainRank.set(rule.id, next++);
+    tierBase.set(rule.id, base);
+    base += rule.patterns.length;
   }
 
   const memo = new Map<string, SortRank>();
@@ -540,9 +598,10 @@ export function buildSortRanker(rules: SortRule[]): SortRanker {
       // `google.com` one takes precedence rather than being shadowed by it.
       const rule = active.find((r) => domainMatches(hostname, r.domain));
       if (rule) {
+        const tier = pathTier(url, rule.patterns);
         rank = {
           domain: rule.rankFirst ? domainRank.get(rule.id)! : UNRANKED,
-          path: pathTier(url, rule.patterns),
+          path: tier === UNRANKED ? UNRANKED : tierBase.get(rule.id)! + tier,
         };
       }
     }

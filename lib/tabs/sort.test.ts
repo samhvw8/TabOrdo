@@ -291,3 +291,35 @@ describe("sortTabsInGroup", () => {
     expect(stub.moves).toEqual([]);
   });
 });
+
+describe("sort rules across two rules on one registrable domain", () => {
+  const sortRule = (over: Partial<SortRule> & { domain: string }): SortRule =>
+    ({ id: over.domain, rankFirst: false, patterns: [], enabled: true, ...over });
+
+  // mail. and docs. both collapse to google.com, so these tabs share a block and their path
+  // tiers get compared directly. Rule order decides, which is the precedence dragging sets.
+  it("orders by rule position, not by each rule's own pattern index", async () => {
+    stub.openTabs = [
+      tab({ id: 1, url: "https://docs.google.com/search", title: "Docs", index: 0 }),
+      tab({ id: 2, url: "https://mail.google.com/inbox", title: "Mail", index: 1 }),
+    ];
+    await setSortRules([
+      // /inbox is the SECOND pattern of the FIRST rule; /search is the first pattern of the
+      // second rule. Per-rule indices would put Docs ahead.
+      sortRule({ domain: "mail.google.com", patterns: ["/starred", "/inbox"] }),
+      sortRule({ domain: "docs.google.com", patterns: ["/search"] }),
+    ]);
+    await sortTabsInWindow(1, "domain");
+    expect(strip()).toEqual([2, 1]);
+  });
+
+  it("still puts any matched path ahead of an unmatched one", async () => {
+    stub.openTabs = [
+      tab({ id: 1, url: "https://docs.google.com/other", title: "Other", index: 0 }),
+      tab({ id: 2, url: "https://docs.google.com/search", title: "Search", index: 1 }),
+    ];
+    await setSortRules([sortRule({ domain: "google.com", patterns: ["/search"] })]);
+    await sortTabsInWindow(1, "domain");
+    expect(strip()).toEqual([2, 1]);
+  });
+});

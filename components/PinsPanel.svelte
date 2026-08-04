@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { getPinnedTabs, getPinnedGroups, savePinnedTabs, pinTab, unpinTab, unpinGroup, reorderPins, applyPinsToGroup, stripPinBadge, type PinnedTabEntry, type PinnedGroupEntry } from "../lib/pin.ts";
   import { switchToTab, setTitleBadge, getFullHostname } from "../lib/tabs/index.ts";
-  import { getSortRules, setSortRules, type SortRule } from "../lib/rules.ts";
+  import { getSortRules, setSortRules, rankPositionsOf, domainMatches, pathMatches, sortPathOf, type SortRule } from "../lib/rules.ts";
   import { faviconCacheUrl } from "../lib/favicon.ts";
 
   let pinnedTabs = $state<PinnedTabEntry[]>([]);
@@ -21,15 +21,26 @@
   let ruleDragIndex = $state<number | null>(null);
   let ruleDropIndex = $state<number | null>(null);
 
-  // Mirrors buildSortRanker's numbering: counted over rank-first rules only, so the badges the
-  // user reads here are the positions the sort will actually apply.
-  let rankNumbers = $derived.by<Map<string, number>>(() => {
-    const map = new Map<string, number>();
-    let n = 0;
+  // The same function the sort itself uses, so a badge can never disagree with the order the
+  // sort produces.
+  let rankNumbers = $derived(rankPositionsOf(sortRules));
+
+  /**
+   * How many open tabs each rule and each of its patterns currently matches. The syntax has
+   * real traps — a bare `truyen` never matches `/truyen/9` because patterns anchor at the
+   * start — and without this the only signal of a wrong pattern is tabs silently not moving.
+   */
+  let matchCounts = $derived.by<Map<string, { domain: number; patterns: number[] }>>(() => {
+    const counts = new Map<string, { domain: number; patterns: number[] }>();
+    const hosts = openTabs.map((t) => ({ host: getFullHostname(t.url || ""), path: sortPathOf(t.url || "") }));
     for (const rule of sortRules) {
-      if (rule.enabled && rule.domain && rule.rankFirst) map.set(rule.id, n++);
+      const owned = hosts.filter((h) => h.host && domainMatches(h.host, rule.domain));
+      counts.set(rule.id, {
+        domain: owned.length,
+        patterns: rule.patterns.map((p) => owned.filter((h) => pathMatches(h.path, p)).length),
+      });
     }
-    return map;
+    return counts;
   });
 
   interface GroupedPins {
@@ -130,6 +141,15 @@
     if (sortRules.some((r) => r.domain.toLowerCase() === domain.toLowerCase())) return;
     sortRules = [...sortRules, { id: crypto.randomUUID(), domain, rankFirst: false, patterns: [], enabled: true }];
     await saveSortRules();
+  }
+
+  /** Same affordance the Rules editor offers — typing a domain by hand is the slow path. */
+  async function addSortRuleFromCurrentTab() {
+    const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const host = getFullHostname(active?.url || "");
+    if (!host) return;
+    newSortDomain = host;
+    await addSortRule();
   }
 
   async function removeSortRule(id: string) {
@@ -353,9 +373,13 @@
       <div class="flex-1 h-px bg-border/50"></div>
       <span class="text-[10px] text-text-muted">{sortRules.length}</span>
     </div>
-    <div class="text-[9px] text-text-muted px-2 pb-1.5 leading-relaxed">
-      Applies when sorting by domain. Drag to reorder — “first” domains lead the strip in this
-      order, and each domain’s patterns order its own tabs.
+    <div class="text-[9px] px-2 pb-1.5 leading-relaxed">
+      <span class="text-accent-green">Not locks.</span>
+      <span class="text-text-muted">
+        These change the order a domain sort produces; they never hold a tab at a fixed slot, and
+        a locked tab still wins. Drag to reorder — “first” domains lead the strip in this order,
+        and each domain’s patterns order its own tabs.
+      </span>
     </div>
 
     {#if sortRules.length > 0}
@@ -367,6 +391,7 @@
       >
         {#each sortRules as rule, i (rule.id)}
           {@const rank = rankNumbers.get(rule.id)}
+          {@const counts = matchCounts.get(rule.id)}
           <div
             class="rounded-md border border-border bg-surface-hover transition-colors
               {ruleDragIndex === i ? 'opacity-40' : ''}
@@ -397,6 +422,13 @@
               </span>
 
               <span class="text-xs text-text truncate flex-1" title={rule.domain}>{rule.domain}</span>
+
+              <span
+                class="shrink-0 text-[9px] {counts && counts.domain > 0 ? 'text-text-muted' : 'text-accent-red'}"
+                title={counts && counts.domain > 0
+                  ? `${counts.domain} open tab(s) on this domain`
+                  : "No open tab matches this domain — check the spelling"}
+              >{counts?.domain ?? 0}t</span>
 
               <button
                 class="shrink-0 text-[9px] px-1.5 py-0.5 rounded border transition-colors
@@ -433,6 +465,14 @@
                 <div class="flex items-center gap-1 py-0.5">
                   <span class="text-[9px] font-mono text-accent-cyan w-5 text-center shrink-0">#{pi + 1}</span>
                   <span class="text-[10px] font-mono text-text truncate flex-1" title={pattern}>{pattern}</span>
+                  {#if counts}
+                    <span
+                      class="shrink-0 text-[9px] {counts.patterns[pi] > 0 ? 'text-text-muted' : 'text-accent-red'}"
+                      title={counts.patterns[pi] > 0
+                        ? `${counts.patterns[pi]} open tab(s) match this pattern`
+                        : "Matches nothing open right now. Patterns match from the start of the path — lead with * to match a segment in the middle."}
+                    >{counts.patterns[pi]}t</span>
+                  {/if}
                   <button
                     class="shrink-0 px-1 text-[9px] text-text-muted hover:text-text disabled:opacity-30 disabled:hover:text-text-muted"
                     onclick={() => movePattern(rule, pi, -1)}
@@ -485,6 +525,11 @@
         class="shrink-0 text-[10px] px-2 py-1 rounded border border-border text-primary hover:text-primary-hover hover:border-primary transition-colors"
         onclick={addSortRule}
       >Add</button>
+      <button
+        class="shrink-0 text-[10px] px-2 py-1 rounded border border-border text-text-muted hover:text-text hover:border-primary transition-colors"
+        onclick={addSortRuleFromCurrentTab}
+        title="Add a rule for the current tab's domain"
+      >This tab</button>
     </div>
   </div>
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { domainMatches, matchDomainToRule, ruleMatches, ruleToRegex, longestCommonSubstring, generalizePatterns, isIgnoredGroupName, isCompiledPattern, MAX_PATTERN_LENGTH, pathMatches, sortPathOf, buildSortRanker, noSortRanking, UNRANKED, type IgnoreRule, type GroupRule, type SortRule } from "./rules.ts";
+import { domainMatches, matchDomainToRule, ruleMatches, ruleToRegex, longestCommonSubstring, generalizePatterns, isIgnoredGroupName, isCompiledPattern, MAX_PATTERN_LENGTH, pathMatches, sortPathOf, buildSortRanker, noSortRanking, globMatches, rankPositionsOf, UNRANKED, type IgnoreRule, type GroupRule, type SortRule } from "./rules.ts";
 
 describe("domainMatches", () => {
   it("exact match", () => {
@@ -440,5 +440,115 @@ describe("buildSortRanker", () => {
   it("leaves a URL with no hostname unranked", () => {
     const rank = buildSortRanker([sortRule({ domain: "a.com", rankFirst: true })]);
     expect(rank("chrome://newtab")).toEqual({ domain: UNRANKED, path: UNRANKED });
+  });
+});
+
+describe("globMatches", () => {
+  it("anchors both ends when asked", () => {
+    expect(globMatches("file.txt", "file.*", true)).toBe(true);
+    expect(globMatches("file.txt.bak", "file.*", true)).toBe(true);
+    expect(globMatches("myfile.txt", "file.*", true)).toBe(false);
+    expect(globMatches("prefix", "pre*fix", true)).toBe(true);
+    expect(globMatches("prefixes", "pre*fix", true)).toBe(false);
+  });
+
+  it("leaves the end open when asked", () => {
+    expect(globMatches("prefixes", "pre*fix", false)).toBe(true);
+    expect(globMatches("/inbox/42", "/inbox", false)).toBe(true);
+  });
+
+  // Two literal runs must not share characters: `ab*ba` needs at least four.
+  it("does not let the head and tail overlap", () => {
+    expect(globMatches("aba", "ab*ba", true)).toBe(false);
+    expect(globMatches("abba", "ab*ba", true)).toBe(true);
+  });
+
+  it("handles bare and trailing wildcards", () => {
+    expect(globMatches("anything", "*", true)).toBe(true);
+    expect(globMatches("abc", "a*", true)).toBe(true);
+    expect(globMatches("abc", "*c", true)).toBe(true);
+    expect(globMatches("", "*", true)).toBe(true);
+  });
+
+  it("is case-insensitive unless told otherwise", () => {
+    expect(globMatches("ABC", "a*c", true)).toBe(true);
+    expect(globMatches("ABC", "a*c", true, true)).toBe(false);
+  });
+
+  // The reason this exists: compiling `*` to `.*` backtracks superlinearly on a near miss.
+  // Twenty-one characters of it measured 8.3s before this replaced it.
+  it("stays fast on the pattern that used to hang", () => {
+    const started = Date.now();
+    expect(globMatches("a".repeat(400), "*a".repeat(20) + "Z", false)).toBe(false);
+    expect(Date.now() - started).toBeLessThan(50);
+  });
+});
+
+describe("rankPositionsOf", () => {
+  const sortRule = (over: Partial<SortRule> & { domain: string }): SortRule =>
+    ({ id: over.domain, rankFirst: false, patterns: [], enabled: true, ...over });
+
+  it("numbers only the rank-first, enabled rules, in list order", () => {
+    const positions = rankPositionsOf([
+      sortRule({ domain: "a.com", rankFirst: true }),
+      sortRule({ domain: "b.com" }),
+      sortRule({ domain: "c.com", rankFirst: true, enabled: false }),
+      sortRule({ domain: "d.com", rankFirst: true }),
+    ]);
+    expect([...positions.entries()]).toEqual([["a.com", 0], ["d.com", 1]]);
+  });
+});
+
+describe("buildSortRanker — path tiers across rules", () => {
+  const sortRule = (over: Partial<SortRule> & { domain: string }): SortRule =>
+    ({ id: over.domain, rankFirst: false, patterns: [], enabled: true, ...over });
+
+  // Two rules can own hostnames that share a registrable domain, so their tabs land in the same
+  // block and their tiers get compared. Per-rule indices would put the second rule's first
+  // pattern ahead of the first rule's second one — and would not be a per-tab key at all, which
+  // is what makes a comparator intransitive.
+  it("numbers tiers across rules, in rule order", () => {
+    const rank = buildSortRanker([
+      sortRule({ domain: "mail.google.com", patterns: ["/starred", "/inbox"] }),
+      sortRule({ domain: "docs.google.com", patterns: ["/search"] }),
+    ]);
+    expect(rank("https://mail.google.com/starred").path).toBe(0);
+    expect(rank("https://mail.google.com/inbox").path).toBe(1);
+    expect(rank("https://docs.google.com/search").path).toBe(2);
+  });
+
+  it("still sorts an unmatched path last", () => {
+    const rank = buildSortRanker([sortRule({ domain: "a.com", patterns: ["/x"] })]);
+    expect(rank("https://a.com/other").path).toBe(UNRANKED);
+  });
+
+  it("keeps a lone rule's tiers zero-based", () => {
+    const rank = buildSortRanker([sortRule({ domain: "a.com", patterns: ["/x", "/y"] })]);
+    expect(rank("https://a.com/x").path).toBe(0);
+    expect(rank("https://a.com/y").path).toBe(1);
+  });
+});
+
+// `?` used to reach the RegExp unescaped in the glob branch, where it is a quantifier, not a
+// character: `a?` matched the empty string, and a leading `?` threw an uncaught SyntaxError
+// ("Nothing to repeat") straight out of a tab-event handler. Differential fuzzing over 260k
+// random pattern/input pairs found this to be the ONLY behavioural difference between the old
+// compiled-regex matcher and globMatches.
+describe("glob patterns treat ? as a literal", () => {
+  const rule = (pattern: string): IgnoreRule => ({ pattern, enabled: true });
+
+  it("does not treat ? as an optional-previous-character quantifier", () => {
+    expect(ruleMatches("", rule("a?*"))).toBe(false);
+    expect(ruleMatches("a?", rule("a?*"))).toBe(true);
+  });
+
+  it("does not throw on a pattern that starts with ?", () => {
+    expect(() => ruleMatches("anything", rule("?x*"))).not.toThrow();
+    expect(ruleMatches("?xy", rule("?x*"))).toBe(true);
+  });
+
+  it("matches a query string literally", () => {
+    expect(domainMatches("localhost:3000", "localhost:*")).toBe(true);
+    expect(pathMatches("/search?q=svelte", "/search?q=*")).toBe(true);
   });
 });
