@@ -470,7 +470,7 @@
                       class="shrink-0 text-[9px] {counts.patterns[pi] > 0 ? 'text-text-muted' : 'text-accent-red'}"
                       title={counts.patterns[pi] > 0
                         ? `${counts.patterns[pi]} open tab(s) match this pattern`
-                        : "Matches nothing open right now. Patterns match from the start of the path — lead with * to match a segment in the middle."}
+                        : "Matches nothing open right now. * is one path segment and never crosses a slash; use ** for any number of them, e.g. /truyen/** or **/pulls/**."}
                     >{counts.patterns[pi]}t</span>
                   {/if}
                   <button
@@ -498,7 +498,7 @@
               <div class="flex items-center gap-1 mt-0.5">
                 <input
                   class="flex-1 min-w-0 px-1.5 py-0.5 text-[10px] font-mono rounded bg-surface border border-border text-text placeholder:text-text-muted focus:outline-none focus:border-primary"
-                  placeholder="path pattern, e.g. /truyen/* or */pulls*"
+                  placeholder="path pattern — /truyen/* is one level, /truyen/** is all of them"
                   bind:value={patternDrafts[rule.id]}
                   onkeydown={(e) => submitOnEnter(e, () => addPattern(rule))}
                 />

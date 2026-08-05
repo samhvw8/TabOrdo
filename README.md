@@ -111,11 +111,21 @@ by the order of the list in the Locks panel:
 | `first` | That domain leads the strip, ahead of every unlisted domain, in list order |
 | Path patterns | Order tabs within that domain — the first pattern a URL matches decides |
 
-Patterns match from the start of the path and stay open at the end, so `/inbox` matches
-`/inbox/42`. Lead with `*` to match a segment in the middle: `*/pulls*` catches
-`github.com/org/repo/pulls/12`. A domain entry also covers its subdomains, and rules higher in
-the list take precedence. Each row shows how many open tabs it currently matches, so a pattern
-that matches nothing is visible immediately.
+Path patterns are segment-aware, and both ends are anchored:
+
+| Pattern | Matches |
+|---------|---------|
+| `*` | Exactly one segment, never crossing a `/` |
+| `**` | Any number of segments, including none |
+| `/truyen/*` | `/truyen/9`, but not `/truyen/x/y` |
+| `/truyen/**` | `/truyen` and everything beneath it |
+| `/truyen/*/*/a/*` | Exactly those levels, with `a` fourth |
+| `**/pulls/**` | `pulls` at any depth |
+
+The leading `/` is optional — `truyen/*` and `/truyen/*` are the same pattern. Everything other
+than a wildcard is literal, `?` included, so a query string can be pasted in as-is. A domain
+entry also covers its subdomains, and rules higher in the list take precedence. Each row shows
+how many open tabs it currently matches, so a pattern that matches nothing says so immediately.
 
 ## Triage Views
 

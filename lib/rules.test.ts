@@ -343,15 +343,42 @@ describe("matchDomainToRule", () => {
 });
 
 describe("pathMatches", () => {
-  it("anchors at the start and stays open at the end", () => {
-    expect(pathMatches("/inbox/42", "/inbox")).toBe(true);
+  it("anchors both ends, one segment per star", () => {
     expect(pathMatches("/inbox", "/inbox")).toBe(true);
+    expect(pathMatches("/inbox/42", "/inbox")).toBe(false);
+    expect(pathMatches("/inbox/42", "/inbox/*")).toBe(true);
     expect(pathMatches("/mail/inbox", "/inbox")).toBe(false);
   });
 
-  it("matches anywhere behind a leading star", () => {
-    expect(pathMatches("/org/repo/pulls/12", "*/pulls*")).toBe(true);
-    expect(pathMatches("/org/repo/issues/9", "*/pulls*")).toBe(false);
+  it("does not let a single star cross a slash", () => {
+    expect(pathMatches("/truyen/9", "/truyen/*")).toBe(true);
+    expect(pathMatches("/truyen/x/y/z", "/truyen/*")).toBe(false);
+    expect(pathMatches("/a/b/c", "/a/*/c")).toBe(true);
+    expect(pathMatches("/a/b/x/c", "/a/*/c")).toBe(false);
+  });
+
+  it("counts levels exactly, which is the point of writing several stars", () => {
+    expect(pathMatches("/truyen/x/y/a/z", "/truyen/*/*/a/*")).toBe(true);
+    expect(pathMatches("/truyen/1/2/3/4/5/a/6", "/truyen/*/*/a/*")).toBe(false);
+    expect(pathMatches("/truyen/x/a/", "/truyen/*/*/a/*")).toBe(false);
+  });
+
+  it("spans any number of segments behind a double star, including none", () => {
+    expect(pathMatches("/truyen", "/truyen/**")).toBe(true);
+    expect(pathMatches("/truyen/x/y/z", "/truyen/**")).toBe(true);
+    expect(pathMatches("/org/repo/pulls/12", "**/pulls/**")).toBe(true);
+    expect(pathMatches("/org/repo/issues/9", "**/pulls/**")).toBe(false);
+    expect(pathMatches("/anything/at/all", "**")).toBe(true);
+  });
+
+  // Forgetting the slash used to mean the rule silently never fired.
+  it("treats a leading slash as optional", () => {
+    expect(pathMatches("/truyen/9", "truyen/*")).toBe(true);
+    expect(pathMatches("/truyen/9", "/truyen/*")).toBe(true);
+  });
+
+  it("ignores a trailing slash on the path", () => {
+    expect(pathMatches("/truyen/9/", "/truyen/*")).toBe(true);
   });
 
   it("is case-insensitive", () => {
@@ -416,7 +443,7 @@ describe("buildSortRanker", () => {
 
   it("ranks a path by the first pattern it matches", () => {
     const rank = buildSortRanker([
-      sortRule({ domain: "github.com", patterns: ["*/pulls*", "*/issues*"] }),
+      sortRule({ domain: "github.com", patterns: ["**/pulls/**", "**/issues/**"] }),
     ]);
     expect(rank("https://github.com/o/r/pulls/12").path).toBe(0);
     expect(rank("https://github.com/o/r/issues/9").path).toBe(1);

@@ -178,7 +178,7 @@ describe("sortTabsInWindow with sort rules", () => {
       tab({ id: 4, url: "https://apple.com/a", title: "Apple", index: 3 }),
     ];
     await setSortRules([
-      sortRule({ domain: "github.com", patterns: ["*/pulls*", "*/issues*"] }),
+      sortRule({ domain: "github.com", patterns: ["**/pulls/**", "**/issues/**"] }),
     ]);
     await sortTabsInWindow(1, "domain");
     // apple.com still sorts ahead of github.com; only github's own run is reordered.
@@ -243,7 +243,7 @@ describe("sortTabsInWindow with sort rules", () => {
       tab({ id: 2, url: "https://github.com/o/r/pulls/12", title: "PR", index: 1, groupId: 50 }),
     ];
     stub.groups = [{ id: 50, title: "Work", color: "blue", windowId: 1 }];
-    await setSortRules([sortRule({ domain: "github.com", patterns: ["*/pulls*"] })]);
+    await setSortRules([sortRule({ domain: "github.com", patterns: ["**/pulls/**"] })]);
     await sortTabsInGroup(50, "domain");
     const inGroup = stub.openTabs.filter((t) => t.groupId === 50).sort((a, b) => a.index! - b.index!);
     expect(inGroup.map((t) => t.id)).toEqual([2, 1]);
@@ -257,7 +257,7 @@ describe("sortTabsInWindow with sort rules", () => {
       tab({ id: 2, url: "https://github.com/o/r/pulls/12", title: "PR", index: 1, groupId: 50 }),
     ];
     stub.groups = [{ id: 50, title: "Work", color: "blue", windowId: 1 }];
-    await setSortRules([sortRule({ domain: "github.com", patterns: ["*/pulls*"] })]);
+    await setSortRules([sortRule({ domain: "github.com", patterns: ["**/pulls/**"] })]);
     await pinTab("https://github.com/settings", "Work", 0, "Settings", 1);
 
     await sortTabsInWindow(1, "domain");

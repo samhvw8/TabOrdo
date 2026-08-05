@@ -521,9 +521,55 @@ export const noSortRanking: SortRanker = () => NO_RANK;
 //
 // Line comments, not a doc block: the wildcard examples this needs to spell out contain the
 // sequence that would close one early.
+//
+// Path patterns are segment-aware, unlike the host and title patterns globMatches serves:
+//   *   one segment, never crossing a slash
+//   **  any number of segments, including none
+// Both ends are anchored, so `/truyen/*` is exactly one level down and `/truyen/**` is the
+// whole subtree. A slash-crossing `*` could not express "exactly this deep" at all, which is
+// the thing a pattern like `/truyen/*/*/a/*` is written to say.
+//
+// A leading slash is optional: splitting drops the empty segment it produces, so `truyen/*`
+// and `/truyen/*` are the same pattern. Forgetting it used to mean the rule silently never
+// fired.
+function pathSegments(value: string): string[] {
+  const parts = value.split("/");
+  if (parts[0] === "") parts.shift();
+  // A trailing slash is the same page as without one; keeping the empty segment it leaves
+  // behind would make `/truyen/9/` miss a pattern that `/truyen/9` matches.
+  if (parts.length > 0 && parts[parts.length - 1] === "") parts.pop();
+  return parts;
+}
+
 export function pathMatches(path: string, pattern: string): boolean {
   if (!pattern || pattern.length > MAX_PATTERN_LENGTH) return false;
-  return globMatches(path, pattern, false);
+  const segs = pathSegments(path);
+  const pats = pathSegments(pattern);
+
+  // The standard two-pointer wildcard walk, one level up: `**` plays the part of the star, and
+  // segments the part of characters. On a mismatch it resumes from the last `**` having let it
+  // absorb one more segment, which bounds the work at segments x patterns — no recursion, and
+  // none of the exponential blow-up a compiled regex would bring back.
+  let si = 0, pi = 0, starPi = -1, starSi = 0;
+  while (si < segs.length) {
+    if (pi < pats.length && pats[pi] === "**") {
+      starPi = pi;
+      starSi = si;
+      pi++;
+    } else if (pi < pats.length && globMatches(segs[si], pats[pi], true)) {
+      si++;
+      pi++;
+    } else if (starPi !== -1) {
+      pi = starPi + 1;
+      starSi++;
+      si = starSi;
+    } else {
+      return false;
+    }
+  }
+  // `**` matches nothing at all, so any left over at the end are still satisfied.
+  while (pi < pats.length && pats[pi] === "**") pi++;
+  return pi === pats.length;
 }
 
 /** The part of a URL a path pattern is tested against. Non-URLs (chrome://newtab et al) yield "". */
