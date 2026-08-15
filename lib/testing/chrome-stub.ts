@@ -128,6 +128,12 @@ export function installChromeStub(): ChromeStub {
       for (const k of arr) if (k in data) out[k] = data[k];
       return out;
     },
+    // Chrome 130+. Names only — no value is deserialised, which is the whole point of the
+    // callers that reach for it. Recorded as "<keys>" so tests can tell it from a get.
+    getKeys: async () => {
+      stub.storageReads.push({ area: areaName, keys: ["<keys>"] });
+      return Object.keys(data);
+    },
     set: async (items: Record<string, unknown>) => {
       if (stub.failWrites) throw new Error("stub: storage write failed");
       const changes: Record<string, { oldValue?: unknown; newValue?: unknown }> = {};

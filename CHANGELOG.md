@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Performance
+
+- **Stop reading the whole session store on every page load** — the bulk-operation lock is spread across one key per owner, and finding them meant asking Chrome for the entire session area, which deserialises and copies every value in it. The undo stack lives there too, up to twenty snapshots each covering every unpinned tab, so a profile with a few hundred tabs was copying all of that twice per page load: the check runs on both the auto-group and auto-sort paths. It now asks Chrome for the key *names* and reads only the lock keys, so nothing else in the area is touched. Builds older than Chrome 130 keep the previous read
+
 ## 0.6.0 — 2026-08-04
 
 ### Renamed

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
-import { installChromeStub } from "./testing/chrome-stub.ts";
+import { installChromeStub, type ChromeStub } from "./testing/chrome-stub.ts";
 import {
   acquireBulkLock,
   releaseBulkLock,
@@ -9,8 +9,10 @@ import {
   ECHO_GRACE_MS,
 } from "./bulklock.ts";
 
+let stub: ChromeStub;
+
 beforeEach(() => {
-  installChromeStub();
+  stub = installChromeStub();
 });
 
 afterEach(() => {
@@ -179,5 +181,54 @@ describe("bulk lock", () => {
     expect(await isBulkLocked()).toBe(true);
     vi.advanceTimersByTime(30_001);
     expect(await isBulkLocked()).toBe(false);
+  });
+});
+
+describe("lease reads stay off the rest of the session area", () => {
+  // isBulkLocked runs on the auto-group and auto-sort paths, i.e. per tab update. It used to
+  // read the whole session area, which also holds the undo stack — up to twenty snapshots of
+  // every unpinned tab — so every page load structured-cloned all of it to find a lock key.
+  const crowdedArea = () => {
+    stub.sessionData.tabOrdo_undoStack = [...Array(20)].map(() => ({
+      type: "group", label: "Group change", timestamp: 1,
+      data: [...Array(200)].map((_, i) => ({ tabId: i, groupId: -1, windowId: 1, index: i })),
+    }));
+    stub.sessionData.tabParents = Object.fromEntries([...Array(300)].map((_, i) => [i + 2, 1]));
+  };
+
+  it("deserialises only the lock keys", async () => {
+    crowdedArea();
+    stub.sessionData["bulkOpLock:owner-a"] = Date.now() + 60_000;
+    stub.storageReads.length = 0;
+
+    expect(await isBulkLocked()).toBe(true);
+
+    // "*" is the stub's marker for a whole-area get.
+    expect(stub.storageReads.some((r) => r.keys.includes("*"))).toBe(false);
+    const valuesRead = stub.storageReads.filter((r) => r.keys[0] !== "<keys>").flatMap((r) => r.keys);
+    expect(valuesRead).toEqual(["bulkOpLock:owner-a"]);
+  });
+
+  it("reads no values at all when no lock key exists", async () => {
+    crowdedArea();
+    stub.storageReads.length = 0;
+
+    expect(await isBulkLocked()).toBe(false);
+
+    expect(stub.storageReads.map((r) => r.keys)).toEqual([["<keys>"]]);
+  });
+
+  it("still works on a build without getKeys", async () => {
+    const area = chrome.storage.session as unknown as { getKeys?: unknown };
+    const saved = area.getKeys;
+    delete area.getKeys; // Chrome < 130
+    try {
+      stub.sessionData["bulkOpLock:owner-a"] = Date.now() + 60_000;
+      expect(await isBulkLocked()).toBe(true);
+      delete stub.sessionData["bulkOpLock:owner-a"];
+      expect(await isBulkLocked()).toBe(false);
+    } finally {
+      area.getKeys = saved;
+    }
   });
 });
