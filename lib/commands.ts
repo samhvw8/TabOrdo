@@ -35,6 +35,8 @@ export const ACTION_COMMANDS: CommandDefinition[] = [
   { prefix: "closesite", label: "/closesite", description: "Close all tabs from same site", category: "action", color: "text-accent-red" },
   { prefix: "archive", label: "/archive", description: "Archive matching tabs", category: "action", color: "text-accent-yellow" },
   { prefix: "group", label: "/group", description: "Group matching tabs", category: "action", color: "text-accent-orange" },
+  { prefix: "branch", label: "/branch", description: "Group this tab and every tab opened from it", category: "action", color: "text-accent-orange" },
+  { prefix: "branchup", label: "/branchup", description: "Group its parent's branch (parent + siblings)", category: "action", color: "text-accent-orange" },
   { prefix: "merge", label: "/merge", description: "Pull every tab from other windows into this one", category: "action", color: "text-accent-orange" },
   { prefix: "sort", label: "/sort", description: "Sort tabs (domain|title|url)", category: "action", color: "text-accent-orange" },
   { prefix: "dedup", label: "/dedup", description: "Remove duplicate tabs", category: "action", color: "text-accent-orange" },
@@ -101,7 +103,7 @@ export const ALL_COMMANDS = [...SEARCH_COMMANDS, ...ACTION_COMMANDS, ...VIEW_COM
 // Forty-odd actions in one flat list read as noise. These sub-clusters give the browse surfaces
 // something to break on; the order of the keys is the order they render in.
 const ACTION_GROUPS: Record<string, string[]> = {
-  Organize: ["group", "ungroup", "collapse", "sort", "dedup", "aigroup"],
+  Organize: ["group", "branch", "branchup", "ungroup", "collapse", "sort", "dedup", "aigroup"],
   Windows: ["merge", "unite", "split", "extract", "isolate", "splitdomain", "splitv", "splith", "stack"],
   Order: ["move", "movegroup", "lock", "unlock", "lockgroup", "unlockgroup", "pin", "unpin", "pingroup", "unpingroup", "shuffle"],
   Close: ["close", "closeleft", "closeright", "closeold", "closesite", "archive"],

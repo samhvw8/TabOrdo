@@ -142,6 +142,32 @@ export function pickMajorityWindow(tabs: chrome.tabs.Tab[]): number {
   return best;
 }
 
+/** Chrome refuses edits to a shared group, so every path that would rewrite one has to ask. */
+export function isSharedGroup(group: chrome.tabGroups.TabGroup): boolean {
+  return (group as any).shared === true;
+}
+
+/**
+ * Groups an explicit command must leave intact: shared ones, which Chrome will not let us
+ * edit, and the ones the user's ignore list protects by name.
+ *
+ * "Explicit command" deliberately includes commands the user typed. ungroupAll is one and it
+ * already honours the name list — the list protects *the group*, not *the automation*, so a
+ * command that dissolves a protected group is /ungroup wearing a different verb.
+ *
+ * Unlike ignoredGroupIds this always queries: its callers are one-shot user actions, not the
+ * per-tab-event path that read is tuned for.
+ */
+export async function untouchableGroupIds(): Promise<Set<number>> {
+  const config = await getConfig();
+  const groups = await chrome.tabGroups.query({});
+  return new Set(
+    groups
+      .filter((g) => isSharedGroup(g) || isIgnoredGroupName(g.title || "", config.ignoreGroupNames))
+      .map((g) => g.id)
+  );
+}
+
 /** Groups the user's ignore list protects. Empty list means no query at all — this runs on
  *  every group/ungroup and most profiles have no ignored names. */
 async function ignoredGroupIds(ignoreGroupNames: IgnoreRule[]): Promise<Set<number>> {

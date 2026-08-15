@@ -13,7 +13,8 @@ import {
   splitTabToWindow, discardTabs, closeTabsToLeft, closeTabsToRight, closeTabsSameSite,
   closeOldTabs, shuffleTabs, uniteDomain, isolateDomain, splitWindow, splitByDomain,
   stackWindows, collapseAllGroups, moveCurrentTab, moveGroup, pinCurrentTab, unpinCurrentTab,
-  pinCurrentGroup, unpinCurrentGroup, type MoveGroupsResult,
+  pinCurrentGroup, unpinCurrentGroup, collectBranch, groupBranch, branchUpRoot,
+  type MoveGroupsResult,
 } from "./tabs/index.ts";
 import { archiveTabs, isArchivable } from "./archive.ts";
 import { snapshotBeforeClose, snapshotBeforeGroup } from "./undo.ts";
@@ -77,6 +78,71 @@ async function onMatchesOrActive(
   const tab = await activeTab();
   if (!tab?.id) return NOTHING;
   return { message: await onActive(tab), acted: true };
+}
+
+/**
+ * /branch and /branchup are one gather run from two different roots — the active tab, or the
+ * tab that opened it. Same body, so the "nothing to gather" wording stays in one place.
+ *
+ * The snapshot is taken only once the branch is known to be worth grouping: a no-op that still
+ * pushed an undo entry would make Ctrl+Z pop something the user never did.
+ */
+async function gatherBranch(ctx: ActionContext, from: "self" | "parent"): Promise<ActionResult> {
+  const tab = await activeTab();
+  if (!tab?.id) return NOTHING;
+
+  let rootId = tab.id;
+  if (from === "parent") {
+    const target = await branchUpRoot(tab.id);
+    if (target.rootId === undefined) {
+      return {
+        // Having climbed means there *was* a parent and it is already in this group — saying
+        // the tab wasn't opened from another would contradict what the user can see.
+        message: target.climbed
+          ? "Nothing left above — this branch is already gathered"
+          : "No parent tab — this one wasn't opened from another",
+        acted: false,
+      };
+    }
+    rootId = target.rootId;
+  }
+
+  // The group forms in the window the user is looking at. For /branchup the root can be an
+  // ancestor sitting in another window, and anchoring there would build the group off-screen.
+  const branch = await collectBranch(rootId, tab.windowId);
+  // A lone tab is not a branch, and a one-tab group is something autoUngroup would dissolve
+  // out from under the user anyway.
+  if (!branch || branch.tabs.length < 2) {
+    // The root being left out is a different failure from "it opened nothing", and the user
+    // can act on it. Chrome will not group a pinned tab, and a protected group stays whole.
+    if (branch && !branch.rootIncluded) {
+      return {
+        message: branch.root.pinned
+          ? "Root tab is pinned — Chrome can't group it"
+          : "Root tab is in a protected group",
+        acted: false,
+      };
+    }
+    return {
+      message:
+        from === "parent"
+          ? "Parent tab opened nothing else"
+          : "No tabs were opened from this one",
+      acted: false,
+    };
+  }
+
+  await snapshotBeforeGroup();
+  const { grouped, moved, title } = await groupBranch(branch, ctx.query);
+  // Everything the command quietly declined to do gets said out loud — a member left behind in
+  // a protected group is exactly the kind of omission that reads as a bug when it is silent.
+  const notes: string[] = [];
+  if (moved > 0) notes.push(`${moved} pulled from other window(s)`);
+  if (!branch.rootIncluded) notes.push("root tab left out");
+  if (branch.skippedPinned > 0) notes.push(`${branch.skippedPinned} pinned`);
+  if (branch.skippedProtected > 0) notes.push(`${branch.skippedProtected} left in protected group(s)`);
+  const suffix = notes.length > 0 ? ` — ${notes.join(", ")}` : "";
+  return { message: `Grouped ${grouped} tab(s) into "${title}"${suffix}`, acted: true };
 }
 
 export const ACTION_HANDLERS: Record<string, ActionHandler> = {
@@ -200,6 +266,10 @@ export const ACTION_HANDLERS: Record<string, ActionHandler> = {
     }
     return { message: "Active tab is not in a group", acted: true };
   },
+
+  // The trailing text is the group title, not a tab filter: the branch decides its own members.
+  branch: (ctx) => gatherBranch(ctx, "self"),
+  branchup: (ctx) => gatherBranch(ctx, "parent"),
 
   shuffle: async () => {
     await snapshotBeforeGroup();

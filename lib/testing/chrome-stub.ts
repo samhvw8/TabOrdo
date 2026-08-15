@@ -12,6 +12,8 @@ export interface StubTab {
   lastAccessed?: number;
   muted?: boolean;
   highlighted?: boolean;
+  /** Chrome only reports this while the opener is still open — see lib/tabs/tree.ts. */
+  openerTabId?: number;
 }
 
 export interface StubGroup {

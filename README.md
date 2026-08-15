@@ -17,6 +17,8 @@ A keyboard-first tab manager for Chrome. Press `Cmd+E` to open a command palette
 | `/g` | Current group tabs |
 | `/sort` | Sort tabs by domain |
 | `/group` | Group matching tabs |
+| `/branch` | Group this tab and every tab opened from it (optional trailing text names the group) |
+| `/branchup` | Same, starting one level up: the parent tab's whole branch |
 | `/ungroup` | Ungroup matching tabs |
 | `/collapse` | Collapse all tab groups |
 | `/dedup` | Remove duplicate tabs |

@@ -12,6 +12,11 @@ const ICON = (d: string) =>
 const PIN_BODY = '<path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 2-2H6a2 2 0 0 0 2 2 1 1 0 0 1 1 1z"/>';
 const SPEAKER = '<path d="M11 4.7a.7.7 0 0 0-1.2-.5L6.4 7.6a1.4 1.4 0 0 1-1 .4H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.4a1.4 1.4 0 0 1 1 .4l3.4 3.4a.7.7 0 0 0 1.2-.5z"/>';
 
+// Branch out / gather up. Kept as constants rather than inlined because the two tiles are an
+// alt-click pair, so each one has to show the other's icon while Alt is held.
+const BRANCH_ICON = ICON('<line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>');
+const BRANCH_UP_ICON = ICON('<circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/>');
+
 export const PIN_ICON = ICON(PIN_BODY);
 export const UNPIN_ICON = ICON('<path d="M12 17v5"/><path d="M15 9.34V7a1 1 0 0 1 1-1 2 2 0 0 0 2-2H6a2 2 0 0 0 2 2 1 1 0 0 1 1 1v2.34"/><path d="m2 2 20 20"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76"/>');
 export const PIN_TOP_ICON = ICON(`${PIN_BODY}<path d="M5 3h14"/>`);
@@ -23,6 +28,8 @@ export interface DashActionDef { id: string; label: string; icon: string; toolti
 export const DASHBOARD_ACTION_POOL: DashActionDef[] = [
   { id: "sort", label: "Sort All", icon: ICON('<path d="m3 16 4 4 4-4"/><path d="M7 20V4"/><path d="m21 8-4-4-4 4"/><path d="M17 4v16"/>'), tooltip: "Sort tabs by domain." },
   { id: "group", label: "Group+", icon: ICON('<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/><path d="M12 10v6"/><path d="M9 13h6"/>'), tooltip: "Group ungrouped tabs by domain." },
+  { id: "branch", label: "Branch", icon: BRANCH_ICON, tooltip: "Group this tab and every tab opened from it. Alt-click to start one level up." },
+  { id: "branchup", label: "Branch Up", icon: BRANCH_UP_ICON, tooltip: "Group the parent tab's branch: parent, siblings, and everything they opened." },
   { id: "dedup", label: "Dedup", icon: ICON('<rect width="8" height="14" x="2" y="6" rx="2"/><rect width="8" height="14" x="14" y="4" rx="2" opacity="0.5"/><path d="m15 2-3 3-3-3"/>'), tooltip: "Close duplicate tabs." },
   { id: "merge", label: "Merge", icon: ICON('<path d="m8 6 4-4 4 4"/><path d="M12 2v10.3a4 4 0 0 1-1.172 2.872L4 22"/><path d="m20 22-5-5"/>'), tooltip: "Move all tabs from other windows here." },
   { id: "pin", label: "Lock Tab", icon: PIN_ICON, tooltip: "Hold current tab at its position in the group." },
@@ -77,6 +84,8 @@ export const ALT_MODE: Record<string, AltMode> = {
   unite:      { action: "isolate",    label: "Isolate",     tooltip: "Move domain to new window." },
   isolate:    { action: "unite",      label: "Unite",       tooltip: "Pull same-domain tabs here." },
   mute:       { action: "unmute",     label: "Unmute",      tooltip: "Unmute the active tab.", icon: UNMUTE_ICON },
+  branch:     { action: "branchup",   label: "Branch Up",   tooltip: "Group the parent tab's branch: parent, siblings, and everything they opened.", icon: BRANCH_UP_ICON },
+  branchup:   { action: "branch",     label: "Branch",      tooltip: "Group this tab and every tab opened from it.", icon: BRANCH_ICON },
   pingroup:   { action: "pingroup", query: "^", label: "Lock Grp Top", tooltip: "Hold the active group at the first position." },
 };
 
@@ -88,6 +97,8 @@ export const MORE_SECTIONS: MoreSection[] = [
   { title: "Organize", items: [
     { action: "sort", label: "Sort All", tip: "Sort tabs by domain" },
     { action: "group", label: "Group+", tip: "Group ungrouped tabs by domain" },
+    { action: "branch", label: "Branch", tip: "This tab and everything opened from it (alt: branch up)" },
+    { action: "branchup", label: "Branch Up", tip: "The parent tab's branch — parent and siblings (alt: branch)" },
     { action: "dedup", label: "Dedup", tip: "Close duplicate tabs" },
     { action: "pin", label: "Pin Tab", tip: "Pin current tab at position" },
     { action: "regroup", label: "Regroup All", tip: "Ungroup all, then regroup from scratch" },

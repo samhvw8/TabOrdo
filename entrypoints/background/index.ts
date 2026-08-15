@@ -1,5 +1,5 @@
 import { getConfig, matchDomainToRule, isIgnoredUrl, isIgnoredGroupName } from "../../lib/rules.ts";
-import { getFullHostname, getDomainMapper, sortTabsInWindow, pickMajorityWindow, GROUP_COLORS, hashCode, setTitleBadge } from "../../lib/tabs/index.ts";
+import { getFullHostname, getDomainMapper, sortTabsInWindow, pickMajorityWindow, GROUP_COLORS, hashCode, setTitleBadge, recordOpener, forgetTab, isSharedGroup } from "../../lib/tabs/index.ts";
 import { syncPinUrl, clearPinTabIds } from "../../lib/pin.ts";
 import { findBounceTarget } from "../../lib/bounce.ts";
 import { logAction } from "../../lib/actionLog.ts";
@@ -123,10 +123,6 @@ async function autoUngroupSingleTabGroups(windowId: number): Promise<void> {
   }
 }
 
-function isSharedGroup(group: chrome.tabGroups.TabGroup): boolean {
-  return (group as any).shared === true;
-}
-
 async function safeGroupUpdate(groupId: number, props: chrome.tabGroups.UpdateProperties): Promise<void> {
   try {
     await chrome.tabGroups.update(groupId, props);
@@ -205,6 +201,26 @@ export default defineBackground(() => {
         recentTabs.set(tab.id, Date.now());
         setTimeout(() => recentTabs.delete(tab.id!), 2000);
       }
+    });
+  });
+
+  // Tab lineage for /branch and /branchup. Recorded here rather than read on demand because
+  // tab.openerTabId is only readable while the opener is still open, and gathering a reading
+  // branch is most useful precisely after you have closed the listing page you started from.
+  // Registered apart from the recentTabs listener above so a failure in one costs only itself.
+  register("tabs.onCreated (lineage)", () => {
+    chrome.tabs.onCreated.addListener((tab) => {
+      if (tab.id === undefined || tab.openerTabId === undefined) return;
+      void recordOpener(tab.id, tab.openerTabId);
+    });
+  });
+
+  register("tabs.onRemoved (lineage)", () => {
+    chrome.tabs.onRemoved.addListener((tabId) => {
+      // Deliberately no isWindowClosing early-out. The splice is the point: a closing tab's
+      // children inherit its parent, so a branch survives losing a tab in the middle of it.
+      // Skipping window teardown would drop that for every tab in the window.
+      void forgetTab(tabId);
     });
   });
 

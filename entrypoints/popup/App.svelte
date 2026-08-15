@@ -615,6 +615,8 @@
     switch (action) {
       case "collapse": goBack(); dashCommand("collapse"); break;
       case "extract": goBack(); dashCommand("extract"); break;
+      case "branch": goBack(); dashCommand("branch"); break;
+      case "branchup": goBack(); dashCommand("branchup"); break;
       case "restore": goBack(); dashCommand("restore"); break;
       case "mute": goBack(); dashCommand("mute"); break;
       case "unmute": goBack(); dashCommand("unmute"); break;

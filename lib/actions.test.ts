@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { installChromeStub, type ChromeStub } from "./testing/chrome-stub.ts";
-import { popUndo, peekUndo } from "./undo.ts";
+import { popUndo, peekUndo, executeUndo } from "./undo.ts";
 import { getArchive } from "./archive.ts";
 import { runAction, ACTION_HANDLERS, mergeStatus, type ActionContext } from "./actions.ts";
 import { ACTION_COMMANDS } from "./commands.ts";
@@ -416,6 +416,251 @@ describe("/sidepanel", () => {
     (globalThis.chrome as any).sidePanel = { open };
     expect((await runAction("sidepanel", ctx({ currentWindowId: 42 })))?.message).toBe("Opened Side Panel");
     expect(open).toHaveBeenCalledWith({ windowId: 42 });
+  });
+});
+
+describe("/branch and /branchup", () => {
+  // The journey these exist for: a listing page, the articles opened from it, and a sub-link
+  // opened from one of those articles.
+  const hn = () => {
+    stub.windows = [{ id: 1 }];
+    stub.openTabs = [
+      { id: 1, url: "https://news.ycombinator.com", title: "Hacker News", pinned: false, windowId: 1, groupId: -1, index: 0 },
+      { id: 2, url: "https://a.com", pinned: false, windowId: 1, groupId: -1, index: 1 },
+      { id: 3, url: "https://b.com", pinned: false, windowId: 1, groupId: -1, index: 2 },
+      { id: 4, url: "https://b.com/deep", pinned: false, windowId: 1, groupId: -1, index: 3, active: true },
+    ];
+    stub.sessionData.tabParents = { 2: 1, 3: 1, 4: 3 };
+  };
+  const groupOf = (id: number) => stub.openTabs.find((t) => t.id === id)!.groupId;
+  const membersWith = (id: number) =>
+    stub.openTabs.filter((t) => t.groupId === groupOf(id)).map((t) => t.id).sort();
+
+  it("/branch gathers the active tab's whole subtree", async () => {
+    hn();
+    stub.openTabs.find((t) => t.id === 4)!.active = false;
+    stub.openTabs.find((t) => t.id === 3)!.active = true;
+    const r = await ACTION_HANDLERS.branch(ctx());
+    expect(r.acted).toBe(true);
+    expect(membersWith(3)).toEqual([3, 4]);
+  });
+
+  it("/branchup starts one level up from the active tab", async () => {
+    hn();
+    await ACTION_HANDLERS.branchup(ctx());
+    expect(membersWith(4)).toEqual([3, 4]);
+  });
+
+  // The command advertises that running it again climbs. It only does if it walks past the
+  // ancestors the previous run pulled into the active tab's group.
+  it("/branchup climbs a level each time it is run", async () => {
+    hn();
+    await ACTION_HANDLERS.branchup(ctx());
+    expect(membersWith(4)).toEqual([3, 4]);
+
+    await ACTION_HANDLERS.branchup(ctx());
+    expect(membersWith(4)).toEqual([1, 2, 3, 4]);
+
+    // Third run: the whole chain is now inside the group, so the walk consumes it and stops.
+    // "No parent tab" would be false here — tab 1 is a parent, it is just already gathered.
+    const r = await ACTION_HANDLERS.branchup(ctx());
+    expect(r.acted).toBe(false);
+    expect(r.message).toMatch(/already gathered/);
+  });
+
+  it("names a pinned root as the reason rather than blaming what it opened", async () => {
+    hn();
+    stub.openTabs = stub.openTabs.filter((t) => t.id !== 2 && t.id !== 4);
+    stub.openTabs.find((t) => t.id === 1)!.pinned = true;
+    stub.openTabs.find((t) => t.id === 3)!.active = true;
+    stub.sessionData.tabParents = { 3: 1 };
+    const r = await ACTION_HANDLERS.branchup(ctx());
+    expect(r.acted).toBe(false);
+    expect(r.message).toMatch(/pinned/);
+  });
+
+  it("still reports 'opened nothing' for an unpinned lone tab", async () => {
+    hn();
+    stub.openTabs = stub.openTabs.filter((t) => t.id === 4);
+    stub.sessionData.tabParents = {};
+    const r = await ACTION_HANDLERS.branch(ctx());
+    expect(r.message).toMatch(/No tabs were opened/);
+  });
+
+  it("uses the trailing text as the group title", async () => {
+    hn();
+    // Stand on the listing page, not the leaf article, so there is a branch to name.
+    stub.openTabs.find((t) => t.id === 4)!.active = false;
+    stub.openTabs.find((t) => t.id === 1)!.active = true;
+    await ACTION_HANDLERS.branch(ctx({ query: "Morning read" }));
+    expect(stub.groupUpdates.at(-1)!.title).toBe("Morning read");
+    expect(membersWith(1)).toEqual([1, 2, 3, 4]);
+  });
+
+  it("falls back to the root tab's title when no name is given", async () => {
+    hn();
+    stub.openTabs.find((t) => t.id === 4)!.active = false;
+    stub.openTabs.find((t) => t.id === 1)!.active = true;
+    await ACTION_HANDLERS.branch(ctx());
+    expect(stub.groupUpdates.at(-1)!.title).toBe("Hacker News");
+  });
+
+  // Chrome rejects tabs.group while a tab is being dragged. groupBranch groups before it moves
+  // anything precisely so that rejection lands on an untouched strip.
+  const twoWindowBranch = () => {
+    stub.windows = [{ id: 1 }, { id: 2 }];
+    stub.openTabs = [
+      { id: 1, url: "https://news.ycombinator.com", title: "Hacker News", pinned: false, windowId: 1, groupId: -1, index: 0, active: true },
+      { id: 2, url: "https://a.com", pinned: false, windowId: 1, groupId: -1, index: 1 },
+      { id: 4, url: "https://a.com/deep", pinned: false, windowId: 2, groupId: -1, index: 0 },
+    ];
+    stub.sessionData.tabParents = { 2: 1, 4: 2 };
+  };
+
+  it("mutates nothing when the group call is rejected outright", async () => {
+    twoWindowBranch();
+    stub.failGroup = true;
+
+    await expect(ACTION_HANDLERS.branch(ctx())).rejects.toThrow();
+
+    // The stray was never moved: grouping comes first, so the rejection costs nothing.
+    expect(stub.openTabs.find((t) => t.id === 4)!.windowId).toBe(2);
+    expect(stub.openTabs.every((t) => t.groupId === -1)).toBe(true);
+  });
+
+  // The residual half-state: the group exists, and the stray moved but never joined it. The
+  // snapshot is taken before any of it so Ctrl+Z can still put that tab back — dropping the
+  // entry on failure would discard the only record of a real mutation.
+  it("leaves an undo entry that can recover a stray stranded mid-operation", async () => {
+    twoWindowBranch();
+    const realGroup = chrome.tabs.group;
+    let calls = 0;
+    // Succeed for the seed group, fail when the stray tries to join it.
+    (chrome.tabs as unknown as { group: unknown }).group = async (opts: never) =>
+      ++calls > 1 ? Promise.reject(new Error("Tabs cannot be edited right now")) : realGroup(opts);
+
+    await expect(ACTION_HANDLERS.branch(ctx())).rejects.toThrow();
+    (chrome.tabs as unknown as { group: unknown }).group = realGroup;
+
+    expect(stub.openTabs.find((t) => t.id === 4)!.windowId).toBe(1); // the move did land
+    // UndoEntry.data is `unknown`; the "group" entries are GroupAssignment[], which isn't exported.
+    const data = peekUndo()?.data as { tabId: number; windowId?: number }[] | undefined;
+    expect(data?.find((d) => d.tabId === 4)?.windowId).toBe(2); // and undo can reverse it
+  });
+
+  // Guards snapshotBeforeGroup's cost. It snapshots every tab in every window, which looks
+  // wasteful for a 3-tab branch — but grouping makes members contiguous and so displaces
+  // non-members, and executeUndo rebuilds the strip by reinserting snapshotted tabs at their
+  // recorded index. Scope the snapshot to branch members and the tabs it shoved aside have no
+  // recorded home, so undo silently returns a different order than it started with.
+  it("undo after a branch restores the strip exactly, including non-members", async () => {
+    stub.windows = [{ id: 1 }];
+    stub.openTabs = [1, 2, 3, 4, 5].map((id) => ({
+      id, url: `https://s${id}.com`, title: `T${id}`,
+      pinned: false, windowId: 1, groupId: -1, index: id - 1, active: id === 1,
+    }));
+    stub.sessionData.tabParents = { 3: 1, 5: 1 }; // branch {1,3,5} straddles 2 and 4
+
+    await ACTION_HANDLERS.branch(ctx());
+    expect(membersWith(1)).toEqual([1, 3, 5]);
+
+    await executeUndo();
+    const strip = [...stub.openTabs].sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+    expect(strip.map((t) => t.id)).toEqual([1, 2, 3, 4, 5]);
+    expect(strip.every((t) => t.groupId === -1)).toBe(true);
+  });
+
+  it("forms the group in the window the user is looking at, not the root's", async () => {
+    stub.windows = [{ id: 1 }, { id: 2 }];
+    stub.openTabs = [
+      { id: 1, url: "https://news.ycombinator.com", title: "HN", pinned: false, windowId: 2, groupId: -1, index: 0 },
+      { id: 2, url: "https://a.com", pinned: false, windowId: 2, groupId: -1, index: 1 },
+      { id: 3, url: "https://b.com", pinned: false, windowId: 1, groupId: -1, index: 0, active: true },
+    ];
+    stub.sessionData.tabParents = { 2: 1, 3: 1 };
+
+    const r = await ACTION_HANDLERS.branchup(ctx());
+    expect(r.acted).toBe(true);
+    // The active tab must not be dragged into a window the user was not looking at.
+    expect(stub.openTabs.find((t) => t.id === 3)!.windowId).toBe(1);
+    expect(stub.openTabs.filter((t) => t.groupId === groupOf(3)).map((t) => t.id).sort()).toEqual([1, 2, 3]);
+  });
+
+  // The ignore list protects the group, not the automation — ungroupAll already honours it,
+  // and a branch that dissolves a protected group is /ungroup wearing a different verb.
+  it("leaves an ignore-listed group intact and says it did", async () => {
+    hn();
+    stub.localData.rulesConfig = { ignoreGroupNames: [{ pattern: "Work", enabled: true }] };
+    stub.openTabs.find((t) => t.id === 2)!.groupId = 50;
+    stub.groups = [{ id: 50, title: "Work", windowId: 1 }];
+    stub.openTabs.find((t) => t.id === 4)!.active = false;
+    stub.openTabs.find((t) => t.id === 1)!.active = true;
+
+    const r = await ACTION_HANDLERS.branch(ctx());
+    expect(r.acted).toBe(true);
+    expect(stub.openTabs.find((t) => t.id === 2)!.groupId).toBe(50); // still in "Work"
+    expect(membersWith(1)).toEqual([1, 3, 4]);
+    expect(r.message).toMatch(/1 left in protected group/);
+  });
+
+  // A pinned member is not a protected-group member, and telling the user to go look for a
+  // group that does not exist in their profile is worse than saying nothing.
+  it("names pinning as the reason for a pinned member, not a protected group", async () => {
+    hn();
+    stub.groups = [];
+    stub.openTabs.find((t) => t.id === 2)!.pinned = true;
+    stub.openTabs.find((t) => t.id === 4)!.active = false;
+    stub.openTabs.find((t) => t.id === 1)!.active = true;
+
+    const r = await ACTION_HANDLERS.branch(ctx());
+    expect(r.message).toMatch(/1 pinned/);
+    expect(r.message).not.toMatch(/protected group/);
+  });
+
+  it("does not count the left-out root a second time as a skipped member", async () => {
+    hn();
+    stub.groups = [];
+    stub.openTabs = stub.openTabs.filter((t) => t.id !== 2 && t.id !== 9);
+    stub.openTabs.find((t) => t.id === 1)!.pinned = true;
+    stub.sessionData.tabParents = { 3: 1, 4: 1 };
+
+    const r = await ACTION_HANDLERS.branchup(ctx());
+    expect(r.message).toMatch(/root tab left out/);
+    expect(r.message).not.toMatch(/pinned|protected/);
+  });
+
+  // The parent is sitting right there in the same group; claiming it was never opened from
+  // another tab contradicts what the user can see, and there is no third state to recover to.
+  it("says the branch is already gathered rather than denying the parent exists", async () => {
+    hn();
+    stub.groups = [{ id: 70, title: "Reading", windowId: 1 }];
+    for (const id of [1, 3, 4]) stub.openTabs.find((t) => t.id === id)!.groupId = 70;
+
+    const r = await ACTION_HANDLERS.branchup(ctx());
+    expect(r.acted).toBe(false);
+    expect(r.message).toMatch(/already gathered/);
+    expect(r.message).not.toMatch(/wasn't opened from another/);
+  });
+
+  it("still denies a parent for a tab that genuinely has none", async () => {
+    hn();
+    stub.openTabs.find((t) => t.id === 4)!.active = false;
+    stub.openTabs.find((t) => t.id === 1)!.active = true;
+
+    const r = await ACTION_HANDLERS.branchup(ctx());
+    expect(r.message).toMatch(/wasn't opened from another/);
+  });
+
+  it("leaves a shared group intact — Chrome refuses edits to one", async () => {
+    hn();
+    stub.openTabs.find((t) => t.id === 3)!.groupId = 60;
+    stub.groups = [{ id: 60, title: "Shared", windowId: 1, shared: true } as never];
+    stub.openTabs.find((t) => t.id === 4)!.active = false;
+    stub.openTabs.find((t) => t.id === 1)!.active = true;
+
+    const r = await ACTION_HANDLERS.branch(ctx());
+    expect(stub.openTabs.find((t) => t.id === 3)!.groupId).toBe(60);
+    expect(r.message).toMatch(/left in protected group/);
   });
 });
 
