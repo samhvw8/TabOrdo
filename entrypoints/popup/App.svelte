@@ -26,6 +26,7 @@
   import SettingsPanel from "../../components/SettingsPanel.svelte";
   import PinsPanel from "../../components/PinsPanel.svelte";
   import OverflowMenu from "../../components/OverflowMenu.svelte";
+  import LazyRows from "../../components/LazyRows.svelte";
 
   // Same component serves two surfaces: the popup is a fixed 450x600 sheet, the side panel is
   // persistent and user-resizable. The caller says which, so the root can size accordingly.
@@ -539,6 +540,19 @@
     const allGroups = await chrome.tabGroups.query({});
     const sharedIds = new Set(allGroups.filter((g) => (g as any).shared === true).map((g) => g.id));
     return allTabs.filter((t) => t.groupId && sharedIds.has(t.groupId));
+  }
+
+  /**
+   * Dashboard tab lists render in chunks of this many rows, each a LazyRows that mounts only
+   * near the viewport. Small enough that a chunk is cheap; large enough that a fast scroll
+   * does not churn through dozens of observers.
+   */
+  const ROWS_PER_CHUNK = 20;
+
+  function chunkRows<T>(items: T[]): T[][] {
+    const out: T[][] = [];
+    for (let i = 0; i < items.length; i += ROWS_PER_CHUNK) out.push(items.slice(i, i + ROWS_PER_CHUNK));
+    return out;
   }
 
   function findDuplicateTabs(tabs: SearchResult[]): SearchResult[] {
@@ -1497,15 +1511,19 @@
             </div>
             {#if !collapsed}
               <div class="p-1 grid gap-0.5">
-                <!-- Keyed: TabCard owns per-instance state (an open volume slider), so an
-                     unkeyed list re-binds that slider to whatever tab lands on the index
-                     after an action reorders things. -->
-                {#each group.tabs as tab (tab.id)}
-                  <TabCard {tab} selected={selectedTabs.has(tab.id)}
-                    positionPinned={!!getPinForTab(tab.url, group.title, pinnedTabs)}
-                    ontoggle={() => toggleSelect(tab.id)}
-                    onclose={() => dashAction(async () => { await snapshotBeforeClose([tab.id]); await closeTabs([tab.id]); })}
-                    onmute={() => loadTabs()} />
+                {#each chunkRows(group.tabs) as rows}
+                  <LazyRows rows={rows.length}>
+                    <!-- Keyed: TabCard owns per-instance state (an open volume slider), so an
+                         unkeyed list re-binds that slider to whatever tab lands on the index
+                         after an action reorders things. -->
+                    {#each rows as tab (tab.id)}
+                      <TabCard {tab} selected={selectedTabs.has(tab.id)}
+                        positionPinned={!!getPinForTab(tab.url, group.title, pinnedTabs)}
+                        ontoggle={() => toggleSelect(tab.id)}
+                        onclose={() => dashAction(async () => { await snapshotBeforeClose([tab.id]); await closeTabs([tab.id]); })}
+                        onmute={() => loadTabs()} />
+                    {/each}
+                  </LazyRows>
                 {/each}
               </div>
             {/if}
@@ -1531,11 +1549,15 @@
             </div>
             {#if !ungroupedCollapsed}
               <div class="p-1 grid gap-0.5">
-                {#each w.ungrouped as tab (tab.id)}
-                  <TabCard {tab} selected={selectedTabs.has(tab.id)}
-                    ontoggle={() => toggleSelect(tab.id)}
-                    onclose={() => dashAction(async () => { await snapshotBeforeClose([tab.id]); await closeTabs([tab.id]); })}
-                    onmute={() => loadTabs()} />
+                {#each chunkRows(w.ungrouped) as rows}
+                  <LazyRows rows={rows.length}>
+                    {#each rows as tab (tab.id)}
+                      <TabCard {tab} selected={selectedTabs.has(tab.id)}
+                        ontoggle={() => toggleSelect(tab.id)}
+                        onclose={() => dashAction(async () => { await snapshotBeforeClose([tab.id]); await closeTabs([tab.id]); })}
+                        onmute={() => loadTabs()} />
+                    {/each}
+                  </LazyRows>
                 {/each}
               </div>
             {/if}
