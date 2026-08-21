@@ -3,7 +3,10 @@
   import { getArchive, restoreFromArchive, deleteFromArchive, clearArchive, type ArchivedTab } from "../../lib/archive.ts";
   import { faviconCacheUrl } from "../../lib/favicon.ts";
 
-  let archive = $state<ArchivedTab[]>([]);
+  // .raw: the list is replaced wholesale on every load, never edited in place, and `filtered`
+  // and `grouped` below walk every entry on each search keystroke — through a deep proxy that
+  // put a trap on every property read for no reactivity anyone used.
+  let archive = $state.raw<ArchivedTab[]>([]);
   let searchQuery = $state("");
   let selectedIds = $state<Set<string>>(new Set());
   let statusMessage = $state("");
@@ -24,32 +27,31 @@
     items: ArchivedTab[];
   }
 
+  // Re-runs on every search keystroke, so it does the per-item minimum: one date key each.
+  // It used to build today/yesterday and a toLocaleDateString label per item as well, then
+  // throw the label away and compute it again per group — 63 ms a keystroke at 2000 entries,
+  // almost all of it Intl. Labels are per group (a handful of days), where they were always
+  // the only ones used.
   let grouped = $derived.by<DateGroup[]>(() => {
     const map = new Map<string, ArchivedTab[]>();
     for (const item of filtered) {
-      const d = new Date(item.archivedAt);
-      const dateKey = d.toISOString().slice(0, 10);
-      const today = new Date();
-      const yesterday = new Date(today);
-      yesterday.setDate(yesterday.getDate() - 1);
-      let label: string;
-      if (dateKey === today.toISOString().slice(0, 10)) label = "Today";
-      else if (dateKey === yesterday.toISOString().slice(0, 10)) label = "Yesterday";
-      else label = d.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
-      if (!map.has(dateKey)) map.set(dateKey, []);
-      map.get(dateKey)!.push(item);
+      const dateKey = new Date(item.archivedAt).toISOString().slice(0, 10);
+      let bucket = map.get(dateKey);
+      if (!bucket) map.set(dateKey, (bucket = []));
+      bucket.push(item);
     }
+    const today = new Date();
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+    const todayKey = today.toISOString().slice(0, 10);
+    const yesterdayKey = yesterday.toISOString().slice(0, 10);
     return [...map.entries()]
       .sort((a, b) => b[0].localeCompare(a[0]))
       .map(([dateKey, items]) => {
-        const d = new Date(items[0].archivedAt);
-        const today = new Date();
-        const yesterday = new Date(today);
-        yesterday.setDate(yesterday.getDate() - 1);
         let label: string;
-        if (dateKey === today.toISOString().slice(0, 10)) label = "Today";
-        else if (dateKey === yesterday.toISOString().slice(0, 10)) label = "Yesterday";
-        else label = d.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
+        if (dateKey === todayKey) label = "Today";
+        else if (dateKey === yesterdayKey) label = "Yesterday";
+        else label = new Date(items[0].archivedAt).toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
         return { label, dateKey, items: items.sort((a, b) => b.archivedAt - a.archivedAt) };
       });
   });
