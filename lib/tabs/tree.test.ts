@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { installChromeStub, type ChromeStub } from "../testing/chrome-stub.ts";
 import {
   resolveParents, collectSubtree, spliceParent, spliceParents, recordOpener, forgetTab,
-  readParents, branchUpRoot, collectBranch, groupBranch,
+  readParents, branchUpRoot, collectBranch, groupBranch, lineageOpener, EXPLICIT_ROOT,
+  parentOf, branchOutline, outlineBranch,
 } from "./tree.ts";
 
 let stub: ChromeStub;
@@ -14,7 +15,7 @@ beforeEach(() => {
 });
 
 const tab = (t: Partial<{
-  id: number; url: string; title: string; pinned: boolean; windowId: number;
+  id: number; url: string; pendingUrl: string; title: string; pinned: boolean; windowId: number;
   groupId: number; index: number; active: boolean; openerTabId: number;
 }>) =>
   ({ id: 0, url: "https://x.com", pinned: false, windowId: 1, groupId: -1, index: 0, ...t }) as any;
@@ -63,6 +64,68 @@ describe("resolveParents", () => {
   });
 });
 
+describe("lineageOpener", () => {
+  it("records the opener of a link-opened tab", () => {
+    expect(lineageOpener(tab({ id: 2, openerTabId: 1, url: "", pendingUrl: "https://a.com" }))).toBe(1);
+  });
+
+  it("has nothing to record for a tab nobody opened", () => {
+    expect(lineageOpener(tab({ id: 2, pendingUrl: "https://a.com" }))).toBeUndefined();
+  });
+
+  it("refuses a tab that names itself as opener", () => {
+    expect(lineageOpener(tab({ id: 2, openerTabId: 2 }))).toBeUndefined();
+  });
+
+  // Chrome hands a Ctrl+T tab the previously active tab as its opener. That is a strip
+  // heuristic, not lineage: whatever gets typed there is a new task.
+  it("turns a Ctrl+T new-tab page into an explicit root", () => {
+    expect(lineageOpener(tab({ id: 2, openerTabId: 1, url: "", pendingUrl: "chrome://newtab/" }))).toBe(EXPLICIT_ROOT);
+    expect(lineageOpener(tab({ id: 2, openerTabId: 1, url: "chrome://newtab/" }))).toBe(EXPLICIT_ROOT);
+    expect(lineageOpener(tab({ id: 2, openerTabId: 1, url: "chrome://new-tab-page/" }))).toBe(EXPLICIT_ROOT);
+  });
+
+  it("does not mistake a page that merely mentions newtab for one", () => {
+    expect(lineageOpener(tab({ id: 2, openerTabId: 1, pendingUrl: "https://x.com/chrome://newtab" }))).toBe(1);
+  });
+});
+
+describe("explicit roots", () => {
+  it("overrule Chrome's live opener when merging", () => {
+    // Chrome still reports the Ctrl+T heuristic; the map says the tab is a root.
+    const tabs = [tab({ id: 1 }), tab({ id: 2, openerTabId: 1 })];
+    expect(resolveParents(tabs, { 2: EXPLICIT_ROOT }).has(2)).toBe(false);
+  });
+
+  it("never surface as a parent id", () => {
+    const parents = resolveParents([tab({ id: 2 })], { 2: EXPLICIT_ROOT });
+    expect([...parents.values()]).not.toContain(EXPLICIT_ROOT);
+  });
+
+  it("survive a splice of unrelated tabs", () => {
+    expect(spliceParents({ 2: EXPLICIT_ROOT, 3: 1 }, [1])).toEqual({ 2: EXPLICIT_ROOT });
+  });
+
+  it("are not inherited by the children of a closed explicit root", () => {
+    // 5 was opened from Ctrl+T tab 2; closing 2 makes 5 a plain root, not a flagged one.
+    expect(spliceParents({ 2: EXPLICIT_ROOT, 5: 2 }, [2])).toEqual({});
+  });
+
+  it("are stored by recordOpener like any other link", async () => {
+    await recordOpener(2, EXPLICIT_ROOT);
+    expect(await readParents()).toEqual({ 2: EXPLICIT_ROOT });
+  });
+});
+
+describe("parentOf", () => {
+  it("answers from the recorded map", async () => {
+    stub.openTabs = HN_TREE();
+    stub.sessionData.tabParents = { ...HN_PARENTS };
+    expect(await parentOf(4)).toBe(3);
+    expect(await parentOf(1)).toBeUndefined();
+  });
+});
+
 describe("collectSubtree", () => {
   const parents = new Map(Object.entries(HN_PARENTS).map(([c, p]) => [Number(c), p]));
 
@@ -87,6 +150,42 @@ describe("collectSubtree", () => {
   it("terminates on a cycle", () => {
     const cyclic = new Map([[1, 2], [2, 1]]);
     expect(collectSubtree(1, cyclic, [1, 2]).sort()).toEqual([1, 2]);
+  });
+});
+
+describe("branchOutline", () => {
+  const parents = new Map<number, number>([[2, 1], [3, 1], [4, 3], [5, 3]]);
+
+  it("lists the root, then each child followed by its own subtree", () => {
+    expect(branchOutline(1, parents, [1, 2, 3, 4, 5])).toEqual([
+      { id: 1, depth: 0 }, { id: 2, depth: 1 }, { id: 3, depth: 1 }, { id: 4, depth: 2 }, { id: 5, depth: 2 },
+    ]);
+  });
+
+  it("orders siblings by the order given, not by id", () => {
+    expect(branchOutline(1, parents, [1, 3, 5, 4, 2]).map((n) => n.id)).toEqual([1, 3, 5, 4, 2]);
+  });
+
+  it("starts wherever it is pointed", () => {
+    expect(branchOutline(3, parents, [1, 2, 3, 4, 5])).toEqual([
+      { id: 3, depth: 0 }, { id: 4, depth: 1 }, { id: 5, depth: 1 },
+    ]);
+  });
+
+  it("leaves out ids missing from the order without losing what sits below them", () => {
+    expect(branchOutline(1, parents, [1, 2, 4, 5]).map((n) => n.id)).toEqual([1, 2, 4, 5]);
+  });
+
+  it("terminates on a cycle", () => {
+    const loop = new Map<number, number>([[2, 1], [1, 2]]);
+    expect(branchOutline(1, loop, [1, 2]).map((n) => n.id)).toEqual([1, 2]);
+  });
+
+  it("reads the live strip in window-then-index order", async () => {
+    stub.openTabs = HN_TREE();
+    stub.sessionData.tabParents = { ...HN_PARENTS };
+    expect((await outlineBranch(1)).map((n) => n.id)).toEqual([1, 2, 3, 4]);
+    expect((await outlineBranch(1)).map((n) => n.depth)).toEqual([0, 1, 1, 2]);
   });
 });
 
@@ -306,6 +405,46 @@ describe("collectBranch", () => {
     const branch = await collectBranch(1, 1);
     expect(branch!.tabs.map((t) => t.id)).toEqual([1, 2, 3]);
   });
+
+  it("does not gather a Ctrl+T tab that Chrome still credits to the root", async () => {
+    // Tab 9 was opened with Ctrl+T while on the listing page: Chrome says opener 1, the map
+    // says explicit root. The branch must not swallow whatever got typed there.
+    stub.openTabs.find((t) => t.id === 9)!.openerTabId = 1;
+    stub.sessionData.tabParents = { ...HN_PARENTS, 9: EXPLICIT_ROOT };
+    const branch = await collectBranch(1, 1);
+    expect(branch!.tabs.map((t) => t.id)).toEqual([1, 2, 3, 4]);
+  });
+
+  describe("existingGroup", () => {
+    const inGroup = (ids: number[], gid: number) => {
+      for (const t of stub.openTabs) if (ids.includes(t.id)) t.groupId = gid;
+      stub.groups = [{ id: gid, title: "Hacker News", windowId: 1 }];
+    };
+
+    it("is the root's group when every member of that group is in the branch", async () => {
+      inGroup([1, 2, 3], 50);
+      const branch = await collectBranch(1, 1);
+      expect(branch!.existingGroup).toEqual({ id: 50, title: "Hacker News" });
+    });
+
+    it("is unset when the root is not grouped", async () => {
+      inGroup([2, 3], 50);
+      expect((await collectBranch(1, 1))!.existingGroup).toBeUndefined();
+    });
+
+    it("is unset when a stranger shares the root's group", async () => {
+      // A domain auto-group holding the listing page and an unrelated tab is not this branch.
+      inGroup([1, 2, 9], 50);
+      expect((await collectBranch(1, 1))!.existingGroup).toBeUndefined();
+    });
+
+    it("is unset when the root's group sits in another window", async () => {
+      // /branchup from a second window: the group has to form where the user is looking.
+      stub.windows = [{ id: 1 }, { id: 2 }];
+      inGroup([1, 2, 3, 4], 50);
+      expect((await collectBranch(1, 2))!.existingGroup).toBeUndefined();
+    });
+  });
 });
 
 describe("groupBranch", () => {
@@ -372,5 +511,46 @@ describe("groupBranch", () => {
     const first = stub.groupUpdates.at(-1)!.color;
     await groupBranch((await collectBranch(1, 1))!, "Morning read");
     expect(stub.groupUpdates.at(-1)!.color).toBe(first);
+  });
+
+  describe("folding into the branch's existing group", () => {
+    beforeEach(() => {
+      // A first run gathered 1, 2, 3; sub-link 4 was opened afterwards.
+      for (const t of stub.openTabs) if ([1, 2, 3].includes(t.id)) t.groupId = 50;
+      stub.groups = [{ id: 50, title: "Morning read", color: "pink", windowId: 1 }];
+    });
+
+    it("adds only the newcomers and creates no second group", async () => {
+      const out = await groupBranch((await collectBranch(1, 1))!);
+      expect(out).toMatchObject({ reused: true, added: 1, grouped: 4, moved: 0, title: "Morning read" });
+      expect(stub.groups.map((g) => g.id)).toEqual([50]);
+      expect(stub.openTabs.filter((t) => t.groupId === 50).map((t) => t.id).sort()).toEqual([1, 2, 3, 4]);
+    });
+
+    it("keeps the group's title and colour when no name is given", async () => {
+      await groupBranch((await collectBranch(1, 1))!);
+      expect(stub.groupUpdates).toEqual([]);
+    });
+
+    it("renames on request without touching the colour", async () => {
+      const out = await groupBranch((await collectBranch(1, 1))!, "Evening read");
+      expect(out.title).toBe("Evening read");
+      expect(stub.groupUpdates).toEqual([{ id: 50, title: "Evening read" }]);
+    });
+
+    it("pulls a newcomer in from another window first", async () => {
+      stub.windows = [{ id: 1 }, { id: 2 }];
+      stub.openTabs.find((t) => t.id === 4)!.windowId = 2;
+      const out = await groupBranch((await collectBranch(1, 1))!);
+      expect(out.moved).toBe(1);
+      expect(stub.openTabs.find((t) => t.id === 4)).toMatchObject({ windowId: 1, groupId: 50 });
+    });
+
+    it("reports nothing added when the branch was already whole", async () => {
+      stub.openTabs.find((t) => t.id === 4)!.groupId = 50;
+      const out = await groupBranch((await collectBranch(1, 1))!);
+      expect(out.added).toBe(0);
+      expect(stub.moves).toEqual([]);
+    });
   });
 });

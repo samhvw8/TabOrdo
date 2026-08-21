@@ -505,6 +505,58 @@ describe("/branch and /branchup", () => {
     expect(stub.groupUpdates.at(-1)!.title).toBe("Hacker News");
   });
 
+  // Chrome drops tabs opened from a grouped tab into that group by itself, so the second run
+  // is mostly about strays. Rebuilding the group for them would cost its collapse state, its
+  // colour and any saved-group identity — and would make Ctrl+Z pop a no-op.
+  describe("running /branch again", () => {
+    const gathered = () => {
+      hn();
+      stub.openTabs.find((t) => t.id === 4)!.active = false;
+      stub.openTabs.find((t) => t.id === 1)!.active = true;
+      for (const t of stub.openTabs) if ([1, 2, 3].includes(t.id)) t.groupId = 50;
+      stub.groups = [{ id: 50, title: "Morning read", color: "pink", windowId: 1 }];
+    };
+
+    it("adds the tabs opened since to the same group", async () => {
+      gathered();
+      const r = await ACTION_HANDLERS.branch(ctx());
+      expect(r.acted).toBe(true);
+      expect(r.message).toMatch(/^Added 1 tab\(s\) to "Morning read"/);
+      expect(groupOf(4)).toBe(50);
+      expect(stub.groups).toHaveLength(1);
+    });
+
+    it("says so and touches nothing when the branch is already whole", async () => {
+      gathered();
+      stub.openTabs.find((t) => t.id === 4)!.groupId = 50;
+      const before = peekUndo();
+      const r = await ACTION_HANDLERS.branch(ctx());
+      expect(r.acted).toBe(false);
+      expect(r.message).toMatch(/already gathered in "Morning read"/);
+      expect(peekUndo()).toBe(before);
+      expect(stub.moves).toEqual([]);
+    });
+
+    it("renames the group when the only change asked for is a name", async () => {
+      gathered();
+      stub.openTabs.find((t) => t.id === 4)!.groupId = 50;
+      const r = await ACTION_HANDLERS.branch(ctx({ query: "Evening read" }));
+      expect(r.acted).toBe(true);
+      expect(r.message).toMatch(/^Renamed branch group to "Evening read"/);
+      expect(stub.groupUpdates).toEqual([{ id: 50, title: "Evening read" }]);
+    });
+
+    it("still builds a fresh group when the root sits in a group with strangers", async () => {
+      gathered();
+      // 9 is unrelated to the branch but auto-grouped alongside the listing page.
+      stub.openTabs.push({ id: 9, url: "https://news.ycombinator.com/x", pinned: false, windowId: 1, groupId: 50, index: 4 });
+      const r = await ACTION_HANDLERS.branch(ctx());
+      expect(r.message).toMatch(/^Grouped 4 tab\(s\)/);
+      expect(groupOf(1)).not.toBe(50);
+      expect(groupOf(9)).toBe(50);
+    });
+  });
+
   // Chrome rejects tabs.group while a tab is being dragged. groupBranch groups before it moves
   // anything precisely so that rejection lands on an untouched strip.
   const twoWindowBranch = () => {
@@ -670,5 +722,44 @@ describe("mergeStatus", () => {
     expect(mergeStatus({ moved: 3, groupsFailed: 0 })).toBe("Merged 3 tab(s)");
     expect(mergeStatus({ moved: 3, groupsFailed: 2 }))
       .toBe("Merged 3 tab(s) — 2 group(s) could not be rebuilt");
+  });
+});
+
+
+describe("/parent", () => {
+  const hn = () => {
+    stub.windows = [{ id: 1 }];
+    stub.openTabs = [
+      { id: 1, url: "https://news.ycombinator.com", title: "Hacker News", pinned: false, windowId: 1, groupId: -1, index: 0 },
+      { id: 3, url: "https://b.com", pinned: false, windowId: 1, groupId: -1, index: 1 },
+      { id: 4, url: "https://b.com/deep", pinned: false, windowId: 1, groupId: -1, index: 2, active: true },
+    ];
+    stub.sessionData.tabParents = { 3: 1, 4: 3 };
+  };
+
+  it("switches to the tab that opened the active one and closes the popup", async () => {
+    hn();
+    const r = await ACTION_HANDLERS.parent(ctx());
+    expect(r.closePopup).toBe(true);
+    expect(stub.tabUpdates.at(-1)).toEqual({ id: 3, active: true });
+  });
+
+  it("reaches a parent whose opener link Chrome has already forgotten", async () => {
+    // Chrome reports no openerTabId anywhere; only the recorded map knows.
+    hn();
+    expect(stub.openTabs.every((t) => (t as { openerTabId?: number }).openerTabId === undefined)).toBe(true);
+    await ACTION_HANDLERS.parent(ctx());
+    expect(stub.tabUpdates.at(-1)!.id).toBe(3);
+  });
+
+  it("says when the tab was not opened from another", async () => {
+    hn();
+    stub.openTabs.find((t) => t.id === 4)!.active = false;
+    stub.openTabs.find((t) => t.id === 1)!.active = true;
+    const r = await ACTION_HANDLERS.parent(ctx());
+    expect(r.acted).toBe(false);
+    expect(r.closePopup).toBeUndefined();
+    expect(r.message).toMatch(/No parent tab/);
+    expect(stub.tabUpdates).toEqual([]);
   });
 });

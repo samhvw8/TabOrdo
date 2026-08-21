@@ -1,10 +1,20 @@
 // Tab lineage — which tab opened which — and the branch gathering built on it.
 //
 // Chrome exposes an opener in tab.openerTabId, but it is thin: it vanishes the moment the
-// opener closes, and it never survives a browser restart. Recording the link ourselves at
-// tabs.onCreated buys the case that actually breaks a reading session — an *intermediate* tab
-// closing. Close article B and its sub-links re-parent to the listing page above it, so
-// gathering from that listing page still catches them. openerTabId alone drops them.
+// opener closes, it never survives a browser restart, and Chrome's tab strip forgets *every*
+// opener relationship the moment any tab navigates by something other than a link click —
+// typing a URL anywhere wipes the lot (TabStripModel::TabNavigating: "we assume they're
+// beginning a different task"). Recording the link ourselves at tabs.onCreated buys the case
+// that actually breaks a reading session — an *intermediate* tab closing. Close article B and
+// its sub-links re-parent to the listing page above it, so gathering from that listing page
+// still catches them. openerTabId alone drops them.
+//
+// One opener Chrome reports is deliberately not recorded: a Ctrl+T new-tab page names the tab
+// you were looking at as its opener ("tabs opened in the foreground inherit the opener of the
+// previously active tab"), and Chrome keeps that link through the first navigation typed into
+// it, as a quick-lookup heuristic. Whatever gets typed there is a new task, not part of the
+// branch, so the tab is recorded as an explicit root — which also stops the live value from
+// re-introducing the link when the map and Chrome are merged.
 //
 // Closing a *root* is the one case this cannot rescue: with no grandparent to inherit, its
 // children become roots and stop being each other's siblings. Keeping them linked would mean
@@ -21,15 +31,45 @@ import { getFullHostname, hashCode } from "../url.ts";
 
 const TREE_KEY = "tabParents";
 
-/** child tab id -> the tab that opened it. */
+/**
+ * Sentinel parent: "this tab has no opener, and Chrome's live value for it is not to be
+ * trusted". Recorded for the Ctrl+T case described above. Never a real tab id.
+ */
+export const EXPLICIT_ROOT = -1;
+
+/** child tab id -> the tab that opened it, or EXPLICIT_ROOT. */
 export type ParentMap = Record<number, number>;
+
+// What a Ctrl+T (or the browser-menu "New tab") tab is navigating to when tabs.onCreated
+// fires. Matched by prefix: Chrome has reported both "chrome://newtab/" and the WebUI page
+// behind it, and Edge has its own scheme.
+const NEW_TAB_PAGE_PREFIXES = ["chrome://newtab", "chrome://new-tab-page", "edge://newtab", "about:newtab"];
+
+function isNewTabPage(url: string | undefined): boolean {
+  return !!url && NEW_TAB_PAGE_PREFIXES.some((p) => url.startsWith(p));
+}
+
+/**
+ * The parent to record for a freshly created tab: its opener, EXPLICIT_ROOT for a new-tab
+ * page whose opener is only Chrome's quick-lookup heuristic, or undefined when there is
+ * nothing to record at all. Read at tabs.onCreated, when pendingUrl still says what the tab
+ * is — by the time it has navigated, a Ctrl+T tab and a link-opened one look identical.
+ */
+export function lineageOpener(
+  tab: Pick<chrome.tabs.Tab, "id" | "openerTabId" | "url" | "pendingUrl">
+): number | undefined {
+  if (tab.id === undefined || tab.openerTabId === undefined || tab.openerTabId === tab.id) return undefined;
+  if (isNewTabPage(tab.pendingUrl) || isNewTabPage(tab.url)) return EXPLICIT_ROOT;
+  return tab.openerTabId;
+}
 
 /**
  * Fold the live openerTabId values into the recorded map. Chrome's value wins where both
  * exist — it is the browser's own truth and it covers tabs opened before this extension was
  * installed — while the recorded map covers the case Chrome drops, an opener that has since
  * closed. Links pointing at a tab that no longer exists are discarded either way: a dead
- * parent is the same as no parent.
+ * parent is the same as no parent. The one place the map overrules Chrome is a tab recorded
+ * as an EXPLICIT_ROOT: Chrome's opener there is the Ctrl+T heuristic, not lineage.
  */
 export function resolveParents(
   tabs: Pick<chrome.tabs.Tab, "id" | "openerTabId">[],
@@ -39,16 +79,25 @@ export function resolveParents(
   for (const t of tabs) if (t.id !== undefined) live.add(t.id);
 
   const parents = new Map<number, number>();
+  const roots = new Set<number>();
   for (const [child, parent] of Object.entries(stored)) {
     const c = Number(child);
-    if (c !== parent && live.has(c) && live.has(parent)) parents.set(c, parent);
+    if (!live.has(c)) continue;
+    if (parent === EXPLICIT_ROOT) roots.add(c);
+    else if (c !== parent && live.has(parent)) parents.set(c, parent);
   }
   for (const t of tabs) {
-    if (t.id === undefined || t.openerTabId === undefined) continue;
+    if (t.id === undefined || t.openerTabId === undefined || roots.has(t.id)) continue;
     if (t.openerTabId === t.id || !live.has(t.openerTabId)) continue;
     parents.set(t.id, t.openerTabId);
   }
   return parents;
+}
+
+/** The tab that opened `tabId`, as far as the map and Chrome between them know. */
+export async function parentOf(tabId: number): Promise<number | undefined> {
+  const all = await chrome.tabs.query({});
+  return resolveParents(all, await readParents()).get(tabId);
 }
 
 /**
@@ -85,6 +134,54 @@ export function collectSubtree(
 }
 
 /**
+ * The branch as an outline: root first, then each child followed by its own subtree, with the
+ * depth below the root. Siblings come in `order` (strip order, normally), so the outline reads
+ * top-to-bottom the way the tabs sit left-to-right. Only ids present in `order` appear.
+ * Same cycle guard as collectSubtree, for the same reason.
+ */
+export function branchOutline(
+  rootId: number,
+  parents: Map<number, number>,
+  order: number[]
+): { id: number; depth: number }[] {
+  const rank = new Map(order.map((id, i) => [id, i]));
+  const children = new Map<number, number[]>();
+  for (const [child, parent] of parents) {
+    if (!children.has(parent)) children.set(parent, []);
+    children.get(parent)!.push(child);
+  }
+  // Walk the whole map and filter at emit time, like collectSubtree: a node missing from
+  // `order` is left out without severing whatever sits below it.
+  const at = (id: number) => rank.get(id) ?? Number.MAX_SAFE_INTEGER;
+  for (const kids of children.values()) kids.sort((a, b) => at(a) - at(b));
+
+  const out: { id: number; depth: number }[] = [];
+  const seen = new Set<number>([rootId]);
+  const stack: { id: number; depth: number }[] = [{ id: rootId, depth: 0 }];
+  while (stack.length > 0) {
+    const node = stack.pop()!;
+    if (rank.has(node.id)) out.push(node);
+    const kids = children.get(node.id) ?? [];
+    for (let i = kids.length - 1; i >= 0; i--) {
+      if (seen.has(kids[i])) continue;
+      seen.add(kids[i]);
+      stack.push({ id: kids[i], depth: node.depth + 1 });
+    }
+  }
+  return out;
+}
+
+/** branchOutline over the live strip: every tab below `rootId`, in tree order with depths. */
+export async function outlineBranch(rootId: number): Promise<{ id: number; depth: number }[]> {
+  const all = await chrome.tabs.query({});
+  const ordered = [...all]
+    .filter((t) => t.id !== undefined)
+    .sort((a, b) => a.windowId - b.windowId || (a.index ?? 0) - (b.index ?? 0))
+    .map((t) => t.id!);
+  return branchOutline(rootId, resolveParents(all, await readParents()), ordered);
+}
+
+/**
  * Drop `tabIds` from the map without severing the branches below them: each surviving child
  * re-parents to its nearest ancestor that is *not* being removed. Closing the Hacker News tab
  * should leave the articles standing as roots, not orphan every sub-link they had opened.
@@ -109,8 +206,11 @@ export function spliceParents(parents: ParentMap, tabIds: number[]): ParentMap |
       seen.add(p);
       p = parents[p];
     }
-    // Nothing live left above it, or the chain looped back around: it becomes a root.
+    // Nothing live left above it, or the chain looped back around: it becomes a root. An
+    // EXPLICIT_ROOT is kept only when it is this tab's own recorded value — inheriting the
+    // sentinel from a closed Ctrl+T ancestor would just be a plain root wearing a flag.
     if (p === undefined || dead.has(p) || p === c) { changed = true; continue; }
+    if (p === EXPLICIT_ROOT && parent !== EXPLICIT_ROOT) { changed = true; continue; }
     if (p !== parent) changed = true;
     next[c] = p;
   }
@@ -160,6 +260,7 @@ function mutate(
   return queue;
 }
 
+/** `openerTabId` may be EXPLICIT_ROOT — see lineageOpener. */
 export function recordOpener(tabId: number, openerTabId: number): Promise<void> {
   return mutate((parents) =>
     tabId === openerTabId || parents[tabId] === openerTabId
@@ -214,6 +315,15 @@ export interface Branch {
   skippedPinned: number;
   /** Members left alone because their group is shared or on the user's ignore list. */
   skippedProtected: number;
+  /**
+   * The group this branch already lives in, when there is one: the root's group, sitting in
+   * the target window, with no member from outside the branch. Running the command again
+   * folds into it — adding the tabs opened since — instead of dissolving and rebuilding it,
+   * which would cost the group its collapse state, its colour, and any identity Chrome's saved
+   * groups had given it. A group holding a stranger (a domain auto-group, say) does not
+   * qualify: the branch gets a group of its own, which is what the command promises.
+   */
+  existingGroup?: { id: number; title: string };
 }
 
 export interface BranchUpTarget {
@@ -311,14 +421,26 @@ export async function collectBranch(
   const tabs = ordered.filter((t) => inBranch.has(t.id!));
 
   const members = all.filter((t) => t.id !== undefined && t.id !== rootId && inBranch.has(t.id));
+  const rootIncluded = tabs.some((t) => t.id === rootId);
+
+  let existingGroup: Branch["existingGroup"];
+  if (rootIncluded && root.groupId !== -1 && root.windowId === targetWindowId) {
+    const outsiders = all.some((t) => t.groupId === root.groupId && !inBranch.has(t.id!));
+    if (!outsiders) {
+      const group = (await chrome.tabGroups.query({ windowId: targetWindowId })).find((g) => g.id === root.groupId);
+      if (group) existingGroup = { id: group.id, title: group.title || "" };
+    }
+  }
+
   return {
     root,
     windowId: targetWindowId,
     tabs,
-    rootIncluded: tabs.some((t) => t.id === rootId),
+    rootIncluded,
     skippedPinned: members.filter((t) => t.pinned).length,
     // Pinned wins the attribution when a tab is both: unpinning is the actionable half.
     skippedProtected: members.filter((t) => !t.pinned && untouchable.has(t.groupId)).length,
+    existingGroup,
   };
 }
 
@@ -347,12 +469,39 @@ function branchTitle(root: chrome.tabs.Tab): string {
  * rejection there does leave that one tab moved and ungrouped. Reaching it takes a branch
  * whose every target-window member is pinned or protected, and the undo snapshot the caller
  * takes first still covers it.
+ *
+ * When the branch already has a group of its own (Branch.existingGroup), nothing is rebuilt:
+ * the members not yet in it are moved across and added, and the group keeps its title unless
+ * the command supplied one. `added` is what actually changed; a caller seeing zero with no
+ * title given knows the run was a no-op.
  */
 export async function groupBranch(
   branch: Branch,
   title?: string
-): Promise<{ grouped: number; moved: number; title: string }> {
-  const { root, windowId, tabs } = branch;
+): Promise<{ grouped: number; moved: number; title: string; added: number; reused: boolean }> {
+  const { root, windowId, tabs, existingGroup } = branch;
+  const wanted = (title || "").trim();
+
+  if (existingGroup) {
+    const toAdd = tabs.filter((t) => t.groupId !== existingGroup.id);
+    const strays = toAdd.filter((t) => t.windowId !== windowId).map((t) => t.id!);
+    if (strays.length > 0) await chrome.tabs.move(strays, { windowId, index: -1 });
+    if (toAdd.length > 0) {
+      await chrome.tabs.group({ tabIds: toAdd.map((t) => t.id!), groupId: existingGroup.id });
+    }
+    // Rename on request only; the colour stays — the group is the user's, not this run's.
+    if (wanted && wanted !== existingGroup.title) {
+      await chrome.tabGroups.update(existingGroup.id, { title: wanted });
+    }
+    return {
+      grouped: tabs.length,
+      moved: strays.length,
+      title: wanted || existingGroup.title,
+      added: toAdd.length,
+      reused: true,
+    };
+  }
+
   const moved = tabs.filter((t) => t.windowId !== windowId).length;
 
   let seed = tabs.filter((t) => t.windowId === windowId);
@@ -360,7 +509,7 @@ export async function groupBranch(
   // A pinned or protected root can leave the target window contributing nothing, and
   // tabs.group needs at least one member to anchor the new group.
   if (seed.length === 0) {
-    if (rest.length === 0) return { grouped: 0, moved: 0, title: "" };
+    if (rest.length === 0) return { grouped: 0, moved: 0, title: "", added: 0, reused: false };
     const [first, ...others] = rest;
     await chrome.tabs.move(first.id!, { windowId, index: -1 });
     seed = [first];
@@ -371,7 +520,7 @@ export async function groupBranch(
     tabIds: seed.map((t) => t.id!),
     createProperties: { windowId },
   });
-  const name = (title || "").trim() || branchTitle(root);
+  const name = wanted || branchTitle(root);
   await chrome.tabGroups.update(groupId, {
     title: name,
     color: GROUP_COLORS[Math.abs(hashCode(name)) % GROUP_COLORS.length],
@@ -382,5 +531,5 @@ export async function groupBranch(
     await chrome.tabs.move(ids, { windowId, index: -1 });
     await chrome.tabs.group({ tabIds: ids, groupId });
   }
-  return { grouped: tabs.length, moved, title: name };
+  return { grouped: tabs.length, moved, title: name, added: tabs.length, reused: false };
 }

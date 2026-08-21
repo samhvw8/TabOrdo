@@ -1,5 +1,5 @@
 import { getConfig, matchDomainToRule, isIgnoredUrl, isIgnoredGroupName } from "../../lib/rules.ts";
-import { getFullHostname, getDomainMapper, sortTabsInWindow, pickMajorityWindow, GROUP_COLORS, hashCode, setTitleBadge, recordOpener, forgetTab, isSharedGroup } from "../../lib/tabs/index.ts";
+import { getFullHostname, getDomainMapper, sortTabsInWindow, pickMajorityWindow, GROUP_COLORS, hashCode, setTitleBadge, recordOpener, lineageOpener, forgetTab, isSharedGroup } from "../../lib/tabs/index.ts";
 import { syncPinUrl, clearPinTabIds } from "../../lib/pin.ts";
 import { findBounceTarget } from "../../lib/bounce.ts";
 import { logAction } from "../../lib/actionLog.ts";
@@ -210,8 +210,10 @@ export default defineBackground(() => {
   // Registered apart from the recentTabs listener above so a failure in one costs only itself.
   register("tabs.onCreated (lineage)", () => {
     chrome.tabs.onCreated.addListener((tab) => {
-      if (tab.id === undefined || tab.openerTabId === undefined) return;
-      void recordOpener(tab.id, tab.openerTabId);
+      // lineageOpener also turns a Ctrl+T new-tab page into an explicit root: Chrome names the
+      // tab you were on as its opener, and whatever gets typed there is not part of a branch.
+      const opener = lineageOpener(tab);
+      if (opener !== undefined) void recordOpener(tab.id!, opener);
     });
   });
 

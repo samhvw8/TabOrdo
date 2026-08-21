@@ -37,6 +37,7 @@ export const ACTION_COMMANDS: CommandDefinition[] = [
   { prefix: "group", label: "/group", description: "Group matching tabs", category: "action", color: "text-accent-orange" },
   { prefix: "branch", label: "/branch", description: "Group this tab and every tab opened from it", category: "action", color: "text-accent-orange" },
   { prefix: "branchup", label: "/branchup", description: "Group its parent's branch (parent + siblings)", category: "action", color: "text-accent-orange" },
+  { prefix: "parent", label: "/parent", description: "Switch to the tab that opened this one", category: "action", color: "text-accent-orange" },
   { prefix: "merge", label: "/merge", description: "Pull every tab from other windows into this one", category: "action", color: "text-accent-orange" },
   { prefix: "sort", label: "/sort", description: "Sort tabs (domain|title|url)", category: "action", color: "text-accent-orange" },
   { prefix: "dedup", label: "/dedup", description: "Remove duplicate tabs", category: "action", color: "text-accent-orange" },
@@ -94,6 +95,7 @@ export const TRIAGE_COMMANDS: CommandDefinition[] = [
   { prefix: "@r", label: "@r", description: "Recently active tabs", category: "view", color: "text-accent-blue" },
   { prefix: "@s", label: "@s", description: "Unloaded tabs (reload when you return)", category: "view", color: "text-accent-pink" },
   { prefix: "@u", label: "@u", description: "Ungrouped tabs", category: "view", color: "text-accent-orange" },
+  { prefix: "@b", label: "@b", description: "This tab's branch — everything opened from it", category: "view", color: "text-accent-orange" },
   { prefix: "@f", label: "@f", description: "Tabs Chrome paused to save memory", category: "view", color: "text-accent-cyan" },
   { prefix: "@shared", label: "@shared", description: "Tabs in shared groups", category: "view", color: "text-accent-green" },
 ];
@@ -103,7 +105,7 @@ export const ALL_COMMANDS = [...SEARCH_COMMANDS, ...ACTION_COMMANDS, ...VIEW_COM
 // Forty-odd actions in one flat list read as noise. These sub-clusters give the browse surfaces
 // something to break on; the order of the keys is the order they render in.
 const ACTION_GROUPS: Record<string, string[]> = {
-  Organize: ["group", "branch", "branchup", "ungroup", "collapse", "sort", "dedup", "aigroup"],
+  Organize: ["group", "branch", "branchup", "parent", "ungroup", "collapse", "sort", "dedup", "aigroup"],
   Windows: ["merge", "unite", "split", "extract", "isolate", "splitdomain", "splitv", "splith", "stack"],
   Order: ["move", "movegroup", "lock", "unlock", "lockgroup", "unlockgroup", "pin", "unpin", "pingroup", "unpingroup", "shuffle"],
   Close: ["close", "closeleft", "closeright", "closeold", "closesite", "archive"],

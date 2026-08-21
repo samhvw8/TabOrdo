@@ -13,8 +13,8 @@ import {
   splitTabToWindow, discardTabs, closeTabsToLeft, closeTabsToRight, closeTabsSameSite,
   closeOldTabs, shuffleTabs, uniteDomain, isolateDomain, splitWindow, splitByDomain,
   stackWindows, collapseAllGroups, moveCurrentTab, moveGroup, pinCurrentTab, unpinCurrentTab,
-  pinCurrentGroup, unpinCurrentGroup, collectBranch, groupBranch, branchUpRoot,
-  type MoveGroupsResult,
+  pinCurrentGroup, unpinCurrentGroup, collectBranch, groupBranch, branchUpRoot, parentOf,
+  switchToTab, type MoveGroupsResult,
 } from "./tabs/index.ts";
 import { archiveTabs, isArchivable } from "./archive.ts";
 import { snapshotBeforeClose, snapshotBeforeGroup } from "./undo.ts";
@@ -47,6 +47,8 @@ export interface ActionResult {
   workspaceChanged?: boolean;
   /** A result list to display instead of the live tab search (/recent). */
   results?: SearchResult[];
+  /** The handler switched tabs; the popup should close the way picking a result does. */
+  closePopup?: boolean;
 }
 
 export type ActionHandler = (ctx: ActionContext) => Promise<ActionResult>;
@@ -132,8 +134,20 @@ async function gatherBranch(ctx: ActionContext, from: "self" | "parent"): Promis
     };
   }
 
+  // A branch that already sits whole in its own group has nothing to gather. Without a name to
+  // apply, say so and leave the strip — and the undo stack — untouched.
+  const wanted = ctx.query.trim();
+  if (branch.existingGroup && branch.tabs.every((t) => t.groupId === branch.existingGroup!.id)) {
+    if (!wanted || wanted === branch.existingGroup.title) {
+      return {
+        message: `Branch is already gathered in "${branch.existingGroup.title}" (${branch.tabs.length} tabs)`,
+        acted: false,
+      };
+    }
+  }
+
   await snapshotBeforeGroup();
-  const { grouped, moved, title } = await groupBranch(branch, ctx.query);
+  const { grouped, moved, title, added, reused } = await groupBranch(branch, ctx.query);
   // Everything the command quietly declined to do gets said out loud — a member left behind in
   // a protected group is exactly the kind of omission that reads as a bug when it is silent.
   const notes: string[] = [];
@@ -142,7 +156,12 @@ async function gatherBranch(ctx: ActionContext, from: "self" | "parent"): Promis
   if (branch.skippedPinned > 0) notes.push(`${branch.skippedPinned} pinned`);
   if (branch.skippedProtected > 0) notes.push(`${branch.skippedProtected} left in protected group(s)`);
   const suffix = notes.length > 0 ? ` — ${notes.join(", ")}` : "";
-  return { message: `Grouped ${grouped} tab(s) into "${title}"${suffix}`, acted: true };
+  const verb = !reused
+    ? `Grouped ${grouped} tab(s) into "${title}"`
+    : added > 0
+      ? `Added ${added} tab(s) to "${title}" (${grouped} total)`
+      : `Renamed branch group to "${title}"`;
+  return { message: `${verb}${suffix}`, acted: true };
 }
 
 export const ACTION_HANDLERS: Record<string, ActionHandler> = {
@@ -270,6 +289,20 @@ export const ACTION_HANDLERS: Record<string, ActionHandler> = {
   // The trailing text is the group title, not a tab filter: the branch decides its own members.
   branch: (ctx) => gatherBranch(ctx, "self"),
   branchup: (ctx) => gatherBranch(ctx, "parent"),
+
+  // The navigation half of lineage: back to the listing page this article came from. Chrome
+  // does this itself when you close a tab — but only while its own opener link survives, and
+  // it forgets those on any typed navigation. TabOrdo's map does not.
+  parent: async () => {
+    const tab = await activeTab();
+    if (!tab?.id) return NOTHING;
+    const parentId = await parentOf(tab.id);
+    if (parentId === undefined) {
+      return { message: "No parent tab — this one wasn't opened from another", acted: false };
+    }
+    await switchToTab(parentId);
+    return { acted: false, closePopup: true };
+  },
 
   shuffle: async () => {
     await snapshotBeforeGroup();

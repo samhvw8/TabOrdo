@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { getAllTabs, getCurrentWindowTabs, switchToTab, closeTabs, sortTabsInWindow, sortTabsInGroup, groupTabsByDomain, ungroupAll, removeDuplicates, mergeAllWindows, extractGroupToWindow, discardTabs, closeTabsToLeft, closeTabsToRight, closeTabsSameSite, closeOldTabs, shuffleTabs, uniteDomain, isolateDomain, splitWindow, splitByDomain, stackWindows, pinCurrentTab, unpinCurrentTab, type TabInfo } from "../../lib/tabs/index.ts";
+  import { getAllTabs, getCurrentWindowTabs, switchToTab, closeTabs, sortTabsInWindow, sortTabsInGroup, groupTabsByDomain, ungroupAll, removeDuplicates, mergeAllWindows, extractGroupToWindow, discardTabs, closeTabsToLeft, closeTabsToRight, closeTabsSameSite, closeOldTabs, shuffleTabs, uniteDomain, isolateDomain, splitWindow, splitByDomain, stackWindows, pinCurrentTab, unpinCurrentTab, outlineBranch, type TabInfo } from "../../lib/tabs/index.ts";
   import { getPinnedTabs, getPinForTab, type PinnedTabEntry } from "../../lib/pin.ts";
   import { archiveTabs, getArchiveCount } from "../../lib/archive.ts";
   import { search, rankedSearch, tabsToSearchItems, searchBookmarks, searchHistory, parseCommand, buildSearchHaystack, buildTitleHaystack, type SearchResult } from "../../lib/search.ts";
@@ -488,6 +488,10 @@
       tabs: () => allTabs.filter((t) => t.frozen), overviewTabs: () => allTabs.filter((t) => t.frozen) },
     { prefix: "@u", id: "div-triage-ungrouped", title: "Ungrouped", empty: "All tabs are grouped",
       tabs: () => allTabs.filter((t) => !t.groupId || t.groupId === -1) },
+    // What /branch would gather, before gathering it — and the place to see why it grabbed
+    // (or missed) a tab. Contextual like @u, so it stays out of the bare "@" overview.
+    { prefix: "@b", id: "div-triage-branch", title: "Branch", empty: "No tabs were opened from this one",
+      tabs: branchViewTabs },
     { prefix: "@shared", id: "div-triage-shared", title: "Shared Groups", empty: "No shared group tabs",
       tabs: sharedGroupTabs },
   ];
@@ -502,6 +506,27 @@
       .filter((t) => t.type === "tab")
       .sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0))
       .slice(0, limit);
+  }
+
+  /**
+   * The active tab's branch as an outline: the root first, everything opened from it indented
+   * beneath, in tree order. Depth is drawn into the title with a non-breaking indent — the
+   * row component has no notion of nesting, and this is a view, not a data change.
+   */
+  async function branchViewTabs(): Promise<SearchResult[]> {
+    const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!active?.id) return [];
+    const outline = await outlineBranch(active.id);
+    // A lone root is not a branch; let the empty message say so.
+    if (outline.length < 2) return [];
+    const byId = new Map(allTabs.filter((t) => t.tabId !== undefined).map((t) => [t.tabId!, t]));
+    const rows: SearchResult[] = [];
+    for (const { id, depth } of outline) {
+      const t = byId.get(id);
+      if (!t) continue;
+      rows.push(depth === 0 ? t : { ...t, title: `${"\u00A0\u00A0".repeat(depth - 1)}\u21B3 ${t.title || "Untitled"}` });
+    }
+    return rows;
   }
 
   async function sharedGroupTabs(): Promise<SearchResult[]> {
@@ -702,6 +727,9 @@
           requestFilePicker,
         });
         if (!outcome) return;
+
+        // The handler switched tabs (/parent): leave the way picking a result does.
+        if (outcome.closePopup) { window.close(); return; }
 
         // Undefined message means "leave whatever is on screen" — a handler that matched
         // nothing shouldn't blank out the last thing the user was told.
