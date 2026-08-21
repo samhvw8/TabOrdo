@@ -192,6 +192,36 @@ function fuzzySearch(haystack: string[], needle: string, limit: number): number[
 }
 
 /**
+ * Per-haystack preprocessing, cached by array identity.
+ *
+ * The literal tiers used to lower-case every entry — and prefixSearch re-split it into words —
+ * on every keystroke: at 1000 tabs that was 1.9 ms of a 3.3 ms search, paid again for each
+ * character typed although the haystack had not changed. The popup builds a haystack once per
+ * load and then searches it dozens of times, so the first search pays here and the rest hit.
+ *
+ * Keyed on the array, not its contents: callers must replace the haystack rather than mutate
+ * it in place, which is what every builder in this file already does (map → new array). The
+ * WeakMap lets a discarded haystack take its cache with it.
+ */
+interface PreparedHaystack {
+  lower: string[];
+  words: string[][];
+}
+
+const WORD_SPLIT = /[\s/.:_-]+/;
+const prepared = new WeakMap<string[], PreparedHaystack>();
+
+function prepare(haystack: string[]): PreparedHaystack {
+  let p = prepared.get(haystack);
+  if (!p) {
+    const lower = haystack.map((h) => h.toLowerCase());
+    p = { lower, words: lower.map((h) => h.split(WORD_SPLIT)) };
+    prepared.set(haystack, p);
+  }
+  return p;
+}
+
+/**
  * In-order character match, the way fzf and most command palettes behave: "yt" reaches
  * "YouTube" because y precedes t. uFuzzy can't do this — it runs in SingleError mode, and
  * "yt" → "youtube" needs two inserted characters.
@@ -203,9 +233,10 @@ function subsequenceSearch(haystack: string[], needle: string, limit: number): n
   // One-character needles match nearly everything and carry no signal.
   const q = needle.toLowerCase().replace(/\s+/g, "");
   if (q.length < 2) return [];
+  const { lower } = prepare(haystack);
   const scored: { i: number; span: number }[] = [];
-  for (let i = 0; i < haystack.length; i++) {
-    const span = subsequenceSpan(haystack[i].toLowerCase(), q);
+  for (let i = 0; i < lower.length; i++) {
+    const span = subsequenceSpan(lower[i], q);
     if (span >= 0) scored.push({ i, span });
   }
   scored.sort((a, b) => a.span - b.span);
@@ -232,20 +263,21 @@ function subsequenceSpan(text: string, q: string): number {
 }
 
 function exactSearch(haystack: string[], needle: string, limit: number): number[] {
-  const lower = needle.toLowerCase();
+  const q = needle.toLowerCase();
+  const { lower } = prepare(haystack);
   const results: number[] = [];
-  for (let i = 0; i < haystack.length && results.length < limit; i++) {
-    if (haystack[i].toLowerCase().includes(lower)) results.push(i);
+  for (let i = 0; i < lower.length && results.length < limit; i++) {
+    if (lower[i].includes(q)) results.push(i);
   }
   return results;
 }
 
 function prefixSearch(haystack: string[], needle: string, limit: number): number[] {
-  const lower = needle.toLowerCase();
+  const q = needle.toLowerCase();
+  const { words } = prepare(haystack);
   const results: number[] = [];
-  for (let i = 0; i < haystack.length && results.length < limit; i++) {
-    const words = haystack[i].toLowerCase().split(/[\s/.:_-]+/);
-    if (words.some((w) => w.startsWith(lower))) results.push(i);
+  for (let i = 0; i < words.length && results.length < limit; i++) {
+    if (words[i].some((w) => w.startsWith(q))) results.push(i);
   }
   return results;
 }
