@@ -32,7 +32,7 @@
   let { fluid = false }: { fluid?: boolean } = $props();
 
   let query = $state("");
-  let results = $state<SearchResult[]>([]);
+  let results = $state.raw<SearchResult[]>([]);
   let selectedIndex = $state(0);
   let commandHints = $state<CommandDefinition[]>([]);
   let statusMessage = $state("");
@@ -61,7 +61,7 @@
   let searchAutofocus = $state(!fluid);
   let canUndo = $state(false);
   let archiveCount = $state(0);
-  let pinnedTabs = $state<PinnedTabEntry[]>([]);
+  let pinnedTabs = $state.raw<PinnedTabEntry[]>([]);
   let fileInputEl = $state<HTMLInputElement | undefined>(undefined);
   let busy = $state(false);
   let aiProgress = $state<AIGroupProgress>(defaultProgress());
@@ -196,11 +196,17 @@
     setCollapsed(next);
   }
 
-  let allTabs = $state<SearchResult[]>([]);
-  let searchHaystack = $state<string[]>([]);
-  let searchTitleHaystack = $state<string[]>([]);
-  let searchRecency = $state<number[]>([]);
-  let searchPriority = $state<number[]>([]);
+  // $state.raw, and plain lets for the four search arrays, deliberately. A deep $state proxy
+  // puts a trap on every element read, and rankedSearch reads these thousands of times per
+  // keystroke — in loops and inside sort comparators. Measured at 2.4x the whole search cost
+  // (8.5 ms vs 3.3 ms per keystroke at 1000 tabs). Nothing mutates any of these in place; they
+  // are only ever replaced wholesale, which is exactly the case .raw exists for. The haystack
+  // and recency arrays are never read by the template at all, so they need no rune.
+  let allTabs = $state.raw<SearchResult[]>([]);
+  let searchHaystack: string[] = [];
+  let searchTitleHaystack: string[] = [];
+  let searchRecency: number[] = [];
+  let searchPriority: number[] = [];
   let highlightQuery = $state("");
 
   interface WindowData {
@@ -211,8 +217,8 @@
     tabCount: number;
   }
 
-  let windows = $state<WindowData[]>([]);
-  let dashboardTabs = $state<TabInfo[]>([]);
+  let windows = $state.raw<WindowData[]>([]);
+  let dashboardTabs = $state.raw<TabInfo[]>([]);
   let selectedTabs = $state<Set<number>>(new Set());
   let currentWindowId = $state(0);
 
