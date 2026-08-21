@@ -3,6 +3,7 @@
 import type { TabInfo } from "./types.ts";
 import { getAllTabs } from "./query.ts";
 import { snapshotBeforeClose } from "../undo.ts";
+import { getPinnedTabs, type PinnedTabEntry } from "../pin.ts";
 
 export async function findDuplicates(): Promise<Map<string, TabInfo[]>> {
   const tabs = await getAllTabs();
@@ -22,23 +23,44 @@ export async function findDuplicates(): Promise<Map<string, TabInfo[]>> {
   return duplicates;
 }
 
+/**
+ * Tab ids in `tabs` that a position pin resolves to — at most ONE per pin, tabId before URL,
+ * the order applyPinsToGroup and getPinForTab already use. Resolving to a set rather than a
+ * predicate matters: two identical-URL copies inside one pinned group both match the same
+ * entry, and treating both as pinned would leave dedup with nothing to close.
+ */
+function pinnedTabIds(tabs: TabInfo[], pins: PinnedTabEntry[]): Set<number> {
+  const ids = new Set<number>();
+  for (const pin of pins) {
+    const inGroup = tabs.filter((t) => t.groupTitle === pin.groupName);
+    const match = inGroup.find((t) => t.id === pin.tabId) ?? inGroup.find((t) => t.url === pin.url);
+    if (match) ids.add(match.id);
+  }
+  return ids;
+}
+
 export async function removeDuplicates(): Promise<number> {
   const duplicates = await findDuplicates();
+  // Nothing to protect, so don't pay for the pin registry read on the common no-dupes path.
+  if (duplicates.size === 0) return 0;
+  const pins = await getPinnedTabs();
   const toClose: number[] = [];
 
   for (const [, tabs] of duplicates) {
-    // A pinned tab is a deliberate keep. Picking the survivor purely by lastAccessed closed
-    // it whenever an unpinned copy had been touched more recently — the one copy the user
-    // asked to keep was the one that went.
-    const pinned = tabs.filter((t) => t.pinned);
-    const unpinned = tabs
-      .filter((t) => !t.pinned)
-      .sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0));
-    if (unpinned.length === 0) continue;
+    // A pin is a deliberate keep — Chrome's own, or one of ours from /pin. Picking the
+    // survivor purely by lastAccessed closed it whenever another copy had been touched more
+    // recently, so the one copy the user asked to keep was the one that went. Honouring only
+    // the native flag left the same hole open for position pins.
+    const positionPinned = pinnedTabIds(tabs, pins);
+    const kept: TabInfo[] = [];
+    const closable: TabInfo[] = [];
+    for (const t of tabs) (t.pinned || positionPinned.has(t.id) ? kept : closable).push(t);
+    if (closable.length === 0) continue;
+    closable.sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0));
     // A pinned copy is already the survivor, so every unpinned copy is a duplicate of it.
-    const firstToClose = pinned.length > 0 ? 0 : 1;
-    for (let i = firstToClose; i < unpinned.length; i++) {
-      toClose.push(unpinned[i].id);
+    const firstToClose = kept.length > 0 ? 0 : 1;
+    for (let i = firstToClose; i < closable.length; i++) {
+      toClose.push(closable[i].id);
     }
   }
 

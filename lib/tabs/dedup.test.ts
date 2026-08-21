@@ -92,6 +92,65 @@ describe("removeDuplicates", () => {
     expect(stub.removedIds).toEqual([]);
   });
 
+  // A /pin is the same promise as Chrome's pin — keep this copy — but only the native flag
+  // was honoured here, so a position-pinned tab still lost to any copy touched more recently.
+  it("never closes a tab pinned to a position in its group", async () => {
+    stub.groups = [{ id: 5, title: "Docs" }];
+    stub.localData.pinnedTabs = [
+      { id: "p1", url: "https://a.com/", groupName: "Docs", position: 0 },
+    ];
+    stub.openTabs = [
+      { id: 1, url: "https://a.com/", pinned: false, windowId: 1, groupId: 5, lastAccessed: 1 },
+      { id: 2, url: "https://a.com/", pinned: false, windowId: 1, groupId: -1, lastAccessed: 99 },
+    ];
+    expect(await removeDuplicates()).toBe(1);
+    expect(stub.removedIds).toEqual([2]);
+  });
+
+  // tabId wins over URL, the same order applyPinsToGroup uses: the pin's stored URL goes
+  // stale the moment the tab navigates, and the entry still points at that tab.
+  it("resolves a position pin by tab id when its stored url is stale", async () => {
+    stub.groups = [{ id: 5, title: "Docs" }];
+    stub.localData.pinnedTabs = [
+      { id: "p1", url: "https://a.com/old", tabId: 1, groupName: "Docs", position: 0 },
+    ];
+    stub.openTabs = [
+      { id: 1, url: "https://a.com/", pinned: false, windowId: 1, groupId: 5, lastAccessed: 1 },
+      { id: 2, url: "https://a.com/", pinned: false, windowId: 1, groupId: 5, lastAccessed: 99 },
+    ];
+    expect(await removeDuplicates()).toBe(1);
+    expect(stub.removedIds).toEqual([2]);
+  });
+
+  // One entry protects one tab. Matching every same-URL copy in the group would make dedup
+  // a no-op on exactly the group the user curates most.
+  it("still closes a second copy sitting inside the pinned group", async () => {
+    stub.groups = [{ id: 5, title: "Docs" }];
+    stub.localData.pinnedTabs = [
+      { id: "p1", url: "https://a.com/", groupName: "Docs", position: 0 },
+    ];
+    stub.openTabs = [
+      { id: 1, url: "https://a.com/", pinned: false, windowId: 1, groupId: 5, lastAccessed: 1 },
+      { id: 2, url: "https://a.com/", pinned: false, windowId: 1, groupId: 5, lastAccessed: 99 },
+    ];
+    expect(await removeDuplicates()).toBe(1);
+    expect(stub.removedIds).toEqual([2]);
+  });
+
+  // A pin is scoped to its group, so a copy in another group is not the pinned one.
+  it("ignores a pin whose group does not match the tab", async () => {
+    stub.groups = [{ id: 5, title: "Docs" }, { id: 6, title: "Reading" }];
+    stub.localData.pinnedTabs = [
+      { id: "p1", url: "https://a.com/", groupName: "Docs", position: 0 },
+    ];
+    stub.openTabs = [
+      { id: 1, url: "https://a.com/", pinned: false, windowId: 1, groupId: 6, lastAccessed: 1 },
+      { id: 2, url: "https://a.com/", pinned: false, windowId: 1, groupId: 6, lastAccessed: 99 },
+    ];
+    expect(await removeDuplicates()).toBe(1);
+    expect(stub.removedIds).toEqual([1]);
+  });
+
   // pushUndo rejects when session storage refuses the write. Closing anyway would leave the
   // user with tabs gone and nothing to undo with.
   it("closes nothing when the undo snapshot cannot be persisted", async () => {
