@@ -1,6 +1,6 @@
 {
   "name": "tab-ordo",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Tab management Chrome extension with command palette and dashboard",
   "type": "module",
   "scripts": {

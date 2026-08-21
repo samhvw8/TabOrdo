@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.0 — 2026-08-21
 
 ### New Features
 
@@ -21,6 +21,9 @@
 ### Performance
 
 - **Stop reading the whole session store on every page load** — the bulk-operation lock is spread across one key per owner, and finding them meant asking Chrome for the entire session area, which deserialises and copies every value in it. The undo stack lives there too, up to twenty snapshots each covering every unpinned tab, so a profile with a few hundred tabs was copying all of that twice per page load: the check runs on both the auto-group and auto-sort paths. It now asks Chrome for the key *names* and reads only the lock keys, so nothing else in the area is touched. Builds older than Chrome 130 keep the previous read
+- **The dashboard mounts only the rows you can see** — every tab in every window used to get its own card on each popup open, and Chrome tears the popup down on every focus loss, so that cost was paid on every single open: at a thousand tabs that was 11,700 DOM nodes and most of a tenth of a second before anything appeared, for a sheet that shows twelve rows. Tab lists now render in chunks that mount only when they are within a screen of the viewport and stand in as a same-height box otherwise, swapping in as you scroll. A popup with a thousand tabs now opens in the time one with three hundred used to — 87 ms to 15 ms measured in Chrome, and 37 ms to 12 ms at three hundred — and favicons are only fetched for the cards that are actually on screen. One visible change: a volume slider you opened on a card closes if you scroll it a long way off and come back.
+- **Typing in the palette costs a fifth of what it did** — two causes, both invisible in the source. The search arrays were reactive state, which in Svelte 5 puts a trap on every element read, and the ranking reads them thousands of times per keystroke inside loops and sort comparators; nothing on screen depended on them, so that reactivity was pure overhead. And every keystroke re-lower-cased every entry and re-split it into words, although the list only changes when tabs do. The arrays are plain now and the lower-cased, word-split forms are kept between keystrokes: 2.4 ms to 0.5 ms per keystroke at three hundred tabs, 8.5 ms to 1.7 ms at a thousand.
+- **Archive search no longer stalls on a large archive** — grouping entries by day rebuilt "today" and "yesterday" and formatted a localised date label for every single entry on every keystroke, then threw the label away and computed it again per day. At two thousand archived tabs that was 63 ms a keystroke, nearly all of it in the date formatter. One date key per entry now, one label per day: 7 ms.
 - **Closing a window no longer writes once per tab** — tab lineage is updated as tabs close, and a fifty-tab window meant fifty separate writes to reach one final state, each waking every open TabOrdo surface. The whole burst now settles in a single read and a single write
 
 ## 0.6.0 — 2026-08-04
