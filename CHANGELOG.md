@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Bug Fixes
+
+- **`/dedup` keeps exactly one copy, even when several are pinned** — a pin decides which copy survives; it is not an exemption. Two pinned copies of the same page used to both stay, which made the pinned strip and your locked groups the one place `/dedup` could not clean. Pinned copies — Chrome's own pin or a `/pin` — still outrank unpinned ones however recently the others were touched; among equals the most recently used copy stays, and the rest close.
+
 ## 0.7.0 — 2026-08-21
 
 ### New Features

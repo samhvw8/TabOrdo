@@ -83,13 +83,30 @@ describe("removeDuplicates", () => {
     expect(stub.removedIds).toEqual([2]);
   });
 
-  it("closes none when every copy is pinned", async () => {
+  // A pin decides which copy survives; it does not exempt a page from dedup. Two pinned
+  // copies used to both stay, so the pinned strip was the one place /dedup could not clean.
+  it("keeps only the most recent copy when every copy is pinned", async () => {
     stub.openTabs = [
-      { id: 1, url: "https://a.com/", pinned: true, windowId: 1, groupId: -1 },
-      { id: 2, url: "https://a.com/", pinned: true, windowId: 1, groupId: -1 },
+      { id: 1, url: "https://a.com/", pinned: true, windowId: 1, groupId: -1, lastAccessed: 1 },
+      { id: 2, url: "https://a.com/", pinned: true, windowId: 1, groupId: -1, lastAccessed: 99 },
     ];
-    expect(await removeDuplicates()).toBe(0);
-    expect(stub.removedIds).toEqual([]);
+    expect(await removeDuplicates()).toBe(1);
+    expect(stub.removedIds).toEqual([1]);
+  });
+
+  // Chrome's pin and a position pin rank the same; recency settles it between them.
+  it("keeps one copy when one is Chrome-pinned and another is position-pinned", async () => {
+    stub.groups = [{ id: 5, title: "Docs" }];
+    stub.localData.pinnedTabs = [
+      { id: "p1", url: "https://a.com/", groupName: "Docs", position: 0 },
+    ];
+    stub.openTabs = [
+      { id: 1, url: "https://a.com/", pinned: true, windowId: 1, groupId: -1, lastAccessed: 1 },
+      { id: 2, url: "https://a.com/", pinned: false, windowId: 1, groupId: 5, lastAccessed: 50 },
+      { id: 3, url: "https://a.com/", pinned: false, windowId: 1, groupId: -1, lastAccessed: 99 },
+    ];
+    expect(await removeDuplicates()).toBe(2);
+    expect(stub.removedIds).toEqual([1, 3]);
   });
 
   // A /pin is the same promise as Chrome's pin — keep this copy — but only the native flag

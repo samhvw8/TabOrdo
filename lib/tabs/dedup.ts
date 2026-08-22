@@ -47,21 +47,17 @@ export async function removeDuplicates(): Promise<number> {
   const toClose: number[] = [];
 
   for (const [, tabs] of duplicates) {
-    // A pin is a deliberate keep — Chrome's own, or one of ours from /pin. Picking the
-    // survivor purely by lastAccessed closed it whenever another copy had been touched more
-    // recently, so the one copy the user asked to keep was the one that went. Honouring only
-    // the native flag left the same hole open for position pins.
+    // Exactly one copy survives. A pin — Chrome's own, or one of ours from /pin — says which:
+    // it is a deliberate keep, so a pinned copy outranks any unpinned one however recently
+    // the other was touched. Among equals the most recently used copy stays. A pin is not an
+    // exemption, though: two pinned copies of one page are still a duplicate, and the older
+    // one goes, or /dedup would leave exactly the tabs the user curates most.
     const positionPinned = pinnedTabIds(tabs, pins);
-    const kept: TabInfo[] = [];
-    const closable: TabInfo[] = [];
-    for (const t of tabs) (t.pinned || positionPinned.has(t.id) ? kept : closable).push(t);
-    if (closable.length === 0) continue;
-    closable.sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0));
-    // A pinned copy is already the survivor, so every unpinned copy is a duplicate of it.
-    const firstToClose = kept.length > 0 ? 0 : 1;
-    for (let i = firstToClose; i < closable.length; i++) {
-      toClose.push(closable[i].id);
-    }
+    const rank = (t: TabInfo) => (t.pinned || positionPinned.has(t.id) ? 1 : 0);
+    const ordered = [...tabs].sort(
+      (a, b) => rank(b) - rank(a) || (b.lastAccessed || 0) - (a.lastAccessed || 0)
+    );
+    for (let i = 1; i < ordered.length; i++) toClose.push(ordered[i].id);
   }
 
   if (toClose.length > 0) {
