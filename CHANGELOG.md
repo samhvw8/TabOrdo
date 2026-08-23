@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.2 — 2026-08-23
+
+### Bug Fixes
+
+- **`/dedup` no longer gives up entirely when one duplicate has already closed** — the command handed its whole kill-list to Chrome in a single call, and Chrome rejects such a call outright on the first tab id it cannot resolve, removing nothing at all. One duplicate closing in the moment between the scan and the removal — you closing it yourself, a page that closes its own tab — was enough to leave every other duplicate open, so `/dedup` appeared to do nothing whatsoever. Duplicates are now closed one at a time, the way the rest of TabOrdo's closing already worked, so the ones that are still there go. The count in the status line is now what was actually closed rather than what the scan intended to close, so the popup can no longer claim tabs it failed to remove
+
 ## 0.7.1 — 2026-08-22
 
 ### Bug Fixes
