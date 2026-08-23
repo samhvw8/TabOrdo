@@ -72,6 +72,18 @@ describe("removeDuplicates", () => {
     expect(stub.removedIds.sort()).toEqual([2, 3]);
   });
 
+  // Recency alone decides between two plain copies — asserted here rather than left to fall
+  // out of the tracking-params case, which varies two things at once.
+  it("keeps the most recently used copy when no copy is pinned", async () => {
+    stub.openTabs = [
+      { id: 1, url: "https://a.com/", pinned: false, windowId: 1, groupId: -1, lastAccessed: 10 },
+      { id: 2, url: "https://a.com/", pinned: false, windowId: 1, groupId: -1, lastAccessed: 99 },
+    ];
+    expect(await removeDuplicates()).toBe(1);
+    expect(stub.removedIds).toEqual([1]);
+    expect(stub.openTabs.map((t) => t.id)).toEqual([2]);
+  });
+
   // Survivors were picked purely by lastAccessed, so a pinned tab lost to any copy the user
   // had touched more recently — the one copy they'd asked to keep was the one that went.
   it("never closes a pinned tab", async () => {
@@ -166,6 +178,37 @@ describe("removeDuplicates", () => {
     ];
     expect(await removeDuplicates()).toBe(1);
     expect(stub.removedIds).toEqual([1]);
+  });
+
+  // chrome.tabs.remove(array) rejects the whole call on the first id that has already gone,
+  // and dedup batched every duplicate into one such call — so a single tab closed between
+  // findDuplicates and the remove left every other duplicate open, /dedup visibly doing
+  // nothing at all. Per-id removal is what closeTabs already learned; dedup skipped it.
+  it("closes the remaining duplicates when one id is already gone", async () => {
+    stub.openTabs = [
+      { id: 1, url: "https://a.com/", pinned: false, windowId: 1, groupId: -1, lastAccessed: 99 },
+      { id: 2, url: "https://a.com/", pinned: false, windowId: 1, groupId: -1, lastAccessed: 50 },
+      { id: 3, url: "https://a.com/", pinned: false, windowId: 1, groupId: -1, lastAccessed: 10 },
+    ];
+    stub.failRemoveIds.add(2);
+
+    expect(await removeDuplicates()).toBe(1);
+    expect(stub.removedIds).toEqual([3]);
+    expect(stub.openTabs.map((t) => t.id).sort()).toEqual([1, 2]);
+  });
+
+  // The count used to be toClose.length — what dedup meant to close, not what it managed to.
+  it("reports the number of tabs it actually closed", async () => {
+    stub.openTabs = [
+      { id: 1, url: "https://a.com/", pinned: false, windowId: 1, groupId: -1, lastAccessed: 99 },
+      { id: 2, url: "https://a.com/", pinned: false, windowId: 1, groupId: -1, lastAccessed: 50 },
+      { id: 3, url: "https://b.com/", pinned: false, windowId: 1, groupId: -1, lastAccessed: 99 },
+      { id: 4, url: "https://b.com/", pinned: false, windowId: 1, groupId: -1, lastAccessed: 50 },
+    ];
+    stub.failRemoveIds.add(2);
+    stub.failRemoveIds.add(4);
+
+    expect(await removeDuplicates()).toBe(0);
   });
 
   // pushUndo rejects when session storage refuses the write. Closing anyway would leave the

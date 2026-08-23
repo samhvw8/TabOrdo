@@ -45,8 +45,11 @@ export async function switchToTab(tabId: number): Promise<void> {
   if (tab?.windowId != null) await chrome.windows.update(tab.windowId, { focused: true });
 }
 
-export async function closeTabs(tabIds: number[]): Promise<void> {
+/** Resolves to the number of tabs actually closed. Ids that had already gone are skipped
+ *  rather than counted, so a caller can report what it delivered and not what it attempted. */
+export async function closeTabs(tabIds: number[]): Promise<number> {
   // Per id, not one remove(array): Chrome rejects the whole array on the first id that has
   // already gone, so a single stale tab in the popup's list left every other tab open.
-  await Promise.allSettled(tabIds.map((id) => chrome.tabs.remove(id)));
+  const results = await Promise.allSettled(tabIds.map((id) => chrome.tabs.remove(id)));
+  return results.filter((r) => r.status === "fulfilled").length;
 }

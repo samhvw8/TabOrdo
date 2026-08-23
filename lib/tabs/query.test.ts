@@ -108,7 +108,7 @@ describe("closeTabs", () => {
         return realRemove(ids as number[]);
       };
 
-    await expect(closeTabs([1, 999, 3])).resolves.toBeUndefined();
+    await expect(closeTabs([1, 999, 3])).resolves.toBe(2);
     expect(stub.removedIds).toEqual([1, 3]);
     expect(stub.openTabs.map((t) => t.id)).toEqual([2]);
   });

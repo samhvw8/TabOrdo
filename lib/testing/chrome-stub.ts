@@ -51,6 +51,9 @@ export interface ChromeStub {
   failGroup: boolean;
   /** Tabs scripting.executeScript rejects for — no host permissions in the real extension. */
   failScriptingIds: Set<number>;
+  /** Tabs chrome.tabs.remove rejects for, the way Chrome does for an id that has already
+   *  gone ("No tab with id: N"). One bad id rejects the whole call, array or not. */
+  failRemoveIds: Set<number>;
 }
 
 /**
@@ -109,6 +112,7 @@ export function installChromeStub(): ChromeStub {
     failWrites: false,
     failGroup: false,
     failScriptingIds: new Set(),
+    failRemoveIds: new Set(),
   };
 
   let nextTabId = 1000;
@@ -233,6 +237,11 @@ export function installChromeStub(): ChromeStub {
       },
       remove: async (ids: number | number[]) => {
         const arr = Array.isArray(ids) ? ids : [ids];
+        // Chrome rejects the whole call on the first id it cannot resolve, and removes
+        // nothing — modelling that is the only way a batched remove can be told from a
+        // per-id one in a test.
+        const bad = arr.find((id) => stub.failRemoveIds.has(id));
+        if (bad !== undefined) throw new Error(`No tab with id: ${bad}`);
         stub.removedIds.push(...arr);
         stub.openTabs = stub.openTabs.filter((t) => !arr.includes(t.id));
       },
