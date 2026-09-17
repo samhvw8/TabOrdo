@@ -3,7 +3,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { installChromeStub, type ChromeStub } from "../testing/chrome-stub.ts";
-import { popUndo, peekUndo, executeUndo, undoStackSize } from "../undo.ts";
+import { popUndo, peekUndo, peekUndoEntry, executeUndo, undoStackSize } from "../undo.ts";
 import {
   closeTabs,
   closeTabsToLeft,
@@ -31,8 +31,8 @@ beforeEach(async () => {
 const openIds = () => stub.openTabs.map((t) => t.id).sort((a, b) => a - b);
 
 /** URLs recorded in the top undo entry, so we can prove the snapshot precedes the removal. */
-function snapshotUrls(): string[] {
-  const entry = peekUndo();
+async function snapshotUrls(): Promise<string[]> {
+  const entry = await peekUndoEntry();
   if (!entry || entry.type !== "close") return [];
   return (entry.data as { url: string }[]).map((d) => d.url);
 }
@@ -60,7 +60,7 @@ describe("closeTabs", () => {
 
   it("snapshots for undo before removing", async () => {
     await closeTabs([2]);
-    expect(snapshotUrls()).toEqual(["https://b.com"]);
+    expect(await snapshotUrls()).toEqual(["https://b.com"]);
     expect(await executeUndo()).toBe("Reopened 1 tab(s)");
   });
 
@@ -213,7 +213,7 @@ describe("closeTabsToLeft / closeTabsToRight", () => {
 
   it("snapshots the closed tabs for undo before removing them", async () => {
     await closeTabsToLeft();
-    expect(snapshotUrls()).toEqual(["https://left.com"]);
+    expect(await snapshotUrls()).toEqual(["https://left.com"]);
   });
 
   it("is a no-op when the window has no active tab", async () => {
@@ -271,7 +271,7 @@ describe("closeTabsSameSite", () => {
 
   it("snapshots for undo", async () => {
     await closeTabsSameSite();
-    expect(snapshotUrls().sort()).toEqual(["https://a.com/elsewhere", "https://a.com/other"]);
+    expect((await snapshotUrls()).sort()).toEqual(["https://a.com/elsewhere", "https://a.com/other"]);
   });
 });
 
@@ -316,6 +316,6 @@ describe("closeOldTabs", () => {
 
   it("snapshots for undo", async () => {
     await closeOldTabs();
-    expect(snapshotUrls().sort()).toEqual(["https://stale-elsewhere.com", "https://stale.com"]);
+    expect((await snapshotUrls()).sort()).toEqual(["https://stale-elsewhere.com", "https://stale.com"]);
   });
 });
