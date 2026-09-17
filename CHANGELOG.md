@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Improvements
+
+- **Shorter domain group names** — a domain group is now called by the site's name without its ending: `github` instead of `github.com`, `bbc` instead of `bbc.co.uk`. The ending took up most of a group's label and said nothing the favicons inside it didn't. One site's country domains now share a group, so `google.com` and `google.de` both go into `google`. Groups you already have keep their old titles and still take new tabs. Run Regroup if you want them renamed; locked positions are kept per group title, so locks in a renamed group stop applying. Hosts with no such name, like `localhost` or an IP address, keep the full host
+
+### Bug Fixes
+
+- **Auto-group no longer makes a group with only one tab** — when a new tab should have joined an existing domain group that had disappeared a moment earlier, for example because auto-ungroup had just dissolved it, the tab was put in a new group on its own. It now only creates a group when another tab of the same site is there to share it. A pinned tab or a tab on your ignore list also no longer counts as that second tab
+
 ## 0.7.3 — 2026-09-17
 
 ### Bug Fixes

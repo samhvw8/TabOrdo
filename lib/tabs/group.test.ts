@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { installChromeStub, type ChromeStub } from "../testing/chrome-stub.ts";
-import { ungroupAll, collapseAllGroups, pickMajorityWindow, groupTabsByDomain } from "./group.ts";
+import { ungroupAll, collapseAllGroups, pickMajorityWindow, groupTabsByDomain, planDomainGroup } from "./group.ts";
+import { getDomainMapper, getGroupNameMapper } from "../url.ts";
 
 let stub: ChromeStub;
 
@@ -82,7 +83,7 @@ describe("groupTabsByDomain", () => {
     ];
     await groupTabsByDomain();
     expect(stub.openTabs.every((t) => t.groupId !== -1)).toBe(true);
-    expect(stub.groupUpdates.some((u) => u.title === "github.com")).toBe(true);
+    expect(stub.groupUpdates.some((u) => u.title === "github")).toBe(true);
   });
 
   // One tab of a domain is not a group — it would produce a pile of single-tab groups.
@@ -112,7 +113,50 @@ describe("groupTabsByDomain", () => {
       tab({ id: 2, url: "https://gist.github.com/b", index: 1 }),
     ];
     await groupTabsByDomain();
-    expect(stub.groupUpdates.some((u) => u.title === "github.com")).toBe(true);
+    expect(stub.groupUpdates.some((u) => u.title === "github")).toBe(true);
+  });
+
+  // A multi-part public suffix is dropped whole, not just its last label.
+  it("names the group without the public suffix", async () => {
+    stub.openTabs = [
+      tab({ id: 1, url: "https://www.bbc.co.uk/news", index: 0 }),
+      tab({ id: 2, url: "https://bbc.co.uk/sport", index: 1 }),
+    ];
+    await groupTabsByDomain();
+    expect(stub.groupUpdates.map((u) => u.title).filter(Boolean)).toEqual(["bbc"]);
+  });
+
+  // The name is the key, so one site's country domains share a group instead of making two
+  // groups with the same title.
+  it("puts one site's country domains in a single group", async () => {
+    stub.openTabs = [
+      tab({ id: 1, url: "https://google.com/a", index: 0 }),
+      tab({ id: 2, url: "https://google.de/b", index: 1 }),
+    ];
+    await groupTabsByDomain();
+    expect(stub.groupUpdates.map((u) => u.title).filter(Boolean)).toEqual(["google"]);
+    expect(new Set(stub.openTabs.map((t) => t.groupId)).size).toBe(1);
+  });
+
+  it("keeps the hostname for hosts with no registrable domain", async () => {
+    stub.openTabs = [
+      tab({ id: 1, url: "http://localhost:3000/a", index: 0 }),
+      tab({ id: 2, url: "http://localhost:5173/b", index: 1 }),
+    ];
+    await groupTabsByDomain();
+    expect(stub.groupUpdates.map((u) => u.title).filter(Boolean)).toEqual(["localhost"]);
+  });
+
+  // Groups made before names were shortened are still titled with the full domain.
+  it("additive mode still fills a group titled with the full domain", async () => {
+    stub.openTabs = [
+      tab({ id: 1, url: "https://github.com/one", index: 0, groupId: 70 }),
+      tab({ id: 2, url: "https://github.com/two", index: 1 }),
+    ];
+    stub.groups = [{ id: 70, title: "github.com", color: "blue", windowId: 1 }];
+    await groupTabsByDomain("additive");
+    expect(stub.openTabs.find((t) => t.id === 2)!.groupId).toBe(70);
+    expect(stub.groups).toHaveLength(1);
   });
 
   // additive is the default because it must not disturb groups the user made by hand.
@@ -223,5 +267,62 @@ describe("ignore lists", () => {
     stub.groups = [{ id: 70, title: "Mine", color: "blue", windowId: 1 }];
     await ungroupAll();
     expect(stub.ungroupedIds).toEqual([1]);
+  });
+});
+
+// Background auto-group's decision for a tab no rule claimed.
+describe("planDomainGroup", () => {
+  const plan = async (
+    url: string,
+    windowTabs: any[],
+    windowGroups: any[] = [],
+    ignorePatterns: any[] = []
+  ) => planDomainGroup(99, url, windowTabs, windowGroups, await getDomainMapper(), await getGroupNameMapper(), ignorePatterns);
+
+  it("joins a group already titled for the site", async () => {
+    const p = await plan("https://github.com/x", [], [{ id: 7, title: "github", windowId: 1 }]);
+    expect(p).toMatchObject({ title: "github", joinGroupId: 7 });
+  });
+
+  it("joins a group titled with the full domain from before names were shortened", async () => {
+    const p = await plan("https://github.com/x", [], [{ id: 7, title: "github.com", windowId: 1 }]);
+    expect(p?.joinGroupId).toBe(7);
+  });
+
+  it("never joins a shared group", async () => {
+    const p = await plan("https://github.com/x", [], [{ id: 7, title: "github", windowId: 1, shared: true }]);
+    expect(p?.joinGroupId).toBeUndefined();
+  });
+
+  // No partner means no new group. The caller also relies on this when a join fails.
+  it("has no partner for the only tab of a site", async () => {
+    const p = await plan("https://github.com/x", [
+      tab({ id: 99, url: "https://github.com/x" }),
+      tab({ id: 2, url: "https://example.com" }),
+    ]);
+    expect(p?.partnerIds).toEqual([]);
+  });
+
+  it("partners with a loose tab of the same site, not a grouped one", async () => {
+    const p = await plan("https://github.com/x", [
+      tab({ id: 2, url: "https://docs.github.com/a" }),
+      tab({ id: 3, url: "https://github.com/b", groupId: 40 }),
+    ]);
+    expect(p?.partnerIds).toEqual([2]);
+  });
+
+  it("does not count a pinned tab as a partner", async () => {
+    const p = await plan("https://mail.google.com/x", [tab({ id: 2, url: "https://mail.google.com/y", pinned: true })]);
+    expect(p?.partnerIds).toEqual([]);
+  });
+
+  it("does not count an ignored URL as a partner", async () => {
+    const p = await plan(
+      "https://docs.google.com/x",
+      [tab({ id: 2, url: "https://mail.google.com/y" })],
+      [],
+      [{ pattern: "mail.google.com", enabled: true }]
+    );
+    expect(p?.partnerIds).toEqual([]);
   });
 });

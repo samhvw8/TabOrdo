@@ -1,5 +1,5 @@
 import { getConfig, matchDomainToRule, isIgnoredUrl, isIgnoredGroupName } from "../../lib/rules.ts";
-import { getFullHostname, getDomainMapper, sortTabsInWindow, pickMajorityWindow, GROUP_COLORS, hashCode, setTitleBadge, recordOpener, lineageOpener, forgetTab, isSharedGroup, closeTabs } from "../../lib/tabs/index.ts";
+import { getFullHostname, getDomainMapper, getGroupNameMapper, planDomainGroup, sortTabsInWindow, pickMajorityWindow, setTitleBadge, recordOpener, lineageOpener, forgetTab, isSharedGroup, closeTabs } from "../../lib/tabs/index.ts";
 import { syncPinUrl, clearPinTabIds } from "../../lib/pin.ts";
 import { findBounceTarget } from "../../lib/bounce.ts";
 import { logAction } from "../../lib/actionLog.ts";
@@ -136,22 +136,24 @@ async function safeGroupUpdate(groupId: number, props: chrome.tabGroups.UpdatePr
   }
 }
 
-async function tryGroupTab(tabId: number, groupId: number, title: string, color: chrome.tabGroups.ColorEnum): Promise<void> {
+/**
+ * Join an existing group. False when it can't be joined (shared, or gone by now), and creating
+ * a replacement is left to the caller: a rule makes a group of one on purpose, a domain never
+ * does.
+ */
+async function tryJoinGroup(tabId: number, groupId: number, title: string): Promise<boolean> {
   try {
     const group = await chrome.tabGroups.get(groupId).catch(() => null);
-    if (group && isSharedGroup(group)) return;
+    if (group && isSharedGroup(group)) return false;
   } catch {}
   markSelfWrite([tabId]);
   try {
     await chrome.tabs.group({ tabIds: [tabId], groupId });
     await logAction("Grouped", `tab into "${title}"`);
+    return true;
   } catch (e) {
-    console.warn("[TabOrdo] stale group", groupId, "- creating new:", e);
-    const newGroupId = await chrome.tabs.group({ tabIds: [tabId] }).catch((e2) => { console.error("[TabOrdo] fallback group create:", e2); return null; });
-    if (newGroupId) {
-      await safeGroupUpdate(newGroupId, { title, color });
-      await logAction("Created group", `"${title}"`);
-    }
+    console.warn("[TabOrdo] stale group", groupId, e);
+    return false;
   }
 }
 
@@ -367,9 +369,7 @@ export default defineBackground(() => {
                 if (rule) {
                   const existingGroups = await chrome.tabGroups.query({ windowId: tab.windowId });
                   const match = existingGroups.find((g) => g.title === rule.name && !isSharedGroup(g));
-                  if (match) {
-                    await tryGroupTab(tabId, match.id, rule.name, rule.color);
-                  } else {
+                  if (!match || !(await tryJoinGroup(tabId, match.id, rule.name))) {
                     markSelfWrite([tabId]);
                     const groupId = await chrome.tabs.group({ tabIds: [tabId] }).catch((e) => { console.error("[TabOrdo] rule group create:", e); return null; });
                     if (groupId) {
@@ -381,25 +381,21 @@ export default defineBackground(() => {
                 }
               }
               if (!grouped) {
-                const domainOf = await getDomainMapper();
-                const domain = domainOf(url);
-                if (domain) {
-                  const existingGroups = await chrome.tabGroups.query({ windowId: tab.windowId });
-                  const match = existingGroups.find((g) => g.title === domain && !isSharedGroup(g));
-                  if (match) {
-                    await tryGroupTab(tabId, match.id, domain, GROUP_COLORS[Math.abs(hashCode(domain)) % GROUP_COLORS.length]);
-                  } else {
-                    const windowTabs = await chrome.tabs.query({ windowId: tab.windowId });
-                    const sameDomain = windowTabs.filter((t) => t.id !== tabId && t.groupId === -1 && domainOf(t.url || "") === domain);
-                    if (sameDomain.length > 0) {
-                      const memberIds = [tabId, ...sameDomain.map((t) => t.id!)];
-                      markSelfWrite(memberIds);
-                      const groupId = await chrome.tabs.group({ tabIds: memberIds }).catch((e) => { console.error("[TabOrdo] domain group create:", e); return null; });
-                      if (groupId) {
-                        await safeGroupUpdate(groupId, { title: domain, color: GROUP_COLORS[Math.abs(hashCode(domain)) % GROUP_COLORS.length] });
-                        await logAction("Created group", `"${domain}" (${memberIds.length} tabs)`);
-                      }
-                    }
+                const [domainOf, nameOf, windowTabs, windowGroups] = await Promise.all([
+                  getDomainMapper(),
+                  getGroupNameMapper(),
+                  chrome.tabs.query({ windowId: tab.windowId }),
+                  chrome.tabGroups.query({ windowId: tab.windowId }),
+                ]);
+                const plan = planDomainGroup(tabId, url, windowTabs, windowGroups, domainOf, nameOf, config.ignorePatterns);
+                const joined = plan?.joinGroupId !== undefined && (await tryJoinGroup(tabId, plan.joinGroupId, plan.title));
+                if (plan && !joined && plan.partnerIds.length > 0) {
+                  const memberIds = [tabId, ...plan.partnerIds];
+                  markSelfWrite(memberIds);
+                  const groupId = await chrome.tabs.group({ tabIds: memberIds }).catch((e) => { console.error("[TabOrdo] domain group create:", e); return null; });
+                  if (groupId) {
+                    await safeGroupUpdate(groupId, { title: plan.title, color: plan.color });
+                    await logAction("Created group", `"${plan.title}" (${memberIds.length} tabs)`);
                   }
                 }
               }

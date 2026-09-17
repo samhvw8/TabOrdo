@@ -1,6 +1,7 @@
 # Update Log
 
 ## 2026-09-17
+* **Update**: Domain groups are named without the public suffix, and auto-group no longer makes a group of one tab when joining a group fails — [background automation](/features/background-automation.md), [grouping rules](/features/grouping-rules.md).
 * **Creation**: The Chrome Web Store dashboard steps that blocked three releases, with privacy practices answers and the screenshot recipe — [store listing](/processes/chrome-web-store-listing.md).
 * **Update**: Replaced the release page's point-in-time state with what to do when the store publish fails — [release](/processes/release.md).
 * **Creation**: Product orientation page, the entry point for new readers — [TabOrdo](/tabordo.md).

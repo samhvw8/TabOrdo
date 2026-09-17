@@ -20,4 +20,4 @@ export * from "./lock.ts";
 export * from "./tree.ts";
 
 // Re-exported so existing importers keep their import site; the definitions live in url.ts.
-export { getDomainMapper, getFullHostname, hashCode, type DomainMapper } from "../url.ts";
+export { getDomainMapper, getGroupNameMapper, getFullHostname, hashCode, type DomainMapper } from "../url.ts";

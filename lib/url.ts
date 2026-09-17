@@ -47,6 +47,37 @@ export async function getDomainMapper(): Promise<DomainMapper> {
   return inflight;
 }
 
+let cachedNamer: DomainMapper | null = null;
+
+/**
+ * What a domain group is called: the registrable domain without its public suffix, so
+ * github.com is "github" and bbc.co.uk is "bbc". The suffix took most of a group chip's width
+ * and said nothing the favicons inside it didn't. Hosts with no registrable domain
+ * (localhost, IPs) keep their hostname.
+ *
+ * This is the grouping key too, not only the label: auto-group finds the group to join by its
+ * title, so keying on the full domain while titling by name would give google.com and
+ * google.de two groups both called "google". They share one instead.
+ */
+export async function getGroupNameMapper(): Promise<DomainMapper> {
+  if (cachedNamer) return cachedNamer;
+  const { getDomainWithoutSuffix } = await import("tldts");
+  const memo = new Map<string, string>();
+  cachedNamer = (url: string): string => {
+    const hit = memo.get(url);
+    if (hit !== undefined) return hit;
+    let out: string;
+    try {
+      out = getDomainWithoutSuffix(url, { allowPrivateDomains: false }) || new URL(url).hostname;
+    } catch {
+      out = url;
+    }
+    memo.set(url, out);
+    return out;
+  };
+  return cachedNamer;
+}
+
 export function getFullHostname(url: string): string {
   try {
     return new URL(url).hostname.replace(/^www\./, "");

@@ -4,11 +4,19 @@ title: Background automation
 description: The service worker's tab listeners (auto-group, auto-ungroup, auto-sort, pin follow, auto-discard, switch-to-existing, context menus) and the guards that keep them from fighting other extensions or each other.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/entrypoints/background/index.ts
 tags: [background, service-worker, automation, auto-group, coexistence]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-17T00:16:05Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-17T08:30:00Z }
 sources:
   - id: bg-index
     resource: https://github.com/samhvw8/TabOrdo/blob/main/entrypoints/background/index.ts
     title: entrypoints/background/index.ts
+    last_modified: 2026-09-17
+  - id: group
+    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabs/group.ts
+    title: lib/tabs/group.ts (planDomainGroup)
+    last_modified: 2026-09-17
+  - id: url
+    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/url.ts
+    title: lib/url.ts (getGroupNameMapper)
     last_modified: 2026-09-17
   - id: bounce
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/bounce.ts
@@ -79,7 +87,9 @@ sources:
 
 # Behaviour
 
-**Auto-group.** Skipped for Chrome-pinned tabs and while the [bulk lock](/architecture/bulk-lock.md) is held. A tab created under 300 ms ago waits out the rest of that window, then the tab is re-read and only a still-ungrouped tab is grouped.[^bg-index] The wait gives other extensions time to group their own tabs,[^commit-race] and the re-read stops TabOrdo stealing a tab Chrome is about to put in its opener's group.[^commit-steal] `chrome://` URLs and ignored URLs are not grouped. With `useRules` on, the first matching rule wins: join a non-shared group in the same window titled with the rule name, or create a one-tab group. Otherwise it falls back to the registrable domain: join a group titled with that domain, or create one only when another ungrouped same-domain tab exists in the window. The colour is `GROUP_COLORS[hash(domain)]`.[^bg-index]
+**Auto-group.** Skipped for Chrome-pinned tabs and while the [bulk lock](/architecture/bulk-lock.md) is held. A tab created under 300 ms ago waits out the rest of that window, then the tab is re-read and only a still-ungrouped tab is grouped.[^bg-index] The wait gives other extensions time to group their own tabs,[^commit-race] and the re-read stops TabOrdo stealing a tab Chrome is about to put in its opener's group.[^commit-steal] `chrome://` URLs and ignored URLs are not grouped. With `useRules` on, the first matching rule wins: join a non-shared group in the same window titled with the rule name, or create a one-tab group (also when that join fails).[^bg-index] Otherwise `planDomainGroup` decides by the site's **group name**, the registrable domain without its public suffix (`github.com` → `github`, `bbc.co.uk` → `bbc`; hosts with no registrable domain, such as `localhost`, keep the hostname).[^url] It joins a non-shared group titled with that name, or with the full domain, which is what groups made before the rename are called. When there is none, or the join fails, it creates a group only if the window holds another ungrouped, unpinned, non-ignored tab with the same name. The colour is `GROUP_COLORS[hash(name)]`.[^group]
+
+A failed domain join used to fall back to a group of the tab alone, the same way the rule path does. A join fails when the group has gone by the time it is reached, and auto-ungroup dissolving it for having one tab left is one way that happens, so the fallback made groups of one tab. Pinned tabs and ignored URLs also used to count as the second tab.[^group]
 
 **Auto-ungroup.** Debounced 150 ms per window. For each group with exactly one tab it skips shared groups, groups younger than 2 s (it re-checks them later), untitled groups, groups named after a rule while `useRules` is on, and names on the ignore list.[^bg-index] Only named groups are touched because untitled single-tab groups made by other tools (the commit names Claude-in-Chrome MCP) were dissolved at once, and the other tool then deleted and recreated them in a loop. TabOrdo's own groups always have titles.[^commit-untitled] Because rule-named groups are exempt, a one-tab group created by a rule is left alone.
 
@@ -130,13 +140,15 @@ The settle window and the self-write ledger came in as a pair: the first general
 
 # Tests that guard it
 
-Nothing imports the entrypoint. The logic it calls is tested: `lib/bounce.test.ts` (Duplicate-Tab skip, most-recent copy, http(s) only)[^bounce-test], `lib/actionLog.test.ts` (newest first, cap of 20, never throws)[^action-log-test], plus the bulk lock, rules and `closeTabs` suites. See the [chrome stub](/testing/chrome-stub.md).
+Nothing imports the entrypoint. The logic it calls is tested: `lib/tabs/group.test.ts` "planDomainGroup" (join by name or legacy full-domain title, never a shared group, no partner for a lone tab, pinned and ignored tabs are not partners),[^group] `lib/bounce.test.ts` (Duplicate-Tab skip, most-recent copy, http(s) only)[^bounce-test], `lib/actionLog.test.ts` (newest first, cap of 20, never throws)[^action-log-test], plus the bulk lock, rules and `closeTabs` suites. See the [chrome stub](/testing/chrome-stub.md).
 
 # Related
 
 [Architecture overview](/architecture/overview.md) · [Bulk lock](/architecture/bulk-lock.md) · [Grouping rules](/features/grouping-rules.md) · [Position locks](/features/position-locks.md) · [AI grouping](/features/ai-grouping.md)
 
 [^bg-index]: entrypoints/background/index.ts
+[^group]: lib/tabs/group.ts
+[^url]: lib/url.ts
 [^bounce]: lib/bounce.ts
 [^bounce-test]: lib/bounce.test.ts
 [^action-log]: lib/actionLog.ts

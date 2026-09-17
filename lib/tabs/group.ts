@@ -1,7 +1,7 @@
 // Creating, rebuilding and collapsing tab groups.
 
 import { getConfig, isIgnoredGroupName, isIgnoredUrl, matchDomainToRule, type IgnoreRule } from "../rules.ts";
-import { getDomainMapper, getFullHostname, hashCode } from "../url.ts";
+import { getDomainMapper, getFullHostname, getGroupNameMapper, hashCode, type DomainMapper } from "../url.ts";
 import { applyAllGroupPins } from "../pin.ts";
 import { GROUP_COLORS } from "./types.ts";
 import { organizeWindow } from "./sort.ts";
@@ -10,6 +10,7 @@ export async function groupTabsByDomain(
   mode: "additive" | "rebuild" = "additive"
 ): Promise<void> {
   const domainOf = await getDomainMapper();
+  const nameOf = await getGroupNameMapper();
   // One config read for the whole run: rules, useRules and both ignore lists come from the
   // same object, and getRules/getUseRules were two round-trips for one of its fields.
   const config = await getConfig();
@@ -31,7 +32,10 @@ export async function groupTabsByDomain(
   const groupTitleMap = new Map(existingGroups.map((g) => [g.id, g.title || ""]));
 
   const ruleGroupMap = new Map<string, { rule: typeof rules[0]; tabs: chrome.tabs.Tab[] }>();
-  const domainMap = new Map<string, chrome.tabs.Tab[]>();
+  const nameMap = new Map<string, chrome.tabs.Tab[]>();
+  // Groups titled before names dropped the public suffix still say "github.com". Additive mode
+  // has to keep filling them, or every existing domain group stops taking new tabs.
+  const legacyTitles = new Map<string, string>();
   const toUngroup: number[] = [];
 
   // The ignore list was only ever enforced on the background's auto-group path, so /group
@@ -58,10 +62,11 @@ export async function groupTabsByDomain(
       if (!ruleGroupMap.has(rule.id)) ruleGroupMap.set(rule.id, { rule, tabs: [] });
       ruleGroupMap.get(rule.id)!.tabs.push(tab);
     } else if (tab.groupId === -1) {
-      const domain = domainOf(tab.url || "");
-      if (!domain) continue;
-      if (!domainMap.has(domain)) domainMap.set(domain, []);
-      domainMap.get(domain)!.push(tab);
+      const name = nameOf(tab.url || "");
+      if (!name) continue;
+      legacyTitles.set(domainOf(tab.url || ""), name);
+      if (!nameMap.has(name)) nameMap.set(name, []);
+      nameMap.get(name)!.push(tab);
     }
   }
 
@@ -84,12 +89,13 @@ export async function groupTabsByDomain(
         continue;
       }
 
-      const matching = domainMap.get(group.title);
-      if (matching && matching.length > 0) {
+      const name = nameMap.has(group.title) ? group.title : legacyTitles.get(group.title);
+      const matching = name === undefined ? undefined : nameMap.get(name);
+      if (name !== undefined && matching && matching.length > 0) {
         const moveIds = matching.filter((t) => t.windowId !== group.windowId).map((t) => t.id!);
         if (moveIds.length > 0) await chrome.tabs.move(moveIds, { windowId: group.windowId, index: -1 });
         await chrome.tabs.group({ tabIds: matching.map((t) => t.id!), groupId: group.id });
-        domainMap.delete(group.title);
+        nameMap.delete(name);
       }
     }
   }
@@ -106,19 +112,16 @@ export async function groupTabsByDomain(
     await chrome.tabGroups.update(groupId, { title: entry.rule.name, color: entry.rule.color });
   }
 
-  for (const [domain, domainTabs] of domainMap) {
-    if (domainTabs.length < 2) continue;
-    const targetWindowId = pickMajorityWindow(domainTabs);
-    const moveIds = domainTabs.filter((t) => t.windowId !== targetWindowId).map((t) => t.id!);
+  for (const [name, nameTabs] of nameMap) {
+    if (nameTabs.length < 2) continue;
+    const targetWindowId = pickMajorityWindow(nameTabs);
+    const moveIds = nameTabs.filter((t) => t.windowId !== targetWindowId).map((t) => t.id!);
     if (moveIds.length > 0) await chrome.tabs.move(moveIds, { windowId: targetWindowId, index: -1 });
     const groupId = await chrome.tabs.group({
-      tabIds: domainTabs.map((t) => t.id!),
+      tabIds: nameTabs.map((t) => t.id!),
       createProperties: { windowId: targetWindowId },
     });
-    await chrome.tabGroups.update(groupId, {
-      title: domain,
-      color: GROUP_COLORS[Math.abs(hashCode(domain)) % GROUP_COLORS.length],
-    });
+    await chrome.tabGroups.update(groupId, { title: name, color: domainGroupColor(name) });
   }
 
   const windows = await chrome.windows.getAll();
@@ -145,6 +148,59 @@ export function pickMajorityWindow(tabs: chrome.tabs.Tab[]): number {
 /** Chrome refuses edits to a shared group, so every path that would rewrite one has to ask. */
 export function isSharedGroup(group: chrome.tabGroups.TabGroup): boolean {
   return (group as any).shared === true;
+}
+
+function domainGroupColor(name: string): chrome.tabGroups.ColorEnum {
+  return GROUP_COLORS[Math.abs(hashCode(name)) % GROUP_COLORS.length];
+}
+
+export interface DomainGroupPlan {
+  title: string;
+  color: chrome.tabGroups.ColorEnum;
+  /** A group already titled for this site, to join. */
+  joinGroupId?: number;
+  /** Other loose tabs of the site. A new group needs at least one, or it would hold one tab. */
+  partnerIds: number[];
+}
+
+/**
+ * Where background auto-group puts a tab that no rule claimed. Pure, so the one-tab-group
+ * guarantee can be tested without the service worker.
+ *
+ * The caller joins `joinGroupId` if there is one and it still exists, and otherwise creates a
+ * group only from the tab plus `partnerIds`. A failed join used to fall back to a group of the
+ * tab alone, which made a group of one — and a join fails precisely when the group is gone by
+ * the time we reach it, auto-ungroup dissolving it for having one tab left among the ways.
+ */
+export function planDomainGroup(
+  tabId: number,
+  url: string,
+  windowTabs: chrome.tabs.Tab[],
+  windowGroups: chrome.tabGroups.TabGroup[],
+  domainOf: DomainMapper,
+  nameOf: DomainMapper,
+  ignorePatterns: IgnoreRule[]
+): DomainGroupPlan | null {
+  const name = nameOf(url);
+  if (!name) return null;
+  const legacyTitle = domainOf(url);
+  const join = windowGroups.find(
+    (g) => !isSharedGroup(g) && (g.title === name || (!!legacyTitle && g.title === legacyTitle))
+  );
+  // Pinned tabs and ignored URLs are never auto-grouped themselves, so they don't count as the
+  // second tab either — the same exclusions groupTabsByDomain already makes.
+  const partnerIds = windowTabs
+    .filter(
+      (t) =>
+        t.id !== undefined &&
+        t.id !== tabId &&
+        t.groupId === -1 &&
+        !t.pinned &&
+        !isIgnoredUrl(t.url || "", ignorePatterns) &&
+        nameOf(t.url || "") === name
+    )
+    .map((t) => t.id!);
+  return { title: name, color: domainGroupColor(name), joinGroupId: join?.id, partnerIds };
 }
 
 /**
