@@ -23,16 +23,24 @@
   import CommandHints from "../../components/CommandHints.svelte";
   import ActionButton from "../../components/ActionButton.svelte";
   import TabCard from "../../components/TabCard.svelte";
-  import RulesEditor from "../../components/RulesEditor.svelte";
   import Sidebar, { type SidebarSection } from "../../components/Sidebar.svelte";
-  import SettingsPanel from "../../components/SettingsPanel.svelte";
-  import PinsPanel from "../../components/PinsPanel.svelte";
   import OverflowMenu from "../../components/OverflowMenu.svelte";
   import LazyRows from "../../components/LazyRows.svelte";
 
   // Same component serves two surfaces: the popup is a fixed 450x600 sheet, the side panel is
   // persistent and user-resizable. The caller says which, so the root can size accordingly.
   let { fluid = false }: { fluid?: boolean } = $props();
+
+  // Rules, pins and settings are panels nobody sees on open, yet their code was in the App
+  // chunk, parsed before every first paint. They load on their own now, started at idle rather
+  // than on click: {#await} renders a promise that has already settled in the same frame, so a
+  // panel opens without a blank flash.
+  let rulesEditor: Promise<typeof import("../../components/RulesEditor.svelte")> | undefined;
+  let pinsPanel: Promise<typeof import("../../components/PinsPanel.svelte")> | undefined;
+  let settingsPanel: Promise<typeof import("../../components/SettingsPanel.svelte")> | undefined;
+  const loadRulesEditor = () => (rulesEditor ??= import("../../components/RulesEditor.svelte"));
+  const loadPinsPanel = () => (pinsPanel ??= import("../../components/PinsPanel.svelte"));
+  const loadSettingsPanel = () => (settingsPanel ??= import("../../components/SettingsPanel.svelte"));
 
   let query = $state("");
   let results = $state.raw<SearchResult[]>([]);
@@ -1079,6 +1087,8 @@
     // Populate the empty-query MRU list. Without this `results` stayed empty until the first
     // keystroke, so Cmd+E → Enter (jump to the previous tab) silently did nothing.
     updateResults();
+    // After the first paint, so the panels' code stays off the path to it (see loadRulesEditor).
+    requestIdleCallback(() => { void loadRulesEditor(); void loadPinsPanel(); void loadSettingsPanel(); }, { timeout: 2000 });
   });
 
   function openArchive() {
@@ -1164,11 +1174,17 @@
       onhelp={() => { showHelp = !showHelp; activeSection = "dashboard"; }}
     />
   {#if activeSection === "rules"}
-    <RulesEditor onclose={() => { activeSection = "dashboard"; }} />
+    {#await loadRulesEditor() then { default: RulesEditor }}
+      <RulesEditor onclose={() => { activeSection = "dashboard"; }} />
+    {/await}
   {:else if activeSection === "pins"}
-    <PinsPanel />
+    {#await loadPinsPanel() then { default: PinsPanel }}
+      <PinsPanel />
+    {/await}
   {:else if activeSection === "settings"}
-    <SettingsPanel />
+    {#await loadSettingsPanel() then { default: SettingsPanel }}
+      <SettingsPanel />
+    {/await}
   {:else if activeSection === "ai"}
     <div class="flex-1 overflow-y-auto px-3 py-2 min-h-0">
       <div class="text-xs font-semibold text-text mb-2">AI Grouping</div>
