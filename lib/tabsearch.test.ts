@@ -61,6 +61,63 @@ describe("createTabSearch", () => {
     expect(s.rank("git", 1)).toEqual(eager("git").slice(0, 1));
   });
 
+  describe("rankView", () => {
+    /** What every view ran before: a haystack built from its rows, on every keystroke. */
+    const rebuilt = (view: SearchResult[], q: string) =>
+      rankedSearch(buildSearchHaystack(view), q).map((i) => view[i]);
+    const queries = ["g", "git", "docs", "hướng", "huong", "知乎", "zhihu", "githb", "zzz"];
+
+    it("ranks a subset of the rows as a rebuilt haystack would, built or not", () => {
+      for (const warm of [false, true]) {
+        const s = createTabSearch(rows, recency, priority);
+        if (warm) s.warm();
+        for (const q of queries) {
+          const view = rows.filter((r) => r.tabId! % 2 === 0);
+          expect(s.rankView("even", view, q)).toEqual(rebuilt(view, q));
+        }
+      }
+    });
+
+    it("follows the view's own order, not the tab list's", () => {
+      const s = createTabSearch(rows, recency, priority);
+      s.warm();
+      const reversed = [...rows].reverse();
+      for (const q of queries) expect(s.rankView("rev", reversed, q)).toEqual(rebuilt(reversed, q));
+    });
+
+    it("ranks rows it doesn't hold, and rows mixed with copies", () => {
+      const s = createTabSearch(rows, recency, priority);
+      s.warm();
+      const reading = [row(90, "Reading Hướng dẫn", "https://medium.com/p/1"), row(91, "Git internals", "https://git-scm.com")];
+      const branch = [rows[0], { ...rows[3], title: "↳ Git tips" }];
+      for (const q of queries) {
+        expect(s.rankView("rl", reading, q)).toEqual(rebuilt(reading, q));
+        expect(s.rankView("b", branch, q)).toEqual(rebuilt(branch, q));
+      }
+    });
+
+    it("notices when the view's rows change under the same key", () => {
+      const s = createTabSearch(rows, recency, priority);
+      s.warm();
+      expect(s.rankView("v", [rows[0], rows[3]], "git")).toEqual([rows[0], rows[3]]);
+      // A fresh array of the same rows is the same view...
+      expect(s.rankView("v", [rows[0], rows[3]], "git")).toEqual([rows[0], rows[3]]);
+      // ...but a changed set, or the same set reordered, is not.
+      expect(s.rankView("v", [rows[5], rows[0]], "git")).toEqual(rebuilt([rows[5], rows[0]], "git"));
+      expect(s.rankView("v", [rows[3], rows[0]], "gi")).toEqual(rebuilt([rows[3], rows[0]], "gi"));
+      expect(s.rankView("v", [rows[1]], "git")).toEqual([]);
+    });
+
+    it("lists the first rows as given for an empty query", () => {
+      const s = createTabSearch(rows, recency, priority);
+      expect(s.rankView("p", rows, "")).toEqual(rows);
+      expect(s.rankView("p", rows, "", 2)).toEqual(rebuilt(rows, "").slice(0, 2));
+      const many = Array.from({ length: 60 }, (_, i) => row(200 + i, `Tab ${i}`, `https://x.dev/${i}`));
+      expect(s.rankView("w", many, "")).toEqual(rebuilt(many, ""));
+      expect(s.isBuilt()).toBe(false);
+    });
+  });
+
   it("drops a row and keeps recency and priority aligned with the rows left", () => {
     const s = createTabSearch(rows, recency, priority);
     s.warm();

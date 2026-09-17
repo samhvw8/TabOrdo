@@ -4,7 +4,7 @@ title: Ranked search
 description: How lib/search.ts ranks tabs for the palette (literal tiers before approximate ones, title over URL, pinned and current-window then recency), plus regex, pinyin, Vietnamese, the non-tab sources, and the caching that keeps typing fast.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/search.ts
 tags: [search, palette, performance, i18n]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-17T09:47:05Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-17T09:50:38Z }
 sources:
   - id: search-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/search.ts
@@ -114,9 +114,9 @@ Group titles sit in both haystacks, so a group-name hit ranks as a title hit, an
 |--------|-----------|---------|
 | Bookmarks | Plain query of 2+ chars: 5 results after a 200 ms debounce, appended under a divider. `/b`: up to 20 | Chrome's `bookmarks.search` order[^popup-app][^search-ts] |
 | History | Same, via `history.search`. `/h`: up to 20 | Chrome's order[^popup-app] |
-| Reading List (`/rl`) | `readingList.query({})`; read items prefixed `✓ ` | `rankedSearch`, no recency[^popup-app][^readinglist-ts] |
-| Recently closed (`/rc`, `/recent`) | `sessions.getRecentlyClosed` (25), window sessions flattened | `rankedSearch`[^sessions-ts][^popup-app] |
-| `/w`, `/p`, `/g` | Current window, Chrome-pinned, active group (or ungrouped) | `rankedSearch`, no recency or priority[^popup-app] |
+| Reading List (`/rl`) | `readingList.query({})`; read items prefixed `✓ ` | `rankView`: `rankedSearch`, no recency[^popup-app][^readinglist-ts] |
+| Recently closed (`/rc`, `/recent`) | `sessions.getRecentlyClosed` (25), window sessions flattened | `rankView`[^sessions-ts][^popup-app] |
+| `/w`, `/p`, `/g` | Current window, Chrome-pinned, active group (or ungrouped) | `rankView`: `rankedSearch`, no recency or priority; an empty query lists the first 50[^popup-app][^tabsearch-ts] |
 
 The debounced merge drops its result if the query changed meanwhile, and takes the tab rows from `tabSearch.rank`, which remembers its last query: re-ranking there cost 1.1 to 1.6 ms at 1000 tabs to rebuild a list already on screen. A reload creates a new `TabSearch`, so the remembered rows never outlive their tabs.[^popup-app][^tabsearch-ts]
 
@@ -126,6 +126,7 @@ The debounced merge drops its result if the query changed meanwhile, and takes t
 - `App.svelte` keeps `allTabs`, `results`, `windows`, `dashboardTabs` and `pinnedTabs` as `$state.raw`, and `tabSearch` (which holds the haystack, recency and priority arrays ranking reads) as a plain `let`. A deep `$state` proxy traps every element read, and ranking does thousands per keystroke inside loops and sort comparators.[^popup-app]
 - Nothing is built before the dashboard paints. `loadTabs` only creates the `TabSearch`; an empty query (the most-recent list the popup opens with) reads just the row count via `recencyOrder`. A `requestIdleCallback` (timeout 1 s) then builds both haystacks and their `prepare()` caches, unless a newer load replaced that search. A key pressed first builds synchronously and gets the same results.[^tabsearch-ts][^popup-app]
 - Measured in Node at 1000 tabs: search work before first paint 3.20 ms to 0.24 ms; the idle warm-up costs 3.04 ms after paint; the first `g` then takes 0.42 ms instead of 3.35 ms. One pass over both haystacks costs 1.65 ms where two builders cost 2.82 ms.[^tabsearch-ts]
+- Views (`@` triage, the bare `@` overview, `/w`, `/p`, `/g`, `/rl`, `/rc`) rank through `tabSearch.rankView(key, rows, query)`, which returns what `rankedSearch(buildSearchHaystack(rows), query)` would. The popup derives a view's rows afresh on each keystroke, so the view's haystack is kept under its key while the rows are the same objects in the same order. Rows the tab search holds are taken from the built full haystack by `subHaystack`, which also copies their `prepare()` entries; other rows (Reading List, recently closed, @b's retitled copies) are built once per change. Before, each keystroke rebuilt the view's haystack and missed `prepare()` because the array was new: `@u github` took about 2.5 ms a key at 1000 tabs (720 ungrouped), now 0.8 to 0.9 ms after the idle warm-up and 1.1 ms before it, with identical results.[^tabsearch-ts][^popup-app]
 - Measured per keystroke: `9d70207` took 8.46 ms to 3.27 ms at 1000 tabs,[^commit-9d70207] and `057dc57` took 3.27 ms to 1.69 ms.[^commit-057dc57] CHANGELOG 0.7.0 rounds the pair to 2.4 ms to 0.5 ms at 300 tabs and 8.5 ms to 1.7 ms at 1000.[^changelog]
 
 # Gotchas
@@ -142,7 +143,7 @@ The debounced merge drops its result if the query changed meanwhile, and takes t
 | File | Guards |
 |------|--------|
 | `lib/search.test.ts` | Tier order, title over URL, priority boost, abbreviations, reserved approximate budget, accented and one-letter needles, `parseCommand`, regex ReDoS guard[^search-test] |
-| `lib/tabsearch.test.ts` | Lazy build ranks exactly as eager haystacks; empty query builds nothing; last query remembered; `without` keeps arrays aligned[^tabsearch-test] |
+| `lib/tabsearch.test.ts` | Lazy build ranks exactly as eager haystacks; empty query builds nothing; last query remembered; `rankView` matches a rebuilt haystack for subsets, reorders, foreign rows and changed rows; `without` keeps arrays aligned[^tabsearch-test] |
 | `lib/pinyin.test.ts` | Pinyin variants, CJK queries, Vietnamese with and without diacritics[^pinyin-test] |
 | `lib/highlight.test.ts` | `matchRanges` and `highlightSegments`[^highlight-test] |
 

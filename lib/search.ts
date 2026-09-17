@@ -438,6 +438,22 @@ export function buildHaystacks(items: SearchItem[]): { haystack: string[]; title
   return { haystack, titleHaystack };
 }
 
+/**
+ * The entries of `haystack` at `indices`, as a haystack of its own that starts out with the
+ * parent's lower-cased and word-split copies rather than recomputing them.
+ *
+ * A view (the tabs in this window, the ungrouped ones) is a subset of the tab list. Rebuilding
+ * its haystack on every keystroke, pinyin and diacritic stripping included, and then missing
+ * the prepare() cache because the array was new each time, is what cost "@u github" 2.6 ms a
+ * key at 1000 tabs.
+ */
+export function subHaystack(haystack: string[], indices: number[]): string[] {
+  const sub = indices.map((i) => haystack[i]);
+  const p = prepared.get(haystack);
+  if (p) prepared.set(sub, { lower: indices.map((i) => p.lower[i]), words: indices.map((i) => p.words[i]) });
+  return sub;
+}
+
 /** Fill a haystack's lower-case and word-split cache now, so the first keystroke doesn't. */
 export function warmHaystack(haystack: string[]): void {
   prepare(haystack);

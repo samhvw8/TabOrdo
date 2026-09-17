@@ -3,7 +3,7 @@
   import { getAllTabs, getCurrentWindowTabs, switchToTab, closeTabs, sortTabsInWindow, sortTabsInGroup, groupTabsByDomain, ungroupAll, removeDuplicates, mergeAllWindows, extractGroupToWindow, discardTabs, closeTabsToLeft, closeTabsToRight, closeTabsSameSite, closeOldTabs, shuffleTabs, uniteDomain, isolateDomain, splitWindow, splitByDomain, stackWindows, pinCurrentTab, unpinCurrentTab, outlineBranch, type TabInfo } from "../../lib/tabs/index.ts";
   import { getPinnedTabs, getPinForTab, type PinnedTabEntry } from "../../lib/pin.ts";
   import { getArchiveCount } from "../../lib/archive.ts";
-  import { search, rankedSearch, tabsToSearchItems, searchBookmarks, searchHistory, parseCommand, buildSearchHaystack, type SearchResult } from "../../lib/search.ts";
+  import { search, tabsToSearchItems, searchBookmarks, searchHistory, parseCommand, type SearchResult } from "../../lib/search.ts";
   import { createTabSearch, type TabSearch } from "../../lib/tabsearch.ts";
   import { getAutoGroup, setAutoGroup, getAutoUngroup, setAutoUngroup, getUseRules, setUseRules, getAutoSort, setAutoSort, getAutoPinFollow, setAutoPinFollow, getAutoDiscard, setAutoDiscard, setSwitchToExisting } from "../../lib/rules.ts";
   import { matchCommands, ALL_COMMANDS, ACTION_COMMANDS, TRIAGE_COMMANDS, CATEGORY_STYLES, groupCommands, type CommandDefinition, type CommandCategory } from "../../lib/commands.ts";
@@ -368,12 +368,14 @@
     try {
       // Triage views are table-driven: they only differ by which tabs they select, and the
       // eight hand-copied switch arms this replaces are what let a broken "@shared" hide.
+      //
+      // Every view below ranks through tabSearch.rankView, keyed by the view. Each used to build
+      // a fresh haystack from its rows on every keystroke (719 entries of diacritic stripping
+      // and pinyin for "@u", 2.6 ms a key at 1000 tabs); rankView keeps one until the rows change.
       const view = TRIAGE_BY_PREFIX.get(prefix);
       if (view) {
         const viewTabs = await view.tabs();
-        results = searchQuery
-          ? rankedSearch(buildSearchHaystack(viewTabs), searchQuery).map((i) => viewTabs[i])
-          : viewTabs;
+        results = searchQuery ? tabSearch.rankView(prefix, viewTabs, searchQuery) : viewTabs;
         if (viewTabs.length === 0 && view.empty) flashStatus(view.empty);
         return;
       }
@@ -390,16 +392,11 @@
         case "w": {
           const windowTabs = await getCurrentWindowTabs();
           const items = tabsToSearchItems(windowTabs);
-          const hay = buildSearchHaystack(items);
-          const indices = rankedSearch(hay, searchQuery);
-          results = indices.map((i) => items[i]);
+          results = tabSearch.rankView("w", items, searchQuery);
           break;
         }
         case "p": {
-          const pinned = allTabs.filter((t) => t.pinned);
-          const hay = buildSearchHaystack(pinned);
-          const indices = rankedSearch(hay, searchQuery);
-          results = indices.map((i) => pinned[i]);
+          results = tabSearch.rankView("p", allTabs.filter((t) => t.pinned), searchQuery);
           break;
         }
         case "g": {
@@ -408,9 +405,7 @@
           const groupTabs = activeGroupId !== -1
             ? allTabs.filter((t) => t.groupId === activeGroupId)
             : allTabs.filter((t) => !t.groupId || t.groupId === -1);
-          const hay = buildSearchHaystack(groupTabs);
-          const indices = rankedSearch(hay, searchQuery);
-          results = indices.map((i) => groupTabs[i]);
+          results = tabSearch.rankView("g", groupTabs, searchQuery);
           break;
         }
         case "@": {
@@ -418,9 +413,7 @@
           for (const cat of TRIAGE_OVERVIEW) {
             const catTabs = await cat.overviewTabs!();
             if (catTabs.length === 0) continue;
-            const matched = searchQuery
-              ? rankedSearch(buildSearchHaystack(catTabs), searchQuery).map((i) => catTabs[i])
-              : catTabs;
+            const matched = searchQuery ? tabSearch.rankView(cat.id, catTabs, searchQuery) : catTabs;
             if (matched.length === 0) continue;
             triageResults.push({ type: "divider", id: cat.id, title: `${cat.title} (${matched.length})`, url: "" });
             triageResults.push(...matched);
@@ -437,15 +430,13 @@
           const rlResults: SearchResult[] = rlItems.map((item, i) => ({
             type: "bookmark" as const, id: `rl-${i}`, title: `${item.hasBeenRead ? "✓ " : ""}${item.title}`, url: item.url,
           }));
-          if (searchQuery) { const hay = buildSearchHaystack(rlResults); const indices = rankedSearch(hay, searchQuery); results = indices.map((i) => rlResults[i]); }
-          else results = rlResults;
+          results = searchQuery ? tabSearch.rankView("rl", rlResults, searchQuery) : rlResults;
           if (rlResults.length === 0) flashStatus("Reading List is empty");
           break;
         }
         case "rc": {
           const rcItems = await getRecentlyClosed();
-          if (searchQuery) { const hay = buildSearchHaystack(rcItems); const indices = rankedSearch(hay, searchQuery); results = indices.map((i) => rcItems[i]); }
-          else results = rcItems;
+          results = searchQuery ? tabSearch.rankView("rc", rcItems, searchQuery) : rcItems;
           if (rcItems.length === 0) flashStatus("No recently closed tabs");
           break;
         }

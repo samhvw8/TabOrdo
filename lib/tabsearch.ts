@@ -1,4 +1,4 @@
-import { rankedSearch, recencyOrder, buildHaystacks, warmHaystack, type SearchResult } from "./search.ts";
+import { rankedSearch, recencyOrder, buildHaystacks, buildSearchHaystack, subHaystack, warmHaystack, type SearchResult } from "./search.ts";
 
 /**
  * The palette's search over one load of the tab list: the rows, the recency and priority
@@ -25,6 +25,17 @@ export interface TabSearch {
    * Asking again for the last query returns the same array, so callers must not mutate it.
    */
   rank(query: string, limit?: number): SearchResult[];
+  /**
+   * Rank a view's rows (a triage list, the tabs in one window) against `query` exactly as
+   * `rankedSearch(buildSearchHaystack(rows), query, limit)` does: no title haystack, recency
+   * or priority, and the first `limit` rows as given for an empty query.
+   *
+   * The popup asks for the view's rows afresh on every keystroke, so the haystack is kept
+   * under `key` for as long as those rows are the same objects in the same order. Rows this
+   * search already holds reuse their built entries and lower-case caches; others (Reading
+   * List entries, the retitled rows of @b) are built once per change of rows.
+   */
+  rankView(key: string, rows: SearchResult[], query: string, limit?: number): SearchResult[];
   /** This search without the row `id`, keeping recency and priority in step with the rows. */
   without(id: string): TabSearch;
 }
@@ -37,6 +48,29 @@ export function createTabSearch(items: SearchResult[], recency: number[], priori
   // already on screen. One remembered query covers it; a reload makes a new TabSearch, so a
   // stale answer can't outlive the tabs it was ranked from.
   let last: { query: string; limit: number; rows: SearchResult[] } | null = null;
+  const views = new Map<string, { rows: SearchResult[]; haystack: string[] }>();
+  let positions: Map<SearchResult, number> | null = null;
+
+  function viewHaystack(key: string, rows: SearchResult[]): string[] {
+    const cached = views.get(key);
+    if (cached && sameRows(cached.rows, rows)) return cached.haystack;
+    let haystack: string[] | null = null;
+    // Only borrow from the full haystack once something has built it; building all of it for
+    // a view of three tabs would cost more than building the three.
+    if (built) {
+      positions ??= new Map(items.map((row, i) => [row, i]));
+      const at: number[] = [];
+      for (const row of rows) {
+        const i = positions.get(row);
+        if (i === undefined) break;
+        at.push(i);
+      }
+      if (at.length === rows.length) haystack = subHaystack(built.haystack, at);
+    }
+    haystack ??= buildSearchHaystack(rows);
+    views.set(key, { rows, haystack });
+    return haystack;
+  }
 
   return {
     items,
@@ -63,10 +97,20 @@ export function createTabSearch(items: SearchResult[], recency: number[], priori
       last = { query, limit, rows };
       return rows;
     },
+    rankView(key, rows, query, limit = 50) {
+      if (!query.trim()) return rows.slice(0, limit);
+      return rankedSearch(viewHaystack(key, rows), query, limit).map((i) => rows[i]);
+    },
     without(id) {
       const keep: number[] = [];
       for (let i = 0; i < items.length; i++) if (items[i].id !== id) keep.push(i);
       return createTabSearch(keep.map((i) => items[i]), keep.map((i) => recency[i]), keep.map((i) => priority[i]));
     },
   };
+}
+
+function sameRows(a: SearchResult[], b: SearchResult[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
 }
