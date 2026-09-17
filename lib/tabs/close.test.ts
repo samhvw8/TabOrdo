@@ -6,6 +6,7 @@ import { installChromeStub, type ChromeStub } from "../testing/chrome-stub.ts";
 import { popUndo, peekUndo, peekUndoEntry, executeUndo, undoStackSize } from "../undo.ts";
 import {
   closeTabs,
+  discardTabs,
   closeTabsToLeft,
   closeTabsToRight,
   closeTabsSameSite,
@@ -180,6 +181,27 @@ describe("chrome.tabs.remove", () => {
     for (const dir of ["lib", "entrypoints", "components"]) walk(join(root, dir));
     expect(hits).toHaveLength(1);
     expect(hits[0]).toMatch(/^lib\/tabs\/close\.ts:\d+$/);
+  });
+});
+
+describe("discardTabs", () => {
+  // They go out together now, so one refusal must still leave every other discard standing.
+  it("discards the rest when Chrome refuses one", async () => {
+    stub.openTabs = [1, 2, 3].map((id) => ({ id, url: `https://s${id}.com`, pinned: false, windowId: 1, groupId: -1, index: id - 1 }));
+    const discard = chrome.tabs.discard;
+    let inFlight = 0;
+    let most = 0;
+    chrome.tabs.discard = (async (id: number) => {
+      most = Math.max(most, ++inFlight);
+      await new Promise((r) => setTimeout(r, 0));
+      inFlight--;
+      if (id === 2) throw new Error("Cannot discard tab with id: 2.");
+      return discard(id);
+    }) as typeof chrome.tabs.discard;
+    await expect(discardTabs([1, 2, 3])).resolves.toBeUndefined();
+    expect(stub.discardedIds.sort()).toEqual([1, 3]);
+    // Awaiting each discard in turn is what made /freeze on a big window slow.
+    expect(most).toBe(3);
   });
 });
 

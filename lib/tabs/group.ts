@@ -27,7 +27,9 @@ export async function groupTabsByDomain(
     }
   }
 
-  const freshTabs = await chrome.tabs.query({});
+  // Only a rebuild changes the strip before this point. Additive mode used to fetch every tab a
+  // second time here, which at 1000 tabs is a second 1000-tab payload for nothing.
+  const freshTabs = mode === "rebuild" ? await chrome.tabs.query({}) : allTabs;
   const existingGroups = await chrome.tabGroups.query({});
   const groupTitleMap = new Map(existingGroups.map((g) => [g.id, g.title || ""]));
 
@@ -264,14 +266,18 @@ async function collapseAllExceptActive(): Promise<void> {
   const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   const allGroups = await chrome.tabGroups.query({});
 
-  await Promise.all(allGroups.map((group) => {
-    const shouldExpand = activeTab && activeTab.groupId === group.id;
-    return chrome.tabGroups.update(group.id, { collapsed: !shouldExpand });
+  // Only groups whose state is wrong get an update. Group and Regroup end here, and on a strip
+  // that was already grouped every group was re-sent the state it already had.
+  await Promise.all(allGroups.flatMap((group) => {
+    const collapsed = !(activeTab && activeTab.groupId === group.id);
+    return group.collapsed === collapsed ? [] : [chrome.tabGroups.update(group.id, { collapsed })];
   }));
 }
 
 export async function collapseAllGroups(): Promise<number> {
   const allGroups = await chrome.tabGroups.query({});
-  await Promise.all(allGroups.map((g) => chrome.tabGroups.update(g.id, { collapsed: true })));
+  await Promise.all(
+    allGroups.filter((g) => !g.collapsed).map((g) => chrome.tabGroups.update(g.id, { collapsed: true }))
+  );
   return allGroups.length;
 }

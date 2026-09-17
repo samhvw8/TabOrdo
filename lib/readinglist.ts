@@ -32,13 +32,11 @@ export async function markAsRead(url: string): Promise<void> {
 
 export async function addTabsToReadingList(tabs: { url: string; title: string }[]): Promise<number> {
   if (!isReadingListAvailable()) return 0;
-  let added = 0;
-  for (const tab of tabs) {
-    if (!tab.url || tab.url.startsWith("chrome://") || tab.url.startsWith("chrome-extension://")) continue;
-    try {
-      await addToReadingList(tab.url, tab.title || tab.url);
-      added++;
-    } catch {}
-  }
-  return added;
+  const saveable = tabs.filter(
+    (tab) => tab.url && !tab.url.startsWith("chrome://") && !tab.url.startsWith("chrome-extension://")
+  );
+  // Each add is independent, so they go out together. A rejected one (already on the list) still
+  // costs only itself, and is not counted.
+  const results = await Promise.allSettled(saveable.map((tab) => addToReadingList(tab.url, tab.title || tab.url)));
+  return results.filter((r) => r.status === "fulfilled").length;
 }

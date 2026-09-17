@@ -55,6 +55,16 @@ describe("collapseAllGroups", () => {
     expect(await collapseAllGroups()).toBe(0);
     expect(stub.groupUpdates).toEqual([]);
   });
+
+  // An update per group that is already collapsed changes nothing and costs a round-trip each.
+  it("only updates groups that are still expanded, but counts them all", async () => {
+    stub.groups = [
+      { id: 50, title: "A", windowId: 1, collapsed: true },
+      { id: 60, title: "B", windowId: 1, collapsed: false },
+    ];
+    expect(await collapseAllGroups()).toBe(2);
+    expect(stub.groupUpdates.map((u) => u.id)).toEqual([60]);
+  });
 });
 
 describe("pickMajorityWindow", () => {
@@ -168,6 +178,48 @@ describe("groupTabsByDomain", () => {
     stub.groups = [{ id: 70, title: "Mine", color: "purple", windowId: 1 }];
     await groupTabsByDomain("additive");
     expect(stub.openTabs.every((t) => t.groupId === 70)).toBe(true);
+  });
+
+  it("additive mode fetches every tab once", async () => {
+    stub.openTabs = [
+      tab({ id: 1, url: "https://github.com/one", index: 0 }),
+      tab({ id: 2, url: "https://github.com/two", index: 1 }),
+    ];
+    const query = chrome.tabs.query;
+    let everyTab = 0;
+    chrome.tabs.query = (async (q: chrome.tabs.QueryInfo = {}) => {
+      if (Object.keys(q).length === 0) everyTab++;
+      return query(q);
+    }) as typeof chrome.tabs.query;
+    await groupTabsByDomain("additive");
+    expect(everyTab).toBe(1);
+  });
+
+  // Group and Regroup finish by collapsing every group but the active one. On a strip already
+  // in that state, nothing should be sent.
+  it("sends no collapse update to a group already in the right state", async () => {
+    stub.openTabs = [
+      tab({ id: 1, url: "https://github.com/one", index: 0, groupId: 70, active: true }),
+      tab({ id: 2, url: "https://github.com/two", index: 1, groupId: 70 }),
+      tab({ id: 3, url: "https://example.com/a", index: 2, groupId: 80 }),
+      tab({ id: 4, url: "https://example.com/b", index: 3, groupId: 80 }),
+    ];
+    stub.groups = [
+      { id: 70, title: "github", color: "blue", windowId: 1, collapsed: false },
+      { id: 80, title: "example", color: "red", windowId: 1, collapsed: true },
+    ];
+    await groupTabsByDomain("additive");
+    expect(stub.groupUpdates.filter((u) => u.collapsed !== undefined)).toEqual([]);
+  });
+
+  it("expands the active tab's group when it is collapsed", async () => {
+    stub.openTabs = [
+      tab({ id: 1, url: "https://github.com/one", index: 0, groupId: 70, active: true }),
+      tab({ id: 2, url: "https://github.com/two", index: 1, groupId: 70 }),
+    ];
+    stub.groups = [{ id: 70, title: "github", color: "blue", windowId: 1, collapsed: true }];
+    await groupTabsByDomain("additive");
+    expect(stub.groupUpdates.filter((u) => u.collapsed !== undefined)).toEqual([{ id: 70, collapsed: false }]);
   });
 
   it("rebuild mode dissolves existing groups first", async () => {

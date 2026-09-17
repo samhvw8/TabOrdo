@@ -75,6 +75,31 @@ describe("addTabsToReadingList", () => {
     expect(count).toBe(0);
   });
 
+  it("sends the adds together rather than one after another", async () => {
+    const add = chrome.readingList.addEntry;
+    let inFlight = 0;
+    let most = 0;
+    chrome.readingList.addEntry = (async (props: chrome.readingList.AddEntryOptions) => {
+      most = Math.max(most, ++inFlight);
+      await new Promise((r) => setTimeout(r, 0));
+      inFlight--;
+      return add(props);
+    }) as typeof chrome.readingList.addEntry;
+    await addTabsToReadingList([{ url: "https://a.com", title: "A" }, { url: "https://b.com", title: "B" }]);
+    expect(most).toBe(2);
+  });
+
+  it("keeps adding past a rejected tab and counts only what was added", async () => {
+    entries.push({ url: "https://b.com", title: "B", hasBeenRead: false });
+    const count = await addTabsToReadingList([
+      { url: "https://a.com", title: "A" },
+      { url: "https://b.com", title: "B" },
+      { url: "https://c.com", title: "C" },
+    ]);
+    expect(count).toBe(2);
+    expect(entries.map((e) => e.url).sort()).toEqual(["https://a.com", "https://b.com", "https://c.com"]);
+  });
+
   it("silently handles duplicate errors", async () => {
     entries.push({ url: "https://a.com", title: "A", hasBeenRead: false });
     const count = await addTabsToReadingList([{ url: "https://a.com", title: "A" }]);

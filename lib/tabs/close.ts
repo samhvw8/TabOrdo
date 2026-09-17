@@ -3,10 +3,11 @@
 import { getDomainMapper } from "../url.ts";
 import { snapshotBeforeClose } from "../undo.ts";
 
+// allSettled, like /reload: discards are independent, and awaiting each in turn made /freeze on a
+// thousand tabs a thousand round-trips end to end. A tab Chrome won't discard still skips only
+// itself.
 export async function discardTabs(tabIds: number[]): Promise<void> {
-  for (const id of tabIds) {
-    await chrome.tabs.discard(id).catch(() => {});
-  }
+  await Promise.allSettled(tabIds.map((id) => chrome.tabs.discard(id)));
 }
 
 /** Chrome's rejection for an id it no longer knows. The tab is gone, which is what was asked. */
