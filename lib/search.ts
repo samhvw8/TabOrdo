@@ -98,7 +98,7 @@ export function search(
   recency?: number[]
 ): number[] {
   if (!needle.trim()) {
-    return sortByRecency(haystack.map((_, i) => i), recency).slice(0, limit);
+    return recencyOrder(haystack.length, recency, limit);
   }
 
   // With recency, scan the full haystack so a recent match past the limit window isn't cut off.
@@ -118,6 +118,15 @@ export function search(
     case "regex":
       return sortByRecency(regexSearch(haystack, needle, scanLimit), recency).slice(0, limit);
   }
+}
+
+/**
+ * What an empty needle returns: the first `limit` indices of a `length`-entry haystack, most
+ * recent first. It reads nothing but the length, so the popup can list its most-recent tabs
+ * before any haystack exists.
+ */
+export function recencyOrder(length: number, recency?: number[], limit = length): number[] {
+  return sortByRecency(Array.from({ length }, (_, i) => i), recency).slice(0, limit);
 }
 
 // exact/prefix/regex matches carry no relevance score, so most-recently-used is the ranking.
@@ -144,7 +153,7 @@ export function rankedSearch(
   priority?: number[]
 ): number[] {
   if (!needle.trim()) {
-    return sortByRecency(haystack.map((_, i) => i), recency).slice(0, limit);
+    return recencyOrder(haystack.length, recency, limit);
   }
   if (hasChinese(needle)) {
     return sortByRecency(exactSearch(haystack, needle, haystack.length), recency, priority).slice(0, limit);
@@ -174,7 +183,16 @@ export function rankedSearch(
   // Bounded by the haystack, not by `limit`, exactly as the literal tiers above are: truncating
   // to `limit` here would spend the whole quota on indices the literal tiers already claimed,
   // and dedup afterwards would leave nothing.
-  take(approximate, fuzzySearch(haystack, needle, haystack.length));
+  //
+  // uFuzzy splits terms on [^A-Za-z\d']+ even with `unicode: true`, which only adds the /u
+  // flag, so "hư" reached it as the lone term "h" and pulled in every tab with an h: 861 rows
+  // at 1000 tabs that matched nothing the user typed. Every haystack entry already carries a
+  // diacritic-stripped copy, so fold the needle to meet it. A one-letter needle is skipped
+  // outright: any entry uFuzzy matches contains that letter, which the substring tier has
+  // already claimed (a lone "ư" folds to "u", and those extra hits are the junk above). At
+  // 1000 tabs the call found nothing new for 0.98 ms of a 1.69 ms keystroke.
+  const fuzzyNeedle = stripDiacritics(needle);
+  if (fuzzyNeedle.trim().length >= 2) take(approximate, fuzzySearch(haystack, fuzzyNeedle, haystack.length));
   take(approximate, subsequenceSearch(titleHay, needle, titleHay.length));
   take(approximate, subsequenceSearch(haystack, needle, haystack.length));
 
@@ -354,28 +372,91 @@ export async function searchHistory(
   }));
 }
 
-export function buildSearchHaystack(items: { title: string; url: string; groupTitle?: string }[]): string[] {
-  return items.map((t) => {
-    const original = `${t.title} ${t.url}${t.groupTitle ? ` ${t.groupTitle}` : ""}`;
-    const stripped = stripDiacritics(original);
-    let hay = original === stripped ? original : `${original} ${stripped}`;
-    const pin = pinyinVariants(t.groupTitle ? `${t.title} ${t.groupTitle}` : t.title);
-    if (pin) hay = `${hay} ${pin}`;
-    return hay;
-  });
+export interface SearchItem {
+  title: string;
+  url: string;
+  groupTitle?: string;
+}
+
+/**
+ * The costly part of an item's haystack entries, computed once and shared by both of them.
+ *
+ * The two builders used to run separately over the same tabs, so every Chinese label went
+ * through pinyin twice (0.63 ms each time at 1000 tabs) and every label was stripped of
+ * diacritics twice, all before the popup could paint. Stripping works character by character
+ * and every join below is a space, which canonical reordering never moves marks across, so
+ * stripping the parts and joining them yields exactly the strings that stripping each whole
+ * entry did.
+ */
+interface LabelParts {
+  strippedTitle: string;
+  strippedGroup: string;
+  pinyin: string | null;
+  /** The finished title-haystack entry. */
+  titleEntry: string;
+}
+
+function labelParts(title: string, groupTitle: string | undefined): LabelParts {
+  const label = groupTitle ? `${title} ${groupTitle}` : title;
+  const strippedTitle = stripDiacritics(title);
+  const strippedGroup = groupTitle ? stripDiacritics(groupTitle) : "";
+  const strippedLabel = groupTitle ? `${strippedTitle} ${strippedGroup}` : strippedTitle;
+  const pinyin = pinyinVariants(label);
+  const entry = label === strippedLabel ? label : `${label} ${strippedLabel}`;
+  return { strippedTitle, strippedGroup, pinyin, titleEntry: pinyin ? `${entry} ${pinyin}` : entry };
+}
+
+function fullEntry(t: SearchItem, parts: LabelParts): string {
+  const original = t.groupTitle ? `${t.title} ${t.url} ${t.groupTitle}` : `${t.title} ${t.url}`;
+  const strippedUrl = stripDiacritics(t.url);
+  const stripped = t.groupTitle
+    ? `${parts.strippedTitle} ${strippedUrl} ${parts.strippedGroup}`
+    : `${parts.strippedTitle} ${strippedUrl}`;
+  const hay = original === stripped ? original : `${original} ${stripped}`;
+  return parts.pinyin ? `${hay} ${parts.pinyin}` : hay;
+}
+
+export function buildSearchHaystack(items: SearchItem[]): string[] {
+  return items.map((t) => fullEntry(t, labelParts(t.title, t.groupTitle)));
 }
 
 // Title + group name only, no URL — used to rank a real title/label match above a URL-only
 // hit (e.g. "com" matching every domain) instead of treating both as equally relevant.
 export function buildTitleHaystack(items: { title: string; groupTitle?: string }[]): string[] {
-  return items.map((t) => {
-    const label = t.groupTitle ? `${t.title} ${t.groupTitle}` : t.title;
-    const stripped = stripDiacritics(label);
-    let hay = label === stripped ? label : `${label} ${stripped}`;
-    const pin = pinyinVariants(label);
-    if (pin) hay = `${hay} ${pin}`;
-    return hay;
-  });
+  return items.map((t) => labelParts(t.title, t.groupTitle).titleEntry);
+}
+
+/** Both haystacks in one pass: identical to calling the two builders, at one pinyin per label. */
+export function buildHaystacks(items: SearchItem[]): { haystack: string[]; titleHaystack: string[] } {
+  const haystack: string[] = new Array(items.length);
+  const titleHaystack: string[] = new Array(items.length);
+  for (let i = 0; i < items.length; i++) {
+    const parts = labelParts(items[i].title, items[i].groupTitle);
+    haystack[i] = fullEntry(items[i], parts);
+    titleHaystack[i] = parts.titleEntry;
+  }
+  return { haystack, titleHaystack };
+}
+
+/**
+ * The entries of `haystack` at `indices`, as a haystack of its own that starts out with the
+ * parent's lower-cased and word-split copies rather than recomputing them.
+ *
+ * A view (the tabs in this window, the ungrouped ones) is a subset of the tab list. Rebuilding
+ * its haystack on every keystroke, pinyin and diacritic stripping included, and then missing
+ * the prepare() cache because the array was new each time, is what cost "@u github" 2.6 ms a
+ * key at 1000 tabs.
+ */
+export function subHaystack(haystack: string[], indices: number[]): string[] {
+  const sub = indices.map((i) => haystack[i]);
+  const p = prepared.get(haystack);
+  if (p) prepared.set(sub, { lower: indices.map((i) => p.lower[i]), words: indices.map((i) => p.words[i]) });
+  return sub;
+}
+
+/** Fill a haystack's lower-case and word-split cache now, so the first keystroke doesn't. */
+export function warmHaystack(haystack: string[]): void {
+  prepare(haystack);
 }
 
 // Longest first, so "@shared" is tested before "@s" swallows it.

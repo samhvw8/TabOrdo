@@ -4,7 +4,7 @@ title: Command palette and dashboard actions
 description: How slash commands, @ triage views and dashboard tiles are registered, dispatched to one handler per command, confirmed, and extended.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/actions.ts
 tags: [command-palette, dashboard, actions, triage]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-17T00:16:05Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-17T09:50:38Z }
 sources:
   - id: commands-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/commands.ts
@@ -110,7 +110,7 @@ Handler conventions:
 | `@b` | Active tab's branch as an outline ([branch lineage](/features/branch-lineage.md)) | No |
 | `@shared` | Tabs in shared groups | No |
 
-All are rows in one `TRIAGE_CATEGORIES` table; text after a view re-ranks its tabs. The lookup is a `Map` because an object literal would resolve `/constructor` to `Object.prototype`.[^popup-app]
+All are rows in one `TRIAGE_CATEGORIES` table; text after a view re-ranks its tabs through `tabSearch.rankView`, which keeps the view's haystack until its rows change ([search](/features/search.md)). With no text a view lists every row, uncapped, as `/rl` and `/rc` do; only `/w`, `/p` and `/g` stop at 50. The lookup is a `Map` because an object literal would resolve `/constructor` to `Object.prototype`.[^popup-app]
 
 ## Dashboard tiles, alt-click and confirmations
 

@@ -1,9 +1,11 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { getAllTabs, getCurrentWindowTabs, switchToTab, closeTabs, sortTabsInWindow, sortTabsInGroup, groupTabsByDomain, ungroupAll, removeDuplicates, mergeAllWindows, extractGroupToWindow, discardTabs, closeTabsToLeft, closeTabsToRight, closeTabsSameSite, closeOldTabs, shuffleTabs, uniteDomain, isolateDomain, splitWindow, splitByDomain, stackWindows, pinCurrentTab, unpinCurrentTab, outlineBranch, type TabInfo } from "../../lib/tabs/index.ts";
+  import { getAllTabs, switchToTab, closeTabs, sortTabsInWindow, sortTabsInGroup, groupTabsByDomain, ungroupAll, removeDuplicates, mergeAllWindows, extractGroupToWindow, discardTabs, closeTabsToLeft, closeTabsToRight, closeTabsSameSite, closeOldTabs, shuffleTabs, uniteDomain, isolateDomain, splitWindow, splitByDomain, stackWindows, pinCurrentTab, unpinCurrentTab, outlineBranch, type TabInfo } from "../../lib/tabs/index.ts";
   import { getPinnedTabs, getPinForTab, type PinnedTabEntry } from "../../lib/pin.ts";
   import { getArchiveCount } from "../../lib/archive.ts";
-  import { search, rankedSearch, tabsToSearchItems, searchBookmarks, searchHistory, parseCommand, buildSearchHaystack, buildTitleHaystack, type SearchResult } from "../../lib/search.ts";
+  import { search, tabsToSearchItems, searchBookmarks, searchHistory, parseCommand, type SearchResult } from "../../lib/search.ts";
+  import { createTabSearch, type TabSearch } from "../../lib/tabsearch.ts";
+  import { createDebouncer } from "../../lib/debounce.ts";
   import { getAutoGroup, setAutoGroup, getAutoUngroup, setAutoUngroup, getUseRules, setUseRules, getAutoSort, setAutoSort, getAutoPinFollow, setAutoPinFollow, getAutoDiscard, setAutoDiscard, setSwitchToExisting } from "../../lib/rules.ts";
   import { matchCommands, ALL_COMMANDS, ACTION_COMMANDS, TRIAGE_COMMANDS, CATEGORY_STYLES, groupCommands, type CommandDefinition, type CommandCategory } from "../../lib/commands.ts";
   import { snapshotBeforeGroup, executeUndo, peekUndo, loadUndoStack, touchesUndoStack } from "../../lib/undo.ts";
@@ -21,16 +23,24 @@
   import CommandHints from "../../components/CommandHints.svelte";
   import ActionButton from "../../components/ActionButton.svelte";
   import TabCard from "../../components/TabCard.svelte";
-  import RulesEditor from "../../components/RulesEditor.svelte";
   import Sidebar, { type SidebarSection } from "../../components/Sidebar.svelte";
-  import SettingsPanel from "../../components/SettingsPanel.svelte";
-  import PinsPanel from "../../components/PinsPanel.svelte";
   import OverflowMenu from "../../components/OverflowMenu.svelte";
   import LazyRows from "../../components/LazyRows.svelte";
 
   // Same component serves two surfaces: the popup is a fixed 450x600 sheet, the side panel is
   // persistent and user-resizable. The caller says which, so the root can size accordingly.
   let { fluid = false }: { fluid?: boolean } = $props();
+
+  // Rules, pins and settings are panels nobody sees on open, yet their code was in the App
+  // chunk, parsed before every first paint. They load on their own now, started at idle rather
+  // than on click: {#await} renders a promise that has already settled in the same frame, so a
+  // panel opens without a blank flash.
+  let rulesEditor: Promise<typeof import("../../components/RulesEditor.svelte")> | undefined;
+  let pinsPanel: Promise<typeof import("../../components/PinsPanel.svelte")> | undefined;
+  let settingsPanel: Promise<typeof import("../../components/SettingsPanel.svelte")> | undefined;
+  const loadRulesEditor = () => (rulesEditor ??= import("../../components/RulesEditor.svelte"));
+  const loadPinsPanel = () => (pinsPanel ??= import("../../components/PinsPanel.svelte"));
+  const loadSettingsPanel = () => (settingsPanel ??= import("../../components/SettingsPanel.svelte"));
 
   let query = $state("");
   let results = $state.raw<SearchResult[]>([]);
@@ -66,7 +76,8 @@
   let fileInputEl = $state<HTMLInputElement | undefined>(undefined);
   let busy = $state(false);
   let aiProgress = $state<AIGroupProgress>(defaultProgress());
-  let searchTimer: ReturnType<typeof setTimeout> | undefined;
+  // Bookmark and history lookups: the rows under a plain query, and the /b and /h lists.
+  const lookup = createDebouncer(200);
   let pendingConfirm = $state<string | null>(null);
   let confirmTimer: ReturnType<typeof setTimeout> | undefined;
   let actionLog = $state<ActionLogEntry[]>([]);
@@ -197,17 +208,14 @@
     setCollapsed(next);
   }
 
-  // $state.raw, and plain lets for the four search arrays, deliberately. A deep $state proxy
-  // puts a trap on every element read, and rankedSearch reads these thousands of times per
-  // keystroke — in loops and inside sort comparators. Measured at 2.4x the whole search cost
-  // (8.5 ms vs 3.3 ms per keystroke at 1000 tabs). Nothing mutates any of these in place; they
-  // are only ever replaced wholesale, which is exactly the case .raw exists for. The haystack
-  // and recency arrays are never read by the template at all, so they need no rune.
+  // $state.raw, and a plain let for the search, deliberately. A deep $state proxy puts a trap
+  // on every element read, and rankedSearch reads the haystack, recency and priority arrays
+  // thousands of times per keystroke — in loops and inside sort comparators. Measured at 2.4x
+  // the whole search cost (8.5 ms vs 3.3 ms per keystroke at 1000 tabs). Nothing mutates any
+  // of these in place; they are only ever replaced wholesale, which is exactly the case .raw
+  // exists for. The template never reads tabSearch at all, so it needs no rune.
   let allTabs = $state.raw<SearchResult[]>([]);
-  let searchHaystack: string[] = [];
-  let searchTitleHaystack: string[] = [];
-  let searchRecency: number[] = [];
-  let searchPriority: number[] = [];
+  let tabSearch: TabSearch = createTabSearch([], [], []);
   let highlightQuery = $state("");
 
   interface WindowData {
@@ -270,12 +278,14 @@
     pinnedTabs = pins;
 
     allTabs = tabsToSearchItems(tabs);
-    searchHaystack = buildSearchHaystack(allTabs);
-    searchTitleHaystack = buildTitleHaystack(allTabs);
-    // Active tab sinks to the bottom so empty-query MRU leads with the *previous* tab (Cmd+E → Enter = alt-tab).
-    searchRecency = tabs.map((t) => (t.active && t.windowId === currentWindowId ? 0 : (t.lastAccessed ?? 0)));
-    // Among equally-good search matches, favor tabs you're most likely looking for: pinned, or already in front of you.
-    searchPriority = tabs.map((t) => (t.pinned || t.windowId === currentWindowId ? 1 : 0));
+    tabSearch = createTabSearch(
+      allTabs,
+      // Active tab sinks to the bottom so empty-query MRU leads with the *previous* tab (Cmd+E → Enter = alt-tab).
+      tabs.map((t) => (t.active && t.windowId === currentWindowId ? 0 : (t.lastAccessed ?? 0))),
+      // Among equally-good search matches, favor tabs you're most likely looking for: pinned, or already in front of you.
+      tabs.map((t) => (t.pinned || t.windowId === currentWindowId ? 1 : 0)),
+    );
+    warmWhenIdle(tabSearch);
     dashboardTabs = tabs;
 
     const windowMap = new Map<number, WindowData>();
@@ -308,9 +318,23 @@
     });
   }
 
+  /**
+   * Build the haystacks once the dashboard has painted, so the first keystroke finds them
+   * ready. Building them in loadTabs held the first paint back by 2 ms at 1000 tabs for a
+   * search the dashboard may never run; a key that beats this callback builds them itself.
+   */
+  function warmWhenIdle(search: TabSearch) {
+    requestIdleCallback(() => { if (tabSearch === search) search.warm(); }, { timeout: 1000 });
+  }
+
   async function updateResults() {
     const { prefix, query: searchQuery } = parseCommand(query);
     highlightQuery = prefix ? searchQuery : query;
+    // A lookup for the previous query can only be stale now; the paths below schedule their own.
+    // Its "Searching..." goes with it, or a plain query typed over "/b foo" would keep it.
+    lookup.cancel();
+    loading = false;
+    if (prefixSource && prefixSource.prefix !== prefix) prefixSource = null;
 
     if ((query.startsWith("/") || query.startsWith("@")) && !query.includes(" ")) {
       commandHints = matchCommands(query);
@@ -325,34 +349,77 @@
 
     paletteMode = "search";
 
-    if (prefix) {
+    if (prefix === "b" || prefix === "h") {
+      lookUpSource(prefix, searchQuery);
+    } else if (prefix) {
       handlePrefixSearch(prefix, searchQuery);
     } else {
-      const indices = rankedSearch(searchHaystack, query, 50, searchRecency, searchTitleHaystack, searchPriority);
-      const tabResults = indices.map((i) => allTabs[i]);
-      results = tabResults;
+      results = tabSearch.rank(query);
 
-      clearTimeout(searchTimer);
       if (query.trim().length >= 2) {
         const capturedQuery = query;
-        searchTimer = setTimeout(async () => {
+        lookup.schedule(async () => {
           const [bookmarkResults, historyResults] = await Promise.all([
             searchBookmarks(capturedQuery, 5),
             searchHistory(capturedQuery, 5),
           ]);
           if (query !== capturedQuery) return;
-          const freshIndices = rankedSearch(searchHaystack, capturedQuery, 50, searchRecency, searchTitleHaystack, searchPriority);
-          const freshTabResults = freshIndices.map((i) => allTabs[i]);
+          // The keystroke's own ranking, remembered — unless the tabs reloaded meanwhile, in
+          // which case tabSearch is new and this ranks them afresh.
+          const freshTabResults = tabSearch.rank(capturedQuery);
           results = [
             ...freshTabResults,
             ...(bookmarkResults.length > 0 ? [{ type: "divider" as const, id: "div-bookmarks", title: "Bookmarks", url: "" }, ...bookmarkResults] : []),
             ...(historyResults.length > 0 ? [{ type: "divider" as const, id: "div-history", title: "History", url: "" }, ...historyResults] : []),
           ];
           selectedIndex = firstSelectable();
-        }, 200);
+        });
       }
     }
     selectedIndex = firstSelectable();
+  }
+
+  /**
+   * /b and /h ask the browser process to search every bookmark or the whole history, and did
+   * so for each character typed. They wait for typing to settle now, on the same 200 ms
+   * debounce as the rows under a plain query, showing "Searching..." rather than the previous
+   * query's list meanwhile. Enter flushes the wait (see onkeydown), so "/b react" typed fast
+   * and entered still opens a match.
+   */
+  function lookUpSource(prefix: "b" | "h", searchQuery: string) {
+    if (!searchQuery.trim()) {
+      results = [];
+      return;
+    }
+    const capturedQuery = query;
+    loading = true;
+    lookup.schedule(async () => {
+      try {
+        const found = await (prefix === "b" ? searchBookmarks(searchQuery) : searchHistory(searchQuery));
+        if (query !== capturedQuery) return;
+        results = found;
+        selectedIndex = firstSelectable();
+      } finally {
+        if (query === capturedQuery) loading = false;
+      }
+    });
+  }
+
+  /**
+   * Reading List and recently closed hand back their whole (short) list on every call, so a
+   * keystroke only needs to re-rank what the view opened with. Fetched once per visit to the
+   * prefix, and dropped by updateResults when the query leaves it, so coming back re-reads.
+   */
+  let prefixSource: { prefix: string; rows: Promise<SearchResult[]> } | null = null;
+
+  function sourceOnce(prefix: string, load: () => Promise<SearchResult[]>): Promise<SearchResult[]> {
+    if (prefixSource?.prefix !== prefix) {
+      const rows = load();
+      prefixSource = { prefix, rows };
+      // A failed read must not stick for the rest of the visit.
+      rows.catch(() => { if (prefixSource?.rows === rows) prefixSource = null; });
+    }
+    return prefixSource!.rows;
   }
 
   async function handlePrefixSearch(prefix: string, searchQuery: string) {
@@ -360,49 +427,38 @@
     try {
       // Triage views are table-driven: they only differ by which tabs they select, and the
       // eight hand-copied switch arms this replaces are what let a broken "@shared" hide.
+      //
+      // Every view below ranks through tabSearch.rankView, keyed by the view. Each used to build
+      // a fresh haystack from its rows on every keystroke (719 entries of diacritic stripping
+      // and pinyin for "@u", 2.6 ms a key at 1000 tabs); rankView keeps one until the rows change.
       const view = TRIAGE_BY_PREFIX.get(prefix);
       if (view) {
         const viewTabs = await view.tabs();
-        results = searchQuery
-          ? rankedSearch(buildSearchHaystack(viewTabs), searchQuery).map((i) => viewTabs[i])
-          : viewTabs;
+        results = searchQuery ? tabSearch.rankView(prefix, viewTabs, searchQuery) : viewTabs;
         if (viewTabs.length === 0 && view.empty) flashStatus(view.empty);
         return;
       }
 
       switch (prefix) {
-        case "b": {
-          results = await searchBookmarks(searchQuery);
-          break;
-        }
-        case "h": {
-          results = await searchHistory(searchQuery);
-          break;
-        }
+        // /w and /g read the tabs this popup already loaded. /w used to call
+        // getCurrentWindowTabs() on every keystroke: tabs.query over every tab in every window
+        // plus tabGroups.query and windows.getCurrent, three IPC round-trips to keep a slice of
+        // what allTabs holds. The dashboard, @ views and plain search all work from the same load.
         case "w": {
-          const windowTabs = await getCurrentWindowTabs();
-          const items = tabsToSearchItems(windowTabs);
-          const hay = buildSearchHaystack(items);
-          const indices = rankedSearch(hay, searchQuery);
-          results = indices.map((i) => items[i]);
+          results = tabSearch.rankView("w", allTabs.filter((t) => t.windowId === currentWindowId), searchQuery);
           break;
         }
         case "p": {
-          const pinned = allTabs.filter((t) => t.pinned);
-          const hay = buildSearchHaystack(pinned);
-          const indices = rankedSearch(hay, searchQuery);
-          results = indices.map((i) => pinned[i]);
+          results = tabSearch.rankView("p", allTabs.filter((t) => t.pinned), searchQuery);
           break;
         }
         case "g": {
-          const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+          const activeTab = dashboardTabs.find((t) => t.active && t.windowId === currentWindowId);
           const activeGroupId = activeTab?.groupId ?? -1;
           const groupTabs = activeGroupId !== -1
             ? allTabs.filter((t) => t.groupId === activeGroupId)
             : allTabs.filter((t) => !t.groupId || t.groupId === -1);
-          const hay = buildSearchHaystack(groupTabs);
-          const indices = rankedSearch(hay, searchQuery);
-          results = indices.map((i) => groupTabs[i]);
+          results = tabSearch.rankView("g", groupTabs, searchQuery);
           break;
         }
         case "@": {
@@ -410,9 +466,7 @@
           for (const cat of TRIAGE_OVERVIEW) {
             const catTabs = await cat.overviewTabs!();
             if (catTabs.length === 0) continue;
-            const matched = searchQuery
-              ? rankedSearch(buildSearchHaystack(catTabs), searchQuery).map((i) => catTabs[i])
-              : catTabs;
+            const matched = searchQuery ? tabSearch.rankView(cat.id, catTabs, searchQuery) : catTabs;
             if (matched.length === 0) continue;
             triageResults.push({ type: "divider", id: cat.id, title: `${cat.title} (${matched.length})`, url: "" });
             triageResults.push(...matched);
@@ -425,34 +479,31 @@
         }
         case "rl": {
           if (!isReadingListAvailable()) { results = []; flashStatus("Reading List not available (Chrome 120+)"); break; }
-          const rlItems = await getReadingList();
-          const rlResults: SearchResult[] = rlItems.map((item, i) => ({
+          // Mapped inside the fetch, so every keystroke gets the same row objects and rankView
+          // keeps its haystack.
+          const rlResults = await sourceOnce("rl", async () => (await getReadingList()).map((item, i) => ({
             type: "bookmark" as const, id: `rl-${i}`, title: `${item.hasBeenRead ? "✓ " : ""}${item.title}`, url: item.url,
-          }));
-          if (searchQuery) { const hay = buildSearchHaystack(rlResults); const indices = rankedSearch(hay, searchQuery); results = indices.map((i) => rlResults[i]); }
-          else results = rlResults;
+          })));
+          results = searchQuery ? tabSearch.rankView("rl", rlResults, searchQuery) : rlResults;
           if (rlResults.length === 0) flashStatus("Reading List is empty");
           break;
         }
         case "rc": {
-          const rcItems = await getRecentlyClosed();
-          if (searchQuery) { const hay = buildSearchHaystack(rcItems); const indices = rankedSearch(hay, searchQuery); results = indices.map((i) => rcItems[i]); }
-          else results = rcItems;
+          const rcItems = await sourceOnce("rc", () => getRecentlyClosed());
+          results = searchQuery ? tabSearch.rankView("rc", rcItems, searchQuery) : rcItems;
           if (rcItems.length === 0) flashStatus("No recently closed tabs");
           break;
         }
         case "re": {
-          const indices = search(searchHaystack, searchQuery, "regex", 50, searchRecency);
-          results = indices.map((i) => allTabs[i]);
+          const indices = search(tabSearch.haystack(), searchQuery, "regex", 50, tabSearch.recency);
+          results = indices.map((i) => tabSearch.items[i]);
           break;
         }
         default:
           if (ACTION_PREFIXES.has(prefix)) {
-            const indices = searchQuery ? rankedSearch(searchHaystack, searchQuery, 50, searchRecency, searchTitleHaystack, searchPriority) : [];
-            results = indices.map((i) => allTabs[i]);
+            results = searchQuery ? tabSearch.rank(searchQuery) : [];
           } else {
-            const indices = rankedSearch(searchHaystack, `/${prefix} ${searchQuery}`, 50, searchRecency, searchTitleHaystack, searchPriority);
-            results = indices.map((i) => allTabs[i]);
+            results = tabSearch.rank(`/${prefix} ${searchQuery}`);
           }
       }
     } finally {
@@ -715,9 +766,7 @@
   /** Rank the live tab set against a query, keeping only rows backed by a real tab. */
   function rankTabs(q: string): SearchResult[] {
     if (!q) return [];
-    return rankedSearch(searchHaystack, q, 50, searchRecency, searchTitleHaystack, searchPriority)
-      .map((i) => allTabs[i])
-      .filter((t) => t.tabId);
+    return tabSearch.rank(q).filter((t) => t.tabId);
   }
 
   async function handleActionCommand(prefix: string, searchQuery: string) {
@@ -812,9 +861,8 @@
       // Closing the last row used to leave the selection past the end of the list, so the
       // palette stopped responding to Enter until the query changed.
       selectedIndex = Math.max(0, Math.min(selectedIndex, results.length - 1));
-      allTabs = allTabs.filter((t) => t.id !== item.id);
-      searchHaystack = buildSearchHaystack(allTabs);
-      searchTitleHaystack = buildTitleHaystack(allTabs);
+      tabSearch = tabSearch.without(item.id);
+      allTabs = tabSearch.items;
       dashboardTabs = dashboardTabs.filter((t) => t.id !== item.tabId);
       await loadTabs();
     } catch (e) {
@@ -1041,6 +1089,8 @@
     // Populate the empty-query MRU list. Without this `results` stayed empty until the first
     // keystroke, so Cmd+E → Enter (jump to the previous tab) silently did nothing.
     updateResults();
+    // After the first paint, so the panels' code stays off the path to it (see loadRulesEditor).
+    requestIdleCallback(() => { void loadRulesEditor(); void loadPinsPanel(); void loadSettingsPanel(); }, { timeout: 2000 });
   });
 
   function openArchive() {
@@ -1094,6 +1144,10 @@
             handleActionCommand(prefix, searchQuery);
           } else if (paletteMode === "commands" && commandHints[selectedIndex]) {
             handleCommandSelect(commandHints[selectedIndex]);
+          } else if (prefix === "b" || prefix === "h") {
+            // The list only exists once the debounced lookup has run: without the flush, Enter
+            // inside the 200 ms after typing opened nothing, or the previous query's row.
+            void lookup.flush().then(() => { if (results[selectedIndex]) handleSelect(results[selectedIndex]); });
           } else if (results[selectedIndex]) {
             handleSelect(results[selectedIndex]);
           }
@@ -1122,11 +1176,17 @@
       onhelp={() => { showHelp = !showHelp; activeSection = "dashboard"; }}
     />
   {#if activeSection === "rules"}
-    <RulesEditor onclose={() => { activeSection = "dashboard"; }} />
+    {#await loadRulesEditor() then { default: RulesEditor }}
+      <RulesEditor onclose={() => { activeSection = "dashboard"; }} />
+    {/await}
   {:else if activeSection === "pins"}
-    <PinsPanel />
+    {#await loadPinsPanel() then { default: PinsPanel }}
+      <PinsPanel />
+    {/await}
   {:else if activeSection === "settings"}
-    <SettingsPanel />
+    {#await loadSettingsPanel() then { default: SettingsPanel }}
+      <SettingsPanel />
+    {/await}
   {:else if activeSection === "ai"}
     <div class="flex-1 overflow-y-auto px-3 py-2 min-h-0">
       <div class="text-xs font-semibold text-text mb-2">AI Grouping</div>

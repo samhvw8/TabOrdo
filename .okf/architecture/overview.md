@@ -3,7 +3,7 @@ type: Architecture
 title: Architecture overview
 description: How TabOrdo's MV3 entrypoints, lib modules, command dispatch and storage areas fit together, and which realm owns what.
 tags: [architecture, mv3, storage, realms]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-17T09:52:34Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-17T09:56:23Z }
 sources:
   - id: wxt-config
     resource: https://github.com/samhvw8/TabOrdo/blob/main/wxt.config.ts
@@ -56,7 +56,7 @@ TabOrdo is a Chrome MV3 extension built with WXT, Svelte 5 and TypeScript. Four 
 | Entrypoint | Realm | Role |
 |---|---|---|
 | `entrypoints/background/index.ts` | Service worker | Tab listeners (auto-group, auto-sort, auto-ungroup, switch-to-existing, pin follow, lineage), context menus, the auto-discard alarm, and the `/aigroup` runner.[^background] |
-| `entrypoints/popup/` | Action popup, 450x600 | Mounts `App.svelte`. Chrome tears it down on any focus loss.[^popup-app] |
+| `entrypoints/popup/` | Action popup, 450x600 | Mounts `App.svelte`. Chrome tears it down on any focus loss.[^popup-app] `RulesEditor`, `PinsPanel` and `SettingsPanel` are dynamic imports in their own chunks (75 KB of the 391 KB App chunk), started in `requestIdleCallback` after first paint so a panel opens from a settled promise with no blank frame.[^popup-app] |
 | `entrypoints/sidepanel/` | Side panel | Mounts the **same** `popup/App.svelte` with `fluid: true`.[^sidepanel-main] Declared as `side_panel.default_path` in the manifest.[^wxt-config] |
 | `entrypoints/archive/` | Extension tab page | Browses and restores archived tabs; opened via `chrome.runtime.getURL("/archive.html")`.[^popup-app] |
 
