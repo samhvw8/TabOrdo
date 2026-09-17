@@ -260,12 +260,43 @@ function mutate(
   return queue;
 }
 
+// Ctrl-clicking twenty links fires twenty onCreated events back to back, and each used to be a
+// read-modify-write of the whole map: 40 storage calls, the map read and rewritten twenty times,
+// and twenty storage.onChanged fan-outs to every open realm. Records now drain the way forgetTab
+// drains closes (below): the first queued task writes every link registered by the time it runs,
+// and the rest find nothing pending and return before paying for a read.
+//
+// Records and closes drain in separate batches, so a batch can run ahead of a call of the other
+// kind made before it. Only a tab that closes while its creation is still queued is affected:
+// the map can keep a link for a tab already gone, which resolveParents ignores. The other
+// reordering, a close drained after a record naming the closed tab as opener, needs Chrome to
+// report a tab's creation after its opener closed, and it does not.
+const pendingOpeners = new Map<number, number>();
+
 /** `openerTabId` may be EXPLICIT_ROOT — see lineageOpener. */
 export function recordOpener(tabId: number, openerTabId: number): Promise<void> {
-  return mutate((parents) =>
-    tabId === openerTabId || parents[tabId] === openerTabId
-      ? null
-      : { ...parents, [tabId]: openerTabId }
+  pendingOpeners.set(tabId, openerTabId);
+  let batch: [number, number][] = [];
+  return mutate(
+    (parents) => {
+      batch = [...pendingOpeners];
+      pendingOpeners.clear();
+      let next: ParentMap | null = null;
+      for (const [child, opener] of batch) {
+        if (child === opener || (next ?? parents)[child] === opener) continue;
+        next ??= { ...parents };
+        next[child] = opener;
+      }
+      return next;
+    },
+    {
+      stillNeeded: () => pendingOpeners.size > 0,
+      // As in forgetTab: a failed write must not drop the batch it drained, so it goes back for
+      // the next record to retry — behind any newer record for the same tab, which wins.
+      onFailed: () => {
+        for (const [child, opener] of batch) if (!pendingOpeners.has(child)) pendingOpeners.set(child, opener);
+      },
+    }
   );
 }
 

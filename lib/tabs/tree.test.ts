@@ -236,6 +236,33 @@ describe("recordOpener / forgetTab", () => {
     expect(await readParents()).toEqual({});
   });
 
+  // Ctrl-clicking twenty links used to cost twenty reads and twenty writes of the whole map.
+  it("records a burst of links with one read and one write", async () => {
+    stub.sessionData.tabParents = { 2: 1 };
+    stub.storageReads.length = 0;
+    let writes = 0;
+    chrome.storage.onChanged.addListener((c, area) => {
+      if (area === "session" && "tabParents" in (c as Record<string, unknown>)) writes++;
+    });
+
+    await Promise.all([...Array(20)].map((_, i) => recordOpener(i + 10, 1)));
+    await new Promise((r) => setTimeout(r, 0)); // the stub delivers onChanged on a microtask
+
+    expect(stub.storageReads.filter((r) => r.keys.includes("tabParents"))).toHaveLength(1);
+    expect(writes).toBe(1);
+    expect(await readParents()).toEqual({ 2: 1, ...Object.fromEntries([...Array(20)].map((_, i) => [i + 10, 1])) });
+  });
+
+  it("re-records a batch whose write failed once a later link comes through", async () => {
+    stub.failWrites = true;
+    await Promise.all([recordOpener(2, 1), recordOpener(3, 2)]);
+    expect(await readParents()).toEqual({});
+
+    stub.failWrites = false;
+    await recordOpener(4, 3);
+    expect(await readParents()).toEqual({ 2: 1, 3: 2, 4: 3 });
+  });
+
   it("splices a closed tab out of the map", async () => {
     stub.sessionData.tabParents = { ...HN_PARENTS };
     await forgetTab(3);
