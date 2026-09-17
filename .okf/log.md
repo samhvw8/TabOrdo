@@ -1,6 +1,9 @@
 # Update Log
 
 ## 2026-09-17
+* **Update**: Performance pass. Auto-sort skips an already sorted window and places locked groups directly; lock lists are cached; lineage records are batched — [background automation](/features/background-automation.md), [sort priority](/features/sort-priority.md), [position locks](/features/position-locks.md), [branch lineage](/features/branch-lineage.md), [Chrome stub](/testing/chrome-stub.md).
+* **Update**: Undo entries are stored under one key each, and group undo leaves intact groups alone — [undo stack](/architecture/undo-stack.md), [overview](/architecture/overview.md).
+* **Update**: Search skips fuzzy matching for one-letter and accented needles, builds haystacks after first paint, and prefix views stop querying Chrome per keystroke — [search](/features/search.md), [command palette](/features/command-palette.md).
 * **Update**: Domain groups are named without the public suffix, and auto-group no longer makes a group of one tab when joining a group fails — [background automation](/features/background-automation.md), [grouping rules](/features/grouping-rules.md).
 * **Creation**: The Chrome Web Store dashboard steps that blocked three releases, with privacy practices answers and the screenshot recipe — [store listing](/processes/chrome-web-store-listing.md).
 * **Update**: Replaced the release page's point-in-time state with what to do when the store publish fails — [release](/processes/release.md).
