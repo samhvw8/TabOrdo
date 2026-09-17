@@ -4,7 +4,7 @@ title: Undo stack
 description: lib/undo.ts keeps a 20-entry close/group undo stack in chrome.storage.session, one key per entry plus a metadata key, with durable pushes shared across the popup, side panel and background realms.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/undo.ts
 tags: [undo, storage, realms, performance]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-17T09:52:34Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-17T09:58:53Z }
 sources:
   - id: undo-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/undo.ts
@@ -98,9 +98,35 @@ The optional fields exist because entries persisted by older versions lack them,
 
 # executeUndo: group
 
-1. Ungroup only current tabs the snapshot covers. Groups the user built after the snapshot are left alone.[^undo-ts][^undo-test]
-2. Move tabs back to their snapshotted window and index, sorted by index, when that window still exists. `/aigroup` moves tabs across windows, and `chrome.tabs.group` rejects ids that span windows, so this has to happen first. Legacy entries without `windowId` are not relocated.[^undo-ts][^undo-test]
-3. Rebuild groups bucketed by window + title + colour. Same-titled groups in one window merge. Same-titled groups in different windows stay apart. One group Chrome refuses does not abort the rest, and the status reports `N group(s) could not be rebuilt`.[^undo-ts][^undo-test]
+1. Find **intact** groups (`findIntactGroups`): the live group with the snapshot's id holds exactly the snapshot's still-open members, in the same order, in the snapshot's window, in one contiguous block. Intact groups are never ungrouped or rebuilt, so they keep their id and collapsed state. A tab that joined the group since makes it not intact.[^undo-ts][^undo-test]
+2. Ungroup the covered tabs that sit in any group that is not intact. Groups the user built after the snapshot, holding no covered tab, are left alone. If anything was ungrouped, query the tabs again, because Chrome moves an ungrouped tab to the edge of its old group.[^undo-ts][^undo-test]
+3. Restore order per window (`restoreOrder`), for tabs whose snapshotted window still exists and that are not pinned now. Legacy entries without `windowId` are not relocated. `/aigroup` moves tabs across windows, and `chrome.tabs.group` rejects ids that span windows, so this has to happen before regrouping.[^undo-ts][^undo-test]
+4. Rebuild the groups that are not intact, bucketed by window + title + colour. Same-titled groups in one window merge. Same-titled groups in different windows stay apart. One group Chrome refuses does not abort the rest, and the status reports `N group(s) could not be rebuilt`.[^undo-ts][^undo-test]
+5. Restore the title and colour of an intact group that was only renamed, with one `tabGroups.update`.[^undo-ts][^undo-test]
+
+## Order restore
+
+Each window's target is a list of pieces in snapshot order: a single tab, or an intact group of two or more. Two plans run against an in-memory model of every window's strip, and the one with fewer calls wins. A tie goes to the plan that moves fewer tabs.[^undo-ts]
+
+| Plan | How | Good at |
+|---|---|---|
+| From the front | Walk the pieces with a cursor and pull each one to it unless it is already there. Every move is leftward or from another window, so consecutive tabs batch into one `tabs.move`. A tab already in place mid-batch rides along, because Chrome skips a tab already at its index. | A `/shuffle`: one call per window |
+| Around the longest run | Keep the longest run already in snapshot order where it is (longest increasing subsequence). Put every other piece right after its snapshot predecessor. | A few tabs pulled out of place, such as a `/group`: a handful of calls, however long the strip |
+
+What a plan may ask of Chrome follows Chromium's source, not the stub:[^undo-ts]
+
+- `tabs.move` places an id list one after another (`TabsMoveFunction::MoveTab`): each tab goes to `index`, then `index + 1`. That is exact only when every tab arrives from the right or from another window. A rightward move therefore goes alone in its own call.
+- A tab moved away from the rest of its group leaves it, and a tab dropped between two tabs of one group joins it (`TabStripModel::GetGroupToAssign`). Intact groups of two or more move whole with `tabGroups.move`, whose index is the first tab's position after the move in either direction. Every tab lands right after a tab the snapshot put before it, which is never inside a group. A one-tab group keeps its group wherever it lands, so it moves as a tab.
+- If a move call fails, the rest of that window is skipped, and the next window is planned against a fresh `tabs.query`.
+
+Measured on the chrome stub at 1000 tabs, counting chrome calls, with wall time at 2 ms injected per call:
+
+| Undo of | Before | After |
+|---|---|---|
+| `/shuffle`, one window | 1129 calls (988 `tabs.move`), 3.5 s | 144 calls (1 `tabs.move`), 0.36 s |
+| `/group` of ≤50 tabs in window 1 of 7 | 272 calls (129 `tabs.move`, 69 groups rebuilt), 0.93 s | 31 calls (3 `tabs.move`, 2 `tabGroups.move`, 9 groups rebuilt), 0.08 s |
+
+What remains after a shuffle is regrouping: a group whose tabs a shuffle scattered is rebuilt, at two calls per group.
 
 # Gotchas
 
@@ -113,7 +139,7 @@ The optional fields exist because entries persisted by older versions lack them,
 
 # Tests that guard it
 
-`lib/undo.test.ts` covers the cap, the per-entry layout, cross-realm pickup through a second module instance (`vi.resetModules`), two realms pushing onto a nearly full stack at once, a pop the other realm already took, storage cost (a push and a load read no payload, a pop reads only the top one), the `getKeys` fallback, legacy migration, push durability, overlapping pushes, close restore (window, index, group rejoin and rebuild, still-open skip, legacy entries) and group restore (scoping, relocation, window-separated buckets, partial failure).[^undo-test] `lib/tabs/close.test.ts` covers undo after a refused close.
+`lib/undo.test.ts` covers the cap, the per-entry layout, cross-realm pickup through a second module instance (`vi.resetModules`), two realms pushing onto a nearly full stack at once, a pop the other realm already took, storage cost (a push and a load read no payload, a pop reads only the top one), the `getKeys` fallback, legacy migration, push durability, overlapping pushes, close restore (window, index, group rejoin and rebuild, still-open skip, legacy entries) and group restore (scoping, relocation, window-separated buckets, partial failure). The order-restore tests cover a shuffle undone in at most one move per window with a tab opened since kept, a `/group` whose untouched groups get no ungroup, group or update call, an untouched group moved whole with `tabGroups.move`, a rename-only group restored without a rebuild, and tabs sent back rightward one call each around groups left in place.[^undo-test] `lib/tabs/close.test.ts` covers undo after a refused close.
 
 # Related
 

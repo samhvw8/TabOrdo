@@ -4,7 +4,7 @@ title: Chrome API stub
 description: lib/testing/chrome-stub.ts is the repo's executable model of Chrome tab, group, window and storage semantics for vitest, with failure-injection knobs; its fidelity decides what the tests can prove.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/testing/chrome-stub.ts
 tags: [testing, vitest, chrome-api]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-17T00:16:05Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-17T09:58:53Z }
 sources:
   - id: stub
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/testing/chrome-stub.ts
@@ -17,6 +17,10 @@ sources:
   - id: undo-test
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/undo.test.ts
     title: lib/undo.test.ts
+    last_modified: 2026-09-17
+  - id: undo-ts
+    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/undo.ts
+    title: lib/undo.ts
     last_modified: 2026-09-17
   - id: rules-cache-test
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/rules-cache.test.ts
@@ -50,6 +54,7 @@ sources:
 |---|---|
 | `tabs.query` | Filters by `windowId`, `groupId`, `currentWindow`/`lastFocusedWindow` (both mean `currentWindowId`), `active` and `pinned`. Ignoring `active` once made every "active tab" query return the first tab, so close/unite/isolate tests asserted nothing.[^stub] |
 | `tabs.move` | Moves ids in the order given. A tab crossing windows **loses its group**. **Reflows** indices so each window stays `0..n-1`. Modelling only the group drop had left ordering assertions vacuous: reversing or deleting the sort in `carryGroups` still passed all 9 merge tests.[^stub] |
+| `tabGroups.move` | Same window only. As Chromium's `TabGroupsMoveFunction::MoveGroup`: `index` is where the group's first tab lands once the group is lifted out, in either direction, and the group keeps its id. Recorded in `groupMoves`.[^stub] |
 | `tabs.group` | **Rejects ids that span windows** ("Tabs can only be grouped in the same window."). Creates the group in `groups` when no `groupId` is given, and pulls members contiguous.[^stub][^commit-3431468] |
 | `tabs.remove` | As Chromium's `TabsRemoveFunction`: removes ids **in order and rejects at the first failure**, so earlier ids are gone. An id not in `openTabs` rejects with `No tab with id: N.` An id in `failRemoveIds` rejects with "Tabs cannot be edited right now…".[^stub] |
 | `tabs.update` | Applies `pinned`, `url`, `highlighted`, `muted` and `active`, and records each call in `tabUpdates`.[^stub] |
@@ -66,7 +71,7 @@ sources:
 | `failCreateUrls` | `tabs.create` rejects for those URLs.[^stub] |
 | `failScriptingIds` | `scripting.executeScript` rejects, as it does without host permissions.[^stub] |
 
-Recorders: `created`, `removedIds`, `ungroupedIds`, `discardedIds`, `reloadedIds`, `scriptedIds`, `moves`, `groupUpdates`, `tabUpdates`, `storageReads`, `changeListeners`.[^stub]
+Recorders: `created`, `removedIds`, `ungroupedIds`, `discardedIds`, `reloadedIds`, `scriptedIds`, `moves`, `groupMoves`, `groupUpdates`, `tabUpdates`, `storageReads`, `changeListeners`.[^stub]
 
 # The 0.7.2 lesson
 
@@ -84,6 +89,7 @@ Recorders: `created`, `removedIds`, `ungroupedIds`, `discardedIds`, `reloadedIds
 
 - `tabs.create` ignores `windowId` and `index`: new tabs land in window 1 with no index. Assert on `created` instead.[^stub]
 - `tabs.remove` neither reindexes the remaining tabs nor drops an emptied group. Undo tests clear `groups` by hand.[^stub][^undo-test]
+- `tabs.move` of several ids removes them all and inserts them at `index`. Chromium places them one after another (`TabsMoveFunction::MoveTab`), which gives a different strip when a tab travels rightward. The stub also never applies `TabStripModel::GetGroupToAssign`: in Chrome a tab moved away from its group leaves it, and a tab dropped between two tabs of one group joins it. `tabs.ungroup` does not move the tab out to the group's edge the way Chrome does. `executeUndo`'s order restore only issues moves where both models agree.[^stub][^undo-ts]
 - No `tabs.get`, `tabGroups.get`, tab events, `runtime`, `alarms` or `contextMenus`. The background service worker, the main user of these, has no tests.[^stub]
 - `tabGroups.update` never rejects (for example on Chrome's saved groups), and `discard`/`reload` only record.[^stub]
 
@@ -101,6 +107,7 @@ Add fidelity when a test can pass for the wrong reason, and write the comment th
 [^stub]: lib/testing/chrome-stub.ts
 [^vitest-config]: vitest.config.ts
 [^undo-test]: lib/undo.test.ts
+[^undo-ts]: lib/undo.ts
 [^rules-cache-test]: lib/rules-cache.test.ts
 [^workspace-test]: lib/workspace.test.ts
 [^commit-3431468]: Commit 3431468

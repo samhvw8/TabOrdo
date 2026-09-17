@@ -39,6 +39,7 @@ export interface ChromeStub {
   /** Tabs setTabVolume successfully injected into. */
   scriptedIds: number[];
   moves: { ids: number[]; windowId?: number; index?: number }[];
+  groupMoves: { groupId: number; index: number }[];
   groupUpdates: { id: number; title?: string; color?: string; collapsed?: boolean }[];
   tabUpdates: { id: number; pinned?: boolean; url?: string; highlighted?: boolean; muted?: boolean; active?: boolean }[];
   failCreateUrls: Set<string>;
@@ -105,6 +106,7 @@ export function installChromeStub(): ChromeStub {
     reloadedIds: [],
     scriptedIds: [],
     moves: [],
+    groupMoves: [],
     groupUpdates: [],
     tabUpdates: [],
     failCreateUrls: new Set(),
@@ -306,6 +308,19 @@ export function installChromeStub(): ChromeStub {
     tabGroups: {
       query: async (q: { windowId?: number } = {}) =>
         stub.groups.filter((g) => q.windowId === undefined || g.windowId === q.windowId),
+      // Same window only. As Chromium's TabGroupsMoveFunction::MoveGroup: `index` is where the
+      // group's first tab ends up once the group is lifted out, whichever way it moves, and the
+      // group keeps its id — unlike moving its tabs one by one with tabs.move, which ungroups a
+      // tab that lands away from the rest of its group (TabStripModel::GetGroupToAssign).
+      move: async (groupId: number, props: { index: number }) => {
+        stub.groupMoves.push({ groupId, index: props.index });
+        const members = stub.openTabs
+          .filter((t) => t.groupId === groupId)
+          .sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+        if (members.length === 0) throw new Error(`No group with id: ${groupId}.`);
+        reflow(stub, members[0].windowId, members, props.index);
+        return stub.groups.find((g) => g.id === groupId);
+      },
       update: async (id: number, props: { title?: string; color?: string; collapsed?: boolean }) => {
         stub.groupUpdates.push({ id, ...props });
         const g = stub.groups.find((x) => x.id === id);

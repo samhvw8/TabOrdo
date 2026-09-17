@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { installChromeStub, type ChromeStub } from "./testing/chrome-stub.ts";
 import { pushUndo, peekUndo, peekUndoEntry, popUndo, undoStackSize, loadUndoStack, touchesUndoStack, snapshotBeforeClose, snapshotBeforeGroup, executeUndo } from "./undo.ts";
+import { shuffleTabs } from "./tabs/order.ts";
 
 let stub: ChromeStub;
 
@@ -485,5 +486,158 @@ describe("executeUndo — group", () => {
 
     await executeUndo();
     expect(stub.moves).toEqual([]);
+  });
+});
+
+describe("executeUndo — group, restoring order and untouched groups", () => {
+  const strip = (windowId: number) =>
+    stub.openTabs.filter((t) => t.windowId === windowId).sort((a, b) => a.index! - b.index!).map((t) => t.id);
+  const titleOf = (tabId: number) => {
+    const t = stub.openTabs.find((x) => x.id === tabId)!;
+    return t.groupId === -1 ? null : stub.groups.find((g) => g.id === t.groupId)?.title;
+  };
+  /** Record every tabs.group call's ids, which the stub doesn't. */
+  const recordGroupCalls = () => {
+    const calls: number[][] = [];
+    const real = chrome.tabs.group;
+    (chrome.tabs as unknown as { group: unknown }).group = async (opts: { tabIds: number[] }) => {
+      calls.push([...opts.tabIds]);
+      return real(opts as never);
+    };
+    return calls;
+  };
+
+  // One call per displaced tab: undoing a /shuffle at 1000 tabs was 971 awaited moves.
+  it("undoes a shuffle in one move per window, keeping a tab opened since", async () => {
+    stub.windows = [{ id: 1 }, { id: 2 }];
+    stub.openTabs = [{ id: 1, url: "https://pin.com", pinned: true, windowId: 1, groupId: -1, index: 0 }];
+    stub.groups = [];
+    for (let i = 0; i < 60; i++) {
+      // Blocks of five: every other block is a group titled after its first tab.
+      const block = Math.floor(i / 5);
+      const groupId = block % 2 === 0 ? 100 + block : -1;
+      if (groupId !== -1 && i % 5 === 0) stub.groups.push({ id: groupId, title: `g${block}`, color: "blue", windowId: 1 });
+      stub.openTabs.push({ id: 10 + i, url: `https://s${i}.com`, pinned: false, windowId: 1, groupId, index: i + 1 });
+    }
+    stub.openTabs.push({ id: 200, url: "https://w2.com", pinned: false, windowId: 2, groupId: -1, index: 0 });
+    const before = strip(1);
+    const titlesBefore = before.map(titleOf);
+
+    await snapshotBeforeGroup();
+    stub.openTabs.push({ id: 99, url: "https://later.com", pinned: false, windowId: 1, groupId: -1, index: 61 });
+    let seed = 7;
+    const random = vi.spyOn(Math, "random").mockImplementation(() => ((seed = (seed * 16807) % 2147483647) / 2147483647));
+    try {
+      await shuffleTabs();
+    } finally {
+      random.mockRestore();
+    }
+    expect(strip(1)).not.toEqual([...before, 99]);
+    stub.moves = [];
+
+    expect(await executeUndo()).toBe("Restored previous group state");
+    expect(stub.moves.length + stub.groupMoves.length).toBeLessThanOrEqual(stub.windows.length);
+    expect(strip(1).filter((id) => id !== 99)).toEqual(before);
+    expect(strip(1)).toHaveLength(before.length + 1);
+    expect(strip(1).filter((id) => id !== 99).map(titleOf)).toEqual(titlesBefore);
+    expect(strip(2)).toEqual([200]);
+  });
+
+  // It dissolved and rebuilt every group the snapshot named — after a /group that took tabs
+  // from 8 of 63 groups it rebuilt all 63, costing each its id and collapsed state.
+  it("leaves the groups a /group didn't touch alone, and puts the moved tabs back", async () => {
+    stub.openTabs = [
+      { id: 1, url: "https://a.com", pinned: false, windowId: 1, groupId: 10, index: 0 },
+      { id: 2, url: "https://b.com", pinned: false, windowId: 1, groupId: 10, index: 1 },
+      { id: 3, url: "https://c.com", pinned: false, windowId: 1, groupId: 20, index: 2 },
+      { id: 4, url: "https://d.com", pinned: false, windowId: 1, groupId: 20, index: 3 },
+      { id: 5, url: "https://e.com", pinned: false, windowId: 1, groupId: 30, index: 4 },
+      { id: 6, url: "https://f.com", pinned: false, windowId: 1, groupId: 30, index: 5 },
+      { id: 7, url: "https://g.com", pinned: false, windowId: 1, groupId: -1, index: 6 },
+      { id: 8, url: "https://h.com", pinned: false, windowId: 1, groupId: -1, index: 7 },
+      { id: 9, url: "https://i.com", pinned: false, windowId: 1, groupId: -1, index: 8 },
+    ];
+    stub.groups = [
+      { id: 10, title: "One", color: "blue", windowId: 1 },
+      { id: 20, title: "Two", color: "red", windowId: 1, collapsed: true },
+      { id: 30, title: "Three", color: "green", windowId: 1, collapsed: true },
+    ];
+    await snapshotBeforeGroup();
+    // What /group does: pull the matches into a new group beside the first of them.
+    const work = await chrome.tabs.group({ tabIds: [2, 8] });
+    await chrome.tabGroups.update(work, { title: "Work" });
+    expect(strip(1)).toEqual([1, 2, 8, 3, 4, 5, 6, 7, 9]);
+    stub.groupUpdates = [];
+    const groupCalls = recordGroupCalls();
+
+    await executeUndo();
+    expect(strip(1)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(stub.ungroupedIds.sort()).toEqual([1, 2, 8]);
+    expect(groupCalls).toEqual([[1, 2]]);
+    expect(stub.groupUpdates.map((u) => u.title)).toEqual(["One"]);
+    for (const id of [3, 4]) expect(stub.openTabs.find((t) => t.id === id)!.groupId).toBe(20);
+    for (const id of [5, 6]) expect(stub.openTabs.find((t) => t.id === id)!.groupId).toBe(30);
+    expect(stub.moves.length + stub.groupMoves.length).toBe(1);
+  });
+
+  it("moves an untouched group as a whole instead of rebuilding it", async () => {
+    stub.openTabs = [
+      { id: 1, url: "https://a.com", pinned: false, windowId: 1, groupId: 10, index: 0 },
+      { id: 2, url: "https://b.com", pinned: false, windowId: 1, groupId: 10, index: 1 },
+      { id: 3, url: "https://c.com", pinned: false, windowId: 1, groupId: -1, index: 2 },
+      { id: 4, url: "https://d.com", pinned: false, windowId: 1, groupId: -1, index: 3 },
+    ];
+    stub.groups = [{ id: 10, title: "Kept", color: "blue", windowId: 1, collapsed: true }];
+    await snapshotBeforeGroup();
+    await chrome.tabs.move([3, 4], { index: 0 });
+    stub.moves = [];
+    const groupCalls = recordGroupCalls();
+
+    await executeUndo();
+    expect(strip(1)).toEqual([1, 2, 3, 4]);
+    expect(stub.groupMoves).toEqual([{ groupId: 10, index: 0 }]);
+    expect(stub.moves).toEqual([]);
+    expect(stub.ungroupedIds).toEqual([]);
+    expect(groupCalls).toEqual([]);
+    expect(stub.groups).toEqual([{ id: 10, title: "Kept", color: "blue", windowId: 1, collapsed: true }]);
+  });
+
+  // Rebuilding every group restored its name as a side effect; a group left standing has to
+  // get its name back on its own.
+  it("restores the name of a group that was only renamed, without rebuilding it", async () => {
+    stub.openTabs = [
+      { id: 1, url: "https://a.com", pinned: false, windowId: 1, groupId: 10, index: 0 },
+      { id: 2, url: "https://b.com", pinned: false, windowId: 1, groupId: 10, index: 1 },
+    ];
+    stub.groups = [{ id: 10, title: "Morning read", color: "pink", windowId: 1 }];
+    await snapshotBeforeGroup();
+    await chrome.tabGroups.update(10, { title: "Evening read" });
+    stub.groupUpdates = [];
+
+    await executeUndo();
+    expect(stub.groupUpdates).toEqual([{ id: 10, title: "Morning read", color: "pink" }]);
+    expect(stub.ungroupedIds).toEqual([]);
+    expect(stub.moves).toEqual([]);
+  });
+
+  // Pulling each group to the front would take a call per group. Leaving the groups where they
+  // are means moving the two tabs rightward — which Chrome's "one after another" batch gets
+  // wrong, since each lifted tab shifts the ones before its slot — so they go one call each and
+  // still have to land exactly.
+  it("sends tabs pulled to the front back rightward, one call each, around groups left in place", async () => {
+    const tab = (id: number, index: number, groupId = -1) =>
+      ({ id, url: `https://s${id}.com`, pinned: false, windowId: 1, groupId, index });
+    stub.openTabs = [tab(1, 0, 10), tab(2, 1, 10), tab(3, 2), tab(4, 3, 20), tab(5, 4, 20), tab(6, 5), tab(7, 6, 30), tab(8, 7, 30), tab(9, 8)];
+    stub.groups = [10, 20, 30].map((id) => ({ id, title: `g${id}`, color: "blue", windowId: 1 }));
+    await snapshotBeforeGroup();
+    await chrome.tabs.move([3, 6], { index: 0 });
+    expect(strip(1)).toEqual([3, 6, 1, 2, 4, 5, 7, 8, 9]);
+    stub.moves = [];
+
+    await executeUndo();
+    expect(strip(1)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(stub.moves.map((mv) => mv.ids)).toEqual([[3], [6]]);
+    expect(stub.groupMoves).toEqual([]);
+    expect(stub.ungroupedIds).toEqual([]);
   });
 });
