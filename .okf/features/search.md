@@ -4,7 +4,7 @@ title: Ranked search
 description: How lib/search.ts ranks tabs for the palette (literal tiers before approximate ones, title over URL, pinned and current-window then recency), plus regex, pinyin, Vietnamese, the non-tab sources, and the caching that keeps typing fast.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/search.ts
 tags: [search, palette, performance, i18n]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-17T09:45:05Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-17T09:47:05Z }
 sources:
   - id: search-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/search.ts
@@ -118,7 +118,7 @@ Group titles sit in both haystacks, so a group-name hit ranks as a title hit, an
 | Recently closed (`/rc`, `/recent`) | `sessions.getRecentlyClosed` (25), window sessions flattened | `rankedSearch`[^sessions-ts][^popup-app] |
 | `/w`, `/p`, `/g` | Current window, Chrome-pinned, active group (or ungrouped) | `rankedSearch`, no recency or priority[^popup-app] |
 
-The debounced merge drops its result if the query changed meanwhile, and re-ranks tabs itself.[^popup-app]
+The debounced merge drops its result if the query changed meanwhile, and takes the tab rows from `tabSearch.rank`, which remembers its last query: re-ranking there cost 1.1 to 1.6 ms at 1000 tabs to rebuild a list already on screen. A reload creates a new `TabSearch`, so the remembered rows never outlive their tabs.[^popup-app][^tabsearch-ts]
 
 # Performance decisions
 
@@ -142,7 +142,7 @@ The debounced merge drops its result if the query changed meanwhile, and re-rank
 | File | Guards |
 |------|--------|
 | `lib/search.test.ts` | Tier order, title over URL, priority boost, abbreviations, reserved approximate budget, accented and one-letter needles, `parseCommand`, regex ReDoS guard[^search-test] |
-| `lib/tabsearch.test.ts` | Lazy build ranks exactly as eager haystacks; empty query builds nothing; `without` keeps arrays aligned[^tabsearch-test] |
+| `lib/tabsearch.test.ts` | Lazy build ranks exactly as eager haystacks; empty query builds nothing; last query remembered; `without` keeps arrays aligned[^tabsearch-test] |
 | `lib/pinyin.test.ts` | Pinyin variants, CJK queries, Vietnamese with and without diacritics[^pinyin-test] |
 | `lib/highlight.test.ts` | `matchRanges` and `highlightSegments`[^highlight-test] |
 

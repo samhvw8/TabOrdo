@@ -348,6 +348,8 @@
             searchHistory(capturedQuery, 5),
           ]);
           if (query !== capturedQuery) return;
+          // The keystroke's own ranking, remembered — unless the tabs reloaded meanwhile, in
+          // which case tabSearch is new and this ranks them afresh.
           const freshTabResults = tabSearch.rank(capturedQuery);
           results = [
             ...freshTabResults,

@@ -50,6 +50,17 @@ describe("createTabSearch", () => {
     expect(s.haystack()).toEqual(buildSearchHaystack(rows));
   });
 
+  it("hands back the last ranking when asked for the same query again", () => {
+    const s = createTabSearch(rows, recency, priority);
+    const first = s.rank("git");
+    expect(s.rank("git")).toBe(first);
+    const other = s.rank("docs");
+    expect(other).toEqual(eager("docs"));
+    expect(s.rank("git")).not.toBe(first);
+    expect(s.rank("git")).toEqual(first);
+    expect(s.rank("git", 1)).toEqual(eager("git").slice(0, 1));
+  });
+
   it("drops a row and keeps recency and priority aligned with the rows left", () => {
     const s = createTabSearch(rows, recency, priority);
     s.warm();
