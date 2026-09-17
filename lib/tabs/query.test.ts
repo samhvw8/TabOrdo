@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { installChromeStub, type ChromeStub } from "../testing/chrome-stub.ts";
-import { getAllTabs, getCurrentWindowTabs, getAllGroups, switchToTab, closeTabs } from "./query.ts";
+import { getAllTabs, getCurrentWindowTabs, getAllGroups, switchToTab } from "./query.ts";
 
 let stub: ChromeStub;
 
@@ -82,34 +82,5 @@ describe("switchToTab", () => {
 
   it("does not throw on a tab that has already gone", async () => {
     await expect(switchToTab(999)).resolves.toBeUndefined();
-  });
-});
-
-describe("closeTabs", () => {
-  it("removes exactly the ids it was given", async () => {
-    await closeTabs([1, 3]);
-    expect(stub.removedIds).toEqual([1, 3]);
-    expect(stub.openTabs.map((t) => t.id)).toEqual([2]);
-  });
-
-  it("is a no-op for an empty list", async () => {
-    await closeTabs([]);
-    expect(stub.openTabs).toHaveLength(3);
-  });
-
-  // chrome.tabs.remove(array) rejects the whole call on the first id that has already gone,
-  // so one stale entry in the popup's list used to leave every other matched tab open.
-  it("closes the live tabs even when one id is already gone", async () => {
-    const realRemove = chrome.tabs.remove;
-    (chrome.tabs as unknown as { remove: (ids: number | number[]) => Promise<void> }).remove =
-      async (ids) => {
-        const arr = Array.isArray(ids) ? ids : [ids];
-        if (arr.includes(999)) throw new Error("No tab with id: 999");
-        return realRemove(ids as number[]);
-      };
-
-    await expect(closeTabs([1, 999, 3])).resolves.toBe(2);
-    expect(stub.removedIds).toEqual([1, 3]);
-    expect(stub.openTabs.map((t) => t.id)).toEqual([2]);
   });
 });

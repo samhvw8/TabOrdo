@@ -1,12 +1,62 @@
-// Bulk closing and unloading. Every path here snapshots for undo first.
+// Closing and unloading. closeTabs is the only place in the extension that removes a tab.
 
 import { getDomainMapper } from "../url.ts";
-import { snapshotClosedTabs } from "../undo.ts";
+import { snapshotBeforeClose } from "../undo.ts";
 
 export async function discardTabs(tabIds: number[]): Promise<void> {
   for (const id of tabIds) {
     await chrome.tabs.discard(id).catch(() => {});
   }
+}
+
+/** Chrome's rejection for an id it no longer knows. The tab is gone, which is what was asked. */
+function isAlreadyGone(reason: unknown): boolean {
+  return reason instanceof Error && reason.message.startsWith("No tab with id");
+}
+
+/**
+ * The one caller of chrome.tabs.remove — close.test.ts fails the build if a second appears.
+ * Five closers each used to snapshot, remove and count on their own, and every release fixed
+ * whichever of the three had drifted at whichever site; a dashboard button that closed with
+ * no snapshot at all is the version of that which reaches the user. Owning all three here is
+ * the only shape a new call site can't get wrong.
+ *
+ * Order matters: the snapshot is pushed, durably, before anything is removed (pushUndo's
+ * contract — a write it cannot make throws, and then nothing closes, for one tab or fifty).
+ * Removal is per id, not one remove(array): Chrome walks an array in order and stops at the
+ * first id it can't resolve, so a single stale entry used to leave everything after it open.
+ *
+ * Rejections come in two kinds and are kept apart. "No tab with id" means the tab went
+ * between the caller's scan and this call; the intent is satisfied and it counts as closed.
+ * Anything else — a tab mid-drag, a held beforeunload prompt — means the tab is still there,
+ * and is thrown once the rest of the batch has been attempted, so one refused tab neither
+ * hides behind "Closed 4" nor keeps the other three open. Undo copes with the entry naming a
+ * tab that is still open: executeUndo restores only what is actually gone.
+ *
+ * Resolves to the number of ids that are no longer open.
+ *
+ * `snapshot: false` is for a close that has its own recovery — focus mode's workspace stack,
+ * the switch-to-existing bounce whose tab is a second old — where a Ctrl+Z entry would either
+ * double-restore or evict something the user wanted from the 20-slot stack.
+ */
+export async function closeTabs(
+  tabIds: number[],
+  opts: { snapshot?: boolean } = {}
+): Promise<number> {
+  if (tabIds.length === 0) return 0;
+  if (opts.snapshot !== false) await snapshotBeforeClose(tabIds);
+  const results = await Promise.allSettled(tabIds.map((id) => chrome.tabs.remove(id)));
+  let gone = 0;
+  const refused: unknown[] = [];
+  for (const r of results) {
+    if (r.status === "fulfilled" || isAlreadyGone(r.reason)) gone++;
+    else refused.push(r.reason);
+  }
+  if (refused.length > 0) {
+    const why = refused[0] instanceof Error ? refused[0].message : String(refused[0]);
+    throw new Error(`${refused.length} tab(s) could not be closed: ${why}`);
+  }
+  return gone;
 }
 
 async function closeTabsRelativeTo(direction: "left" | "right"): Promise<number> {
@@ -16,11 +66,7 @@ async function closeTabsRelativeTo(direction: "left" | "right"): Promise<number>
   const toClose = tabs.filter((t) =>
     !t.pinned && (direction === "left" ? t.index < active.index : t.index > active.index)
   );
-  if (toClose.length > 0) {
-    await snapshotClosedTabs(toClose);
-    await chrome.tabs.remove(toClose.map((t) => t.id!));
-  }
-  return toClose.length;
+  return closeTabs(toClose.map((t) => t.id!));
 }
 
 export async function closeTabsToLeft(): Promise<number> {
@@ -41,11 +87,7 @@ export async function closeTabsSameSite(): Promise<number> {
   const toClose = tabs.filter(
     (t) => !t.pinned && t.id !== active.id && domainOf(t.url || "") === activeDomain
   );
-  if (toClose.length > 0) {
-    await snapshotClosedTabs(toClose);
-    await chrome.tabs.remove(toClose.map((t) => t.id!));
-  }
-  return toClose.length;
+  return closeTabs(toClose.map((t) => t.id!));
 }
 
 export async function closeOldTabs(maxAgeDays: number = 7): Promise<number> {
@@ -54,9 +96,5 @@ export async function closeOldTabs(maxAgeDays: number = 7): Promise<number> {
   const toClose = tabs.filter(
     (t) => !t.pinned && !t.active && (t.lastAccessed || 0) < cutoff
   );
-  if (toClose.length > 0) {
-    await snapshotClosedTabs(toClose);
-    await chrome.tabs.remove(toClose.map((t) => t.id!));
-  }
-  return toClose.length;
+  return closeTabs(toClose.map((t) => t.id!));
 }

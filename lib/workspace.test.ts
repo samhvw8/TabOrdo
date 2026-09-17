@@ -46,8 +46,8 @@ beforeEach(() => {
         created.push(props);
         return { id: 1000 + created.length, url: props.url, pinned: props.pinned ?? false };
       },
-      remove: async (ids: number[]) => {
-        removed.push(...ids);
+      remove: async (ids: number | number[]) => {
+        removed.push(...(Array.isArray(ids) ? ids : [ids]));
       },
       discard: async (id: number) => {
         discarded.push(id);

@@ -1,3 +1,5 @@
+import { closeTabs } from "./tabs/close.ts";
+
 interface SavedWorkspace {
   tabs: { url: string; pinned: boolean }[];
   savedAt: number;
@@ -33,7 +35,9 @@ export async function focusMode(): Promise<number> {
   // Persist before closing anything so a failure mid-close can never lose tabs.
   await saveWorkspaceStack(stack);
   await chrome.tabs.create({ active: true });
-  await chrome.tabs.remove(toSave.map((t) => t.id!));
+  // No undo snapshot: the workspace stack just written is this close's recovery, and /unfocus
+  // reads it. A Ctrl+Z entry for the same tabs would let Ctrl+Z then /unfocus reopen each twice.
+  await closeTabs(toSave.map((t) => t.id!), { snapshot: false });
   return toSave.length;
 }
 

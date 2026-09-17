@@ -1,5 +1,5 @@
 import { getConfig, matchDomainToRule, isIgnoredUrl, isIgnoredGroupName } from "../../lib/rules.ts";
-import { getFullHostname, getDomainMapper, sortTabsInWindow, pickMajorityWindow, GROUP_COLORS, hashCode, setTitleBadge, recordOpener, lineageOpener, forgetTab, isSharedGroup } from "../../lib/tabs/index.ts";
+import { getFullHostname, getDomainMapper, sortTabsInWindow, pickMajorityWindow, GROUP_COLORS, hashCode, setTitleBadge, recordOpener, lineageOpener, forgetTab, isSharedGroup, closeTabs } from "../../lib/tabs/index.ts";
 import { syncPinUrl, clearPinTabIds } from "../../lib/pin.ts";
 import { findBounceTarget } from "../../lib/bounce.ts";
 import { logAction } from "../../lib/actionLog.ts";
@@ -268,7 +268,10 @@ export default defineBackground(() => {
         if (!target) return;
         await chrome.tabs.update(target.id, { active: true });
         await chrome.windows.update(target.windowId, { focused: true });
-        await chrome.tabs.remove(tabId);
+        // No undo snapshot, on purpose: the tab is a second old with no history, and its URL
+        // is live in the tab the user was just sent to. An entry would restore the very
+        // duplicate this exists to remove, and evict a real one from the 20-slot stack.
+        await closeTabs([tabId], { snapshot: false });
       } catch (e) {
         console.error("[TabOrdo] switch-to-existing error:", e);
       }

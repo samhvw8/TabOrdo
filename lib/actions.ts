@@ -17,7 +17,7 @@ import {
   switchToTab, type MoveGroupsResult,
 } from "./tabs/index.ts";
 import { archiveTabs, isArchivable } from "./archive.ts";
-import { snapshotBeforeClose, snapshotBeforeGroup } from "./undo.ts";
+import { snapshotBeforeGroup } from "./undo.ts";
 import { focusMode, unfocusMode, exportTabsToFile } from "./workspace.ts";
 import { addTabsToReadingList, isReadingListAvailable } from "./readinglist.ts";
 import { getRecentlyClosed, restoreSession } from "./sessions.ts";
@@ -167,9 +167,8 @@ async function gatherBranch(ctx: ActionContext, from: "self" | "parent"): Promis
 export const ACTION_HANDLERS: Record<string, ActionHandler> = {
   close: async (ctx) => {
     if (ctx.tabIds.length === 0) return NOTHING;
-    await snapshotBeforeClose(ctx.tabIds);
-    await closeTabs(ctx.tabIds);
-    return { message: `Closed ${ctx.tabIds.length} tab(s)`, acted: true };
+    const n = await closeTabs(ctx.tabIds);
+    return { message: `Closed ${n} tab(s)`, acted: true };
   },
 
   closeleft: async () => {
@@ -195,15 +194,13 @@ export const ACTION_HANDLERS: Record<string, ActionHandler> = {
   archive: async (ctx) => {
     if (ctx.tabIds.length === 0) return NOTHING;
     // Close exactly what was archived. This closed every match while archiveTabs skipped
-    // urlless and newtab entries, so "Archived 8" could close 10 — and being the one
-    // destructive handler with no snapshot, Ctrl+Z then popped some unrelated older entry.
+    // urlless and newtab entries, so "Archived 8" could close 10. The undo snapshot is
+    // closeTabs's own — this was once the one destructive handler without one.
     const eligible = ctx.matchingTabs.filter((t) => t.tabId !== undefined && isArchivable(t));
     if (eligible.length === 0) return { message: "Nothing to archive", acted: false };
-    const tabIds = eligible.map((t) => t.tabId!);
-    await snapshotBeforeClose(tabIds);
     const tabData = eligible.map((t) => ({ url: t.url, title: t.title, groupName: t.groupTitle }));
     const archived = await archiveTabs(tabData);
-    await closeTabs(tabIds);
+    await closeTabs(eligible.map((t) => t.tabId!));
     return { message: `Archived ${archived} tab(s)`, acted: true };
   },
 

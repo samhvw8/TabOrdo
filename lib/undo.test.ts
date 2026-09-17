@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { installChromeStub, type ChromeStub } from "./testing/chrome-stub.ts";
-import { pushUndo, peekUndo, popUndo, undoStackSize, loadUndoStack, snapshotBeforeClose, snapshotClosedTabs, snapshotBeforeGroup, executeUndo } from "./undo.ts";
+import { pushUndo, peekUndo, popUndo, undoStackSize, loadUndoStack, snapshotBeforeClose, snapshotBeforeGroup, executeUndo } from "./undo.ts";
 
 let stub: ChromeStub;
 
@@ -69,12 +69,14 @@ describe("executeUndo — close", () => {
   it("reopens closed tabs pinned-state intact, inactive, skipping newtab and empty urls", async () => {
     // Window 1 is still open; window 2 is gone.
     stub.windows = [{ id: 1 }];
-    await snapshotClosedTabs([
-      { url: "https://a.com", pinned: true, windowId: 1 },
-      { url: "chrome://newtab/", pinned: false, windowId: 1 },
-      { url: "", pinned: false, windowId: 1 },
-      { url: "https://b.com", pinned: false, windowId: 2 },
-    ] as chrome.tabs.Tab[]);
+    stub.openTabs = [
+      { id: 1, url: "https://a.com", pinned: true, windowId: 1, groupId: -1 },
+      { id: 2, url: "chrome://newtab/", pinned: false, windowId: 1, groupId: -1 },
+      { id: 3, url: "", pinned: false, windowId: 1, groupId: -1 },
+      { id: 4, url: "https://b.com", pinned: false, windowId: 2, groupId: -1 },
+    ];
+    await snapshotBeforeClose([1, 2, 3, 4]);
+    for (const id of [1, 2, 3, 4]) await chrome.tabs.remove(id);
 
     const msg = await executeUndo();
     expect(msg).toBe("Reopened 2 tab(s)");
@@ -85,6 +87,39 @@ describe("executeUndo — close", () => {
       { url: "https://b.com", pinned: false, active: false },
     ]);
     expect(undoStackSize()).toBe(0);
+  });
+
+  it("pushes nothing when none of the ids are open", async () => {
+    stub.openTabs = [];
+    await snapshotBeforeClose([7, 8]);
+    expect(undoStackSize()).toBe(0);
+  });
+
+  // The snapshot is taken before the close and so can name a tab the close then failed to
+  // remove. Reopening it put a second copy beside the one still open.
+  it("skips a snapshotted tab that is still open", async () => {
+    stub.openTabs = [
+      { id: 1, url: "https://a.com", pinned: false, windowId: 1, groupId: -1, index: 0 },
+      { id: 2, url: "https://b.com", pinned: false, windowId: 1, groupId: -1, index: 1 },
+    ];
+    await snapshotBeforeClose([1, 2]);
+    await chrome.tabs.remove(2);
+
+    expect(await executeUndo()).toBe("Reopened 1 tab(s)");
+    expect(stub.created.map((c) => c.url)).toEqual(["https://b.com"]);
+  });
+
+  // Entries written by versions before the id was recorded: nothing to compare, restore as before.
+  it("restores a legacy entry that recorded no ids", async () => {
+    stub.openTabs = [{ id: 1, url: "https://a.com", pinned: false, windowId: 1, groupId: -1 }];
+    await pushUndo({
+      type: "close",
+      label: "Closed 1 tab(s)",
+      timestamp: 1,
+      data: [{ url: "https://a.com", pinned: false, windowId: 1 }],
+    });
+
+    expect(await executeUndo()).toBe("Reopened 1 tab(s)");
   });
 
   it("returns a message for unknown entry types", async () => {

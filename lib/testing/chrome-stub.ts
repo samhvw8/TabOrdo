@@ -51,8 +51,9 @@ export interface ChromeStub {
   failGroup: boolean;
   /** Tabs scripting.executeScript rejects for — no host permissions in the real extension. */
   failScriptingIds: Set<number>;
-  /** Tabs chrome.tabs.remove rejects for, the way Chrome does for an id that has already
-   *  gone ("No tab with id: N"). One bad id rejects the whole call, array or not. */
+  /** Open tabs chrome.tabs.remove refuses to close, the way Chrome does for a tab mid-drag
+   *  ("Tabs cannot be edited right now"). An id that is not open rejects by itself, as in
+   *  Chrome ("No tab with id: N") — put the tab in openTabs, or don't, to choose. */
   failRemoveIds: Set<number>;
 }
 
@@ -236,14 +237,17 @@ export function installChromeStub(): ChromeStub {
         return tab;
       },
       remove: async (ids: number | number[]) => {
-        const arr = Array.isArray(ids) ? ids : [ids];
-        // Chrome rejects the whole call on the first id it cannot resolve, and removes
-        // nothing — modelling that is the only way a batched remove can be told from a
-        // per-id one in a test.
-        const bad = arr.find((id) => stub.failRemoveIds.has(id));
-        if (bad !== undefined) throw new Error(`No tab with id: ${bad}`);
-        stub.removedIds.push(...arr);
-        stub.openTabs = stub.openTabs.filter((t) => !arr.includes(t.id));
+        // As Chromium's TabsRemoveFunction: ids are removed in order and the call rejects at
+        // the first one it cannot — the earlier ones ARE gone. (An earlier stub rejected the
+        // whole array and removed nothing, and a release was shaped around that fiction.)
+        for (const id of Array.isArray(ids) ? ids : [ids]) {
+          if (stub.failRemoveIds.has(id)) {
+            throw new Error("Tabs cannot be edited right now (user may be dragging a tab).");
+          }
+          if (!stub.openTabs.some((t) => t.id === id)) throw new Error(`No tab with id: ${id}.`);
+          stub.removedIds.push(id);
+          stub.openTabs = stub.openTabs.filter((t) => t.id !== id);
+        }
       },
       // Everything but muted/active used to be dropped on the floor, so the pin-follow and
       // navigate paths could not be observed at all: {pinned} and {url} left no trace.

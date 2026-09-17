@@ -1,8 +1,8 @@
 // Finding and closing duplicate tabs.
 
 import type { TabInfo } from "./types.ts";
-import { getAllTabs, closeTabs } from "./query.ts";
-import { snapshotBeforeClose } from "../undo.ts";
+import { getAllTabs } from "./query.ts";
+import { closeTabs } from "./close.ts";
 import { getPinnedTabs, type PinnedTabEntry } from "../pin.ts";
 
 export async function findDuplicates(): Promise<Map<string, TabInfo[]>> {
@@ -60,16 +60,8 @@ export async function removeDuplicates(): Promise<number> {
     for (let i = 1; i < ordered.length; i++) toClose.push(ordered[i].id);
   }
 
-  if (toClose.length === 0) return 0;
-  // Snapshot here rather than at the call sites. Both popup paths took a *group* snapshot,
-  // which dedup never changes — so undo restored grouping and left the closed duplicates
-  // gone — and the action-menu entry took no snapshot at all. Owning it inside the mutation
-  // is the only version that can't be forgotten at a fourth call site.
-  await snapshotBeforeClose(toClose);
-  // closeTabs, not chrome.tabs.remove(toClose): Chrome rejects the WHOLE array on the first
-  // id that has already gone, so a single duplicate closed between findDuplicates and here
-  // left every other duplicate open — /dedup doing visibly nothing. The count is what was
-  // actually closed, so the popup can't claim tabs it failed to remove.
+  // closeTabs owns the undo snapshot. It used to be taken here, one release after the call
+  // sites had each taken the wrong one or none — the same drift, one level down.
   return closeTabs(toClose);
 }
 

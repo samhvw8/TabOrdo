@@ -9,6 +9,9 @@ interface ClosedTabData {
   url: string;
   pinned: boolean;
   windowId: number;
+  // The tab's id at snapshot time, so executeUndo can tell a tab the close removed from one
+  // it failed to remove. Optional: entries persisted by older versions have none.
+  id?: number;
   // Optional: entries persisted by older versions have none. Without them a restore dropped
   // the tab at the end of the strip and outside whatever group it was closed from — the
   // group snapshot has always recorded index, and a close is no less a position change.
@@ -102,21 +105,25 @@ export function undoStackSize(): number {
   return stack.length;
 }
 
+/**
+ * Called by closeTabs, and nothing else: the snapshot lives inside the one function that
+ * removes tabs so no new call site can forget it. Ids that are no longer open are simply not
+ * recorded — there is nothing to bring back — and when none of them are, no entry is pushed,
+ * since an empty entry would only burn the undo slot under it.
+ */
 export async function snapshotBeforeClose(tabIds: number[]): Promise<void> {
   const tabs = await chrome.tabs.query({});
   const idSet = new Set(tabIds);
   const toClose = tabs.filter((t) => idSet.has(t.id!));
-  await snapshotClosedTabs(toClose);
-}
-
-export async function snapshotClosedTabs(tabs: chrome.tabs.Tab[]): Promise<void> {
+  if (toClose.length === 0) return;
   const groupMap = new Map<number, chrome.tabGroups.TabGroup>();
   try {
     for (const g of await chrome.tabGroups.query({})) groupMap.set(g.id, g);
   } catch {}
-  const data: ClosedTabData[] = tabs.map((t) => {
+  const data: ClosedTabData[] = toClose.map((t) => {
     const g = groupMap.get(t.groupId);
     return {
+      id: t.id,
       url: t.url || "",
       pinned: t.pinned,
       windowId: t.windowId,
@@ -174,10 +181,20 @@ export async function executeUndo(): Promise<string> {
           if (w.id !== undefined) openWindows.add(w.id);
         }
       } catch {}
+      // The snapshot precedes the close, so it can name tabs the close then failed to remove —
+      // one Chrome refused mid-drag, or the whole batch when the worker died in between.
+      // Recreating those would put a second copy beside the one still open. Tab ids are unique
+      // for the life of the browser session, and so is this stack (session storage), so "still
+      // open" is a set lookup. A failed query falls back to restoring everything, as before.
+      let liveIds = new Set<number>();
+      try {
+        liveIds = new Set((await chrome.tabs.query({})).map((t) => t.id!));
+      } catch {}
       let reopened = 0;
       const regrouped: { tabId: number; data: ClosedTabData }[] = [];
       for (const t of tabs) {
         if (!t.url || t.url === "chrome://newtab/") continue;
+        if (t.id !== undefined && liveIds.has(t.id)) continue;
         const sameWindow = openWindows.has(t.windowId);
         try {
           // The recorded index only means anything in the window it was recorded from; a tab

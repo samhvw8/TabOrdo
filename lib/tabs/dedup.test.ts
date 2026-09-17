@@ -180,11 +180,33 @@ describe("removeDuplicates", () => {
     expect(stub.removedIds).toEqual([1]);
   });
 
-  // chrome.tabs.remove(array) rejects the whole call on the first id that has already gone,
-  // and dedup batched every duplicate into one such call — so a single tab closed between
-  // findDuplicates and the remove left every other duplicate open, /dedup visibly doing
-  // nothing at all. Per-id removal is what closeTabs already learned; dedup skipped it.
-  it("closes the remaining duplicates when one id is already gone", async () => {
+  // A duplicate closed between the scan and the removal — by the user, or by the page itself
+  // — must neither abort the rest nor be reported as a failure: it is gone, as intended. The
+  // vanish is staged on the strip query closeTabs makes for its undo snapshot, the last read
+  // before the remove.
+  it("closes the remaining duplicates when one has gone since the scan", async () => {
+    stub.openTabs = [
+      { id: 1, url: "https://a.com/", pinned: false, windowId: 1, groupId: -1, lastAccessed: 99 },
+      { id: 2, url: "https://a.com/", pinned: false, windowId: 1, groupId: -1, lastAccessed: 50 },
+      { id: 3, url: "https://a.com/", pinned: false, windowId: 1, groupId: -1, lastAccessed: 10 },
+    ];
+    const realQuery = chrome.tabs.query;
+    let scans = 0;
+    (chrome.tabs as unknown as { query: typeof realQuery }).query = ((info: object) => {
+      if (++scans === 2) stub.openTabs = stub.openTabs.filter((t) => t.id !== 2);
+      return realQuery(info);
+    }) as typeof realQuery;
+
+    expect(await removeDuplicates()).toBe(2);
+    expect(stub.removedIds).toEqual([3]);
+    expect(stub.openTabs.map((t) => t.id)).toEqual([1]);
+    // The snapshot never saw tab 2, so undo brings back only the copy dedup itself closed.
+    expect(await executeUndo()).toBe("Reopened 1 tab(s)");
+  });
+
+  // The remaining kind of failure is a tab Chrome would not close — mid-drag, or holding a
+  // beforeunload prompt. That one is still there, and "No duplicates found" would be a lie.
+  it("throws, after closing what it can, when Chrome refuses a duplicate", async () => {
     stub.openTabs = [
       { id: 1, url: "https://a.com/", pinned: false, windowId: 1, groupId: -1, lastAccessed: 99 },
       { id: 2, url: "https://a.com/", pinned: false, windowId: 1, groupId: -1, lastAccessed: 50 },
@@ -192,34 +214,8 @@ describe("removeDuplicates", () => {
     ];
     stub.failRemoveIds.add(2);
 
-    expect(await removeDuplicates()).toBe(1);
+    await expect(removeDuplicates()).rejects.toThrow(/could not be closed/);
     expect(stub.removedIds).toEqual([3]);
     expect(stub.openTabs.map((t) => t.id).sort()).toEqual([1, 2]);
-  });
-
-  // The count used to be toClose.length — what dedup meant to close, not what it managed to.
-  it("reports the number of tabs it actually closed", async () => {
-    stub.openTabs = [
-      { id: 1, url: "https://a.com/", pinned: false, windowId: 1, groupId: -1, lastAccessed: 99 },
-      { id: 2, url: "https://a.com/", pinned: false, windowId: 1, groupId: -1, lastAccessed: 50 },
-      { id: 3, url: "https://b.com/", pinned: false, windowId: 1, groupId: -1, lastAccessed: 99 },
-      { id: 4, url: "https://b.com/", pinned: false, windowId: 1, groupId: -1, lastAccessed: 50 },
-    ];
-    stub.failRemoveIds.add(2);
-    stub.failRemoveIds.add(4);
-
-    expect(await removeDuplicates()).toBe(0);
-  });
-
-  // pushUndo rejects when session storage refuses the write. Closing anyway would leave the
-  // user with tabs gone and nothing to undo with.
-  it("closes nothing when the undo snapshot cannot be persisted", async () => {
-    stub.openTabs = [
-      { id: 1, url: "https://a.com/", pinned: false, windowId: 1, groupId: -1 },
-      { id: 2, url: "https://a.com/", pinned: false, windowId: 1, groupId: -1 },
-    ];
-    stub.failWrites = true;
-    await expect(removeDuplicates()).rejects.toThrow();
-    expect(stub.removedIds).toEqual([]);
   });
 });

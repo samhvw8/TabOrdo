@@ -2,11 +2,11 @@
   import { onMount } from "svelte";
   import { getAllTabs, getCurrentWindowTabs, switchToTab, closeTabs, sortTabsInWindow, sortTabsInGroup, groupTabsByDomain, ungroupAll, removeDuplicates, mergeAllWindows, extractGroupToWindow, discardTabs, closeTabsToLeft, closeTabsToRight, closeTabsSameSite, closeOldTabs, shuffleTabs, uniteDomain, isolateDomain, splitWindow, splitByDomain, stackWindows, pinCurrentTab, unpinCurrentTab, outlineBranch, type TabInfo } from "../../lib/tabs/index.ts";
   import { getPinnedTabs, getPinForTab, type PinnedTabEntry } from "../../lib/pin.ts";
-  import { archiveTabs, getArchiveCount } from "../../lib/archive.ts";
+  import { getArchiveCount } from "../../lib/archive.ts";
   import { search, rankedSearch, tabsToSearchItems, searchBookmarks, searchHistory, parseCommand, buildSearchHaystack, buildTitleHaystack, type SearchResult } from "../../lib/search.ts";
   import { getAutoGroup, setAutoGroup, getAutoUngroup, setAutoUngroup, getUseRules, setUseRules, getAutoSort, setAutoSort, getAutoPinFollow, setAutoPinFollow, getAutoDiscard, setAutoDiscard, setSwitchToExisting } from "../../lib/rules.ts";
   import { matchCommands, ALL_COMMANDS, ACTION_COMMANDS, TRIAGE_COMMANDS, CATEGORY_STYLES, groupCommands, type CommandDefinition, type CommandCategory } from "../../lib/commands.ts";
-  import { snapshotBeforeClose, snapshotBeforeGroup, executeUndo, peekUndo, loadUndoStack, UNDO_KEY } from "../../lib/undo.ts";
+  import { snapshotBeforeGroup, executeUndo, peekUndo, loadUndoStack, UNDO_KEY } from "../../lib/undo.ts";
   import { focusMode, unfocusMode, hasSavedWorkspace, exportTabsToFile, loadTabsFromText } from "../../lib/workspace.ts";
   import { addTabsToReadingList, isReadingListAvailable, getReadingList } from "../../lib/readinglist.ts";
   import { getRecentlyClosed } from "../../lib/sessions.ts";
@@ -806,7 +806,6 @@
     if (busy || !item.tabId) return;
     busy = true;
     try {
-      await snapshotBeforeClose([item.tabId]);
       await closeTabs([item.tabId]);
       canUndo = true;
       results = results.filter((r) => r.id !== item.id);
@@ -858,27 +857,31 @@
       // after the next action replaced the message, so a dash action followed by an undo
       // blanked the undo's confirmation early. flashStatus owns the single timer.
       if (msg) flashStatus(msg);
-      canUndo = !!peekUndo();
-      await loadTabs();
       selectedTabs = new Set();
     } catch (e) {
       flashStatus(`Error: ${e instanceof Error ? e.message : "Action failed"}`, 5000);
     } finally {
+      // Refresh on failure too: a bulk close that Chrome refused one tab of has still closed
+      // the others and pushed an undo entry, and the strip on screen has to say so.
+      canUndo = !!peekUndo();
+      await loadTabs().catch(() => {});
       busy = false;
     }
   }
 
   /**
-   * Run a bare (no-query) palette action from a dashboard or menu button. Routes through the
-   * same handler the slash command uses, so a button and its command can't drift into
-   * reporting different things for the same work.
+   * Run a palette action from a dashboard or menu button. Routes through the same handler
+   * the slash command uses, so a button and its command can't drift into reporting different
+   * things for the same work. `tabs` stands in for the palette's matched list, for the
+   * selection buttons.
    */
-  function dashCommand(prefix: string, commandQuery = "") {
+  function dashCommand(prefix: string, commandQuery = "", tabs: TabInfo[] = []) {
     return dashAction(async () => {
+      const matchingTabs = tabsToSearchItems(tabs);
       const outcome = await runAction(prefix, {
         query: commandQuery,
-        matchingTabs: [],
-        tabIds: [],
+        matchingTabs,
+        tabIds: matchingTabs.map((t) => t.tabId!),
         currentWindowId,
         rankTabs,
         requestFilePicker,
@@ -1372,17 +1375,13 @@
         <div class="flex items-center gap-1.5 px-3 pb-2">
           <span class="text-[10px] text-text-muted">{selectedTabs.size} sel:</span>
           <button class="px-2 py-0.5 rounded text-[10px] font-medium bg-accent-red/10 text-accent-red border border-accent-red/20 hover:bg-accent-red/20 transition-colors"
-            onclick={() => confirmAction("closeSel", () => dashAction(async () => { await snapshotBeforeClose([...selectedTabs]); await closeTabs([...selectedTabs]); return `Closed ${selectedTabs.size}`; }))}>
+            onclick={() => confirmAction("closeSel", () => dashCommand("close", "", dashboardTabs.filter((t) => selectedTabs.has(t.id))))}>
             {pendingConfirm === "closeSel" ? "Confirm" : "Close"}
           </button>
+          <!-- Through the /archive handler, not a copy of it: this copy closed every selected
+               tab with no undo snapshot, so Ctrl+Z restored whatever unrelated entry was on top. -->
           <button class="px-2 py-0.5 rounded text-[10px] font-medium bg-surface-hover text-text-muted border border-border hover:text-text transition-colors"
-            onclick={() => dashAction(async () => {
-              const tabs = dashboardTabs.filter((t) => selectedTabs.has(t.id));
-              const tabData = tabs.map((t) => ({ url: t.url, title: t.title, groupName: t.groupTitle }));
-              const archived = await archiveTabs(tabData);
-              await closeTabs([...selectedTabs]);
-              return `Archived ${archived}`;
-            })}>Archive</button>
+            onclick={() => dashCommand("archive", "", dashboardTabs.filter((t) => selectedTabs.has(t.id)))}>Archive</button>
           <button class="px-2 py-0.5 rounded text-[10px] font-medium bg-surface-hover text-text-muted border border-border hover:text-text transition-colors"
             onclick={() => dashAction(async () => { await discardTabs([...selectedTabs]); return `Discarded ${selectedTabs.size}`; })}>Discard</button>
         </div>
@@ -1520,7 +1519,7 @@
                       <TabCard {tab} selected={selectedTabs.has(tab.id)}
                         positionPinned={!!getPinForTab(tab.url, group.title, pinnedTabs)}
                         ontoggle={() => toggleSelect(tab.id)}
-                        onclose={() => dashAction(async () => { await snapshotBeforeClose([tab.id]); await closeTabs([tab.id]); })}
+                        onclose={() => dashAction(async () => { await closeTabs([tab.id]); })}
                         onmute={() => loadTabs()} />
                     {/each}
                   </LazyRows>
@@ -1554,7 +1553,7 @@
                     {#each rows as tab (tab.id)}
                       <TabCard {tab} selected={selectedTabs.has(tab.id)}
                         ontoggle={() => toggleSelect(tab.id)}
-                        onclose={() => dashAction(async () => { await snapshotBeforeClose([tab.id]); await closeTabs([tab.id]); })}
+                        onclose={() => dashAction(async () => { await closeTabs([tab.id]); })}
                         onmute={() => loadTabs()} />
                     {/each}
                   </LazyRows>
