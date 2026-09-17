@@ -4,11 +4,19 @@ title: Ranked search
 description: How lib/search.ts ranks tabs for the palette (literal tiers before approximate ones, title over URL, pinned and current-window then recency), plus regex, pinyin, Vietnamese, the non-tab sources, and the caching that keeps typing fast.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/search.ts
 tags: [search, palette, performance, i18n]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-17T09:41:15Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-17T09:45:05Z }
 sources:
   - id: search-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/search.ts
     title: Search engine
+    last_modified: 2026-09-17
+  - id: tabsearch-ts
+    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabsearch.ts
+    title: Popup search over one tab load
+    last_modified: 2026-09-17
+  - id: tabsearch-test
+    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabsearch.test.ts
+    title: TabSearch tests
     last_modified: 2026-09-17
   - id: pinyin-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/pinyin.ts
@@ -58,7 +66,7 @@ sources:
 
 # Overview
 
-The palette ranks tabs with `rankedSearch`, a single ordered search that replaced user-selected fuzzy/exact/prefix/regex modes in 0.5.0.[^changelog] The older `search(haystack, needle, mode)` survives for `/re`. Ranking runs over parallel string arrays ("haystacks") built once per tab load; the popup owns them and passes recency and priority arrays alongside.[^search-ts][^popup-app] What the palette does with a `/command` is covered in [command palette](/features/command-palette.md).
+The palette ranks tabs with `rankedSearch`, a single ordered search that replaced user-selected fuzzy/exact/prefix/regex modes in 0.5.0.[^changelog] The older `search(haystack, needle, mode)` survives for `/re`. Ranking runs over parallel string arrays ("haystacks"). The popup holds one `TabSearch` per tab load (`lib/tabsearch.ts`), which carries the rows, recency and priority, and builds the haystacks on first use.[^tabsearch-ts][^popup-app] What the palette does with a `/command` is covered in [command palette](/features/command-palette.md).
 
 # Haystacks
 
@@ -68,6 +76,8 @@ The palette ranks tabs with `rankedSearch`, a single ordered search that replace
 | `buildTitleHaystack` | `title [groupTitle]`, stripped copy, pinyin; no URL |
 
 Group titles sit in both haystacks, so a group-name hit ranks as a title hit, and `/archive Work` reaches every tab in the "Work" group.[^search-ts][^changelog]
+
+`buildHaystacks` produces both in one pass, running pinyin and diacritic stripping once per label. The single builders share the same per-item code. The strings are identical to stripping each whole entry, because stripping works per character and every join is a space; a test pins this with Vietnamese, Korean, CJK and leading-combining-mark input.[^search-ts][^search-test]
 
 # Ranking
 
@@ -113,13 +123,15 @@ The debounced merge drops its result if the query changed meanwhile, and re-rank
 # Performance decisions
 
 - `prepare()` caches lower-cased entries and their word splits in a `WeakMap` keyed by the haystack **array**. The first search per load pays; later keystrokes hit. Contract: replace a haystack, never mutate it in place.[^search-ts]
-- `App.svelte` keeps `allTabs`, `results`, `windows`, `dashboardTabs` and `pinnedTabs` as `$state.raw`, and the four arrays ranking reads (`searchHaystack`, `searchTitleHaystack`, `searchRecency`, `searchPriority`) as plain `let`s. A deep `$state` proxy traps every element read, and ranking does thousands per keystroke inside loops and sort comparators.[^popup-app]
+- `App.svelte` keeps `allTabs`, `results`, `windows`, `dashboardTabs` and `pinnedTabs` as `$state.raw`, and `tabSearch` (which holds the haystack, recency and priority arrays ranking reads) as a plain `let`. A deep `$state` proxy traps every element read, and ranking does thousands per keystroke inside loops and sort comparators.[^popup-app]
+- Nothing is built before the dashboard paints. `loadTabs` only creates the `TabSearch`; an empty query (the most-recent list the popup opens with) reads just the row count via `recencyOrder`. A `requestIdleCallback` (timeout 1 s) then builds both haystacks and their `prepare()` caches, unless a newer load replaced that search. A key pressed first builds synchronously and gets the same results.[^tabsearch-ts][^popup-app]
+- Measured in Node at 1000 tabs: search work before first paint 3.20 ms to 0.24 ms; the idle warm-up costs 3.04 ms after paint; the first `g` then takes 0.42 ms instead of 3.35 ms. One pass over both haystacks costs 1.65 ms where two builders cost 2.82 ms.[^tabsearch-ts]
 - Measured per keystroke: `9d70207` took 8.46 ms to 3.27 ms at 1000 tabs,[^commit-9d70207] and `057dc57` took 3.27 ms to 1.69 ms.[^commit-057dc57] CHANGELOG 0.7.0 rounds the pair to 2.4 ms to 0.5 ms at 300 tabs and 8.5 ms to 1.7 ms at 1000.[^changelog]
 
 # Gotchas
 
-- Mutating a haystack in place (`push`, `splice`) keeps serving the cached lower-cased copy. Every current writer, `handleClose` included, assigns a freshly built array.[^search-ts][^popup-app]
-- The plain-`let` arrays are not reactive; a template that starts reading them will not update.[^popup-app]
+- Mutating a haystack in place (`push`, `splice`) keeps serving the cached lower-cased copy. A `TabSearch` is never changed after creation: `loadTabs` makes a new one, and `handleClose` swaps in `tabSearch.without(id)`, which also keeps recency and priority aligned with the remaining rows.[^search-ts][^tabsearch-ts][^popup-app]
+- `tabSearch` is a plain `let` and not reactive; a template that starts reading it will not update.[^popup-app]
 - Approximate tiers ignore priority and recency, so a pinned tab gets no boost there.[^search-ts]
 - `/re` tests the combined string, so `$` anchors to whatever was appended last (group title, stripped copy or pinyin), and to the URL only when nothing was.[^search-ts]
 - Selecting a bookmark, history, Reading List or recently closed row opens its URL in a new tab. For `/rc` that is not a session restore; `/restore` does that.[^popup-app]
@@ -130,6 +142,7 @@ The debounced merge drops its result if the query changed meanwhile, and re-rank
 | File | Guards |
 |------|--------|
 | `lib/search.test.ts` | Tier order, title over URL, priority boost, abbreviations, reserved approximate budget, accented and one-letter needles, `parseCommand`, regex ReDoS guard[^search-test] |
+| `lib/tabsearch.test.ts` | Lazy build ranks exactly as eager haystacks; empty query builds nothing; `without` keeps arrays aligned[^tabsearch-test] |
 | `lib/pinyin.test.ts` | Pinyin variants, CJK queries, Vietnamese with and without diacritics[^pinyin-test] |
 | `lib/highlight.test.ts` | `matchRanges` and `highlightSegments`[^highlight-test] |
 
@@ -139,6 +152,8 @@ The debounced merge drops its result if the query changed meanwhile, and re-rank
 - [Architecture overview](/architecture/overview.md)
 
 [^search-ts]: lib/search.ts
+[^tabsearch-ts]: lib/tabsearch.ts
+[^tabsearch-test]: lib/tabsearch.test.ts
 [^pinyin-ts]: lib/pinyin.ts
 [^rules-ts]: lib/rules.ts
 [^sessions-ts]: lib/sessions.ts

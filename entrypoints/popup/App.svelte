@@ -3,7 +3,8 @@
   import { getAllTabs, getCurrentWindowTabs, switchToTab, closeTabs, sortTabsInWindow, sortTabsInGroup, groupTabsByDomain, ungroupAll, removeDuplicates, mergeAllWindows, extractGroupToWindow, discardTabs, closeTabsToLeft, closeTabsToRight, closeTabsSameSite, closeOldTabs, shuffleTabs, uniteDomain, isolateDomain, splitWindow, splitByDomain, stackWindows, pinCurrentTab, unpinCurrentTab, outlineBranch, type TabInfo } from "../../lib/tabs/index.ts";
   import { getPinnedTabs, getPinForTab, type PinnedTabEntry } from "../../lib/pin.ts";
   import { getArchiveCount } from "../../lib/archive.ts";
-  import { search, rankedSearch, tabsToSearchItems, searchBookmarks, searchHistory, parseCommand, buildSearchHaystack, buildTitleHaystack, type SearchResult } from "../../lib/search.ts";
+  import { search, rankedSearch, tabsToSearchItems, searchBookmarks, searchHistory, parseCommand, buildSearchHaystack, type SearchResult } from "../../lib/search.ts";
+  import { createTabSearch, type TabSearch } from "../../lib/tabsearch.ts";
   import { getAutoGroup, setAutoGroup, getAutoUngroup, setAutoUngroup, getUseRules, setUseRules, getAutoSort, setAutoSort, getAutoPinFollow, setAutoPinFollow, getAutoDiscard, setAutoDiscard, setSwitchToExisting } from "../../lib/rules.ts";
   import { matchCommands, ALL_COMMANDS, ACTION_COMMANDS, TRIAGE_COMMANDS, CATEGORY_STYLES, groupCommands, type CommandDefinition, type CommandCategory } from "../../lib/commands.ts";
   import { snapshotBeforeGroup, executeUndo, peekUndo, loadUndoStack, UNDO_KEY } from "../../lib/undo.ts";
@@ -197,17 +198,14 @@
     setCollapsed(next);
   }
 
-  // $state.raw, and plain lets for the four search arrays, deliberately. A deep $state proxy
-  // puts a trap on every element read, and rankedSearch reads these thousands of times per
-  // keystroke — in loops and inside sort comparators. Measured at 2.4x the whole search cost
-  // (8.5 ms vs 3.3 ms per keystroke at 1000 tabs). Nothing mutates any of these in place; they
-  // are only ever replaced wholesale, which is exactly the case .raw exists for. The haystack
-  // and recency arrays are never read by the template at all, so they need no rune.
+  // $state.raw, and a plain let for the search, deliberately. A deep $state proxy puts a trap
+  // on every element read, and rankedSearch reads the haystack, recency and priority arrays
+  // thousands of times per keystroke — in loops and inside sort comparators. Measured at 2.4x
+  // the whole search cost (8.5 ms vs 3.3 ms per keystroke at 1000 tabs). Nothing mutates any
+  // of these in place; they are only ever replaced wholesale, which is exactly the case .raw
+  // exists for. The template never reads tabSearch at all, so it needs no rune.
   let allTabs = $state.raw<SearchResult[]>([]);
-  let searchHaystack: string[] = [];
-  let searchTitleHaystack: string[] = [];
-  let searchRecency: number[] = [];
-  let searchPriority: number[] = [];
+  let tabSearch: TabSearch = createTabSearch([], [], []);
   let highlightQuery = $state("");
 
   interface WindowData {
@@ -270,12 +268,14 @@
     pinnedTabs = pins;
 
     allTabs = tabsToSearchItems(tabs);
-    searchHaystack = buildSearchHaystack(allTabs);
-    searchTitleHaystack = buildTitleHaystack(allTabs);
-    // Active tab sinks to the bottom so empty-query MRU leads with the *previous* tab (Cmd+E → Enter = alt-tab).
-    searchRecency = tabs.map((t) => (t.active && t.windowId === currentWindowId ? 0 : (t.lastAccessed ?? 0)));
-    // Among equally-good search matches, favor tabs you're most likely looking for: pinned, or already in front of you.
-    searchPriority = tabs.map((t) => (t.pinned || t.windowId === currentWindowId ? 1 : 0));
+    tabSearch = createTabSearch(
+      allTabs,
+      // Active tab sinks to the bottom so empty-query MRU leads with the *previous* tab (Cmd+E → Enter = alt-tab).
+      tabs.map((t) => (t.active && t.windowId === currentWindowId ? 0 : (t.lastAccessed ?? 0))),
+      // Among equally-good search matches, favor tabs you're most likely looking for: pinned, or already in front of you.
+      tabs.map((t) => (t.pinned || t.windowId === currentWindowId ? 1 : 0)),
+    );
+    warmWhenIdle(tabSearch);
     dashboardTabs = tabs;
 
     const windowMap = new Map<number, WindowData>();
@@ -308,6 +308,15 @@
     });
   }
 
+  /**
+   * Build the haystacks once the dashboard has painted, so the first keystroke finds them
+   * ready. Building them in loadTabs held the first paint back by 2 ms at 1000 tabs for a
+   * search the dashboard may never run; a key that beats this callback builds them itself.
+   */
+  function warmWhenIdle(search: TabSearch) {
+    requestIdleCallback(() => { if (tabSearch === search) search.warm(); }, { timeout: 1000 });
+  }
+
   async function updateResults() {
     const { prefix, query: searchQuery } = parseCommand(query);
     highlightQuery = prefix ? searchQuery : query;
@@ -328,9 +337,7 @@
     if (prefix) {
       handlePrefixSearch(prefix, searchQuery);
     } else {
-      const indices = rankedSearch(searchHaystack, query, 50, searchRecency, searchTitleHaystack, searchPriority);
-      const tabResults = indices.map((i) => allTabs[i]);
-      results = tabResults;
+      results = tabSearch.rank(query);
 
       clearTimeout(searchTimer);
       if (query.trim().length >= 2) {
@@ -341,8 +348,7 @@
             searchHistory(capturedQuery, 5),
           ]);
           if (query !== capturedQuery) return;
-          const freshIndices = rankedSearch(searchHaystack, capturedQuery, 50, searchRecency, searchTitleHaystack, searchPriority);
-          const freshTabResults = freshIndices.map((i) => allTabs[i]);
+          const freshTabResults = tabSearch.rank(capturedQuery);
           results = [
             ...freshTabResults,
             ...(bookmarkResults.length > 0 ? [{ type: "divider" as const, id: "div-bookmarks", title: "Bookmarks", url: "" }, ...bookmarkResults] : []),
@@ -442,17 +448,15 @@
           break;
         }
         case "re": {
-          const indices = search(searchHaystack, searchQuery, "regex", 50, searchRecency);
-          results = indices.map((i) => allTabs[i]);
+          const indices = search(tabSearch.haystack(), searchQuery, "regex", 50, tabSearch.recency);
+          results = indices.map((i) => tabSearch.items[i]);
           break;
         }
         default:
           if (ACTION_PREFIXES.has(prefix)) {
-            const indices = searchQuery ? rankedSearch(searchHaystack, searchQuery, 50, searchRecency, searchTitleHaystack, searchPriority) : [];
-            results = indices.map((i) => allTabs[i]);
+            results = searchQuery ? tabSearch.rank(searchQuery) : [];
           } else {
-            const indices = rankedSearch(searchHaystack, `/${prefix} ${searchQuery}`, 50, searchRecency, searchTitleHaystack, searchPriority);
-            results = indices.map((i) => allTabs[i]);
+            results = tabSearch.rank(`/${prefix} ${searchQuery}`);
           }
       }
     } finally {
@@ -715,9 +719,7 @@
   /** Rank the live tab set against a query, keeping only rows backed by a real tab. */
   function rankTabs(q: string): SearchResult[] {
     if (!q) return [];
-    return rankedSearch(searchHaystack, q, 50, searchRecency, searchTitleHaystack, searchPriority)
-      .map((i) => allTabs[i])
-      .filter((t) => t.tabId);
+    return tabSearch.rank(q).filter((t) => t.tabId);
   }
 
   async function handleActionCommand(prefix: string, searchQuery: string) {
@@ -812,9 +814,8 @@
       // Closing the last row used to leave the selection past the end of the list, so the
       // palette stopped responding to Enter until the query changed.
       selectedIndex = Math.max(0, Math.min(selectedIndex, results.length - 1));
-      allTabs = allTabs.filter((t) => t.id !== item.id);
-      searchHaystack = buildSearchHaystack(allTabs);
-      searchTitleHaystack = buildTitleHaystack(allTabs);
+      tabSearch = tabSearch.without(item.id);
+      allTabs = tabSearch.items;
       dashboardTabs = dashboardTabs.filter((t) => t.id !== item.tabId);
       await loadTabs();
     } catch (e) {

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { search, rankedSearch, parseCommand, buildSearchHaystack, buildTitleHaystack } from "./search.ts";
+import { search, rankedSearch, parseCommand, buildSearchHaystack, buildTitleHaystack, buildHaystacks, recencyOrder, stripDiacritics } from "./search.ts";
+import { pinyinVariants } from "./pinyin.ts";
 
 const haystack = [
   "Alpha Docs https://a.com", // recency 100
@@ -301,5 +302,56 @@ describe("rankedSearch — abbreviation and tier budget", () => {
     const idx = rankedSearch(h, "yo", 50, undefined, th, undefined);
     expect(idx).toHaveLength(50);
     expect(idx).toContain(many.length - 1);
+  });
+});
+
+// The builders share one pinyin and diacritic pass per label now. These are the entries they
+// produced when each ran on its own, stripping whole strings; any drift changes what matches.
+describe("haystack builders", () => {
+  const wholeEntry = (items: { title: string; url: string; groupTitle?: string }[]) =>
+    items.map((t) => {
+      const original = `${t.title} ${t.url}${t.groupTitle ? ` ${t.groupTitle}` : ""}`;
+      const stripped = stripDiacritics(original);
+      let hay = original === stripped ? original : `${original} ${stripped}`;
+      const pin = pinyinVariants(t.groupTitle ? `${t.title} ${t.groupTitle}` : t.title);
+      if (pin) hay = `${hay} ${pin}`;
+      return hay;
+    });
+  const wholeTitle = (items: { title: string; groupTitle?: string }[]) =>
+    items.map((t) => {
+      const label = t.groupTitle ? `${t.title} ${t.groupTitle}` : t.title;
+      const stripped = stripDiacritics(label);
+      let hay = label === stripped ? label : `${label} ${stripped}`;
+      const pin = pinyinVariants(label);
+      if (pin) hay = `${hay} ${pin}`;
+      return hay;
+    });
+
+  const items = [
+    { title: "Tiếng Việt", url: "https://vi.wikipedia.org/wiki/Tiếng_Việt", groupTitle: "Đọc sau" },
+    { title: "́leading mark", url: "https://x.dev/̀", groupTitle: "̂g" },
+    { title: "한국어 뉴스", url: "https://news.naver.com/", groupTitle: "" },
+    { title: "知乎 - 首页", url: "https://zhihu.com", groupTitle: "修仙 小说" },
+    { title: "百度一下", url: "https://baidu.com" },
+    { title: "", url: "" },
+    { title: "Å ﬁ ẞ đĐ 🎉", url: "https://e.x/Å", groupTitle: "ﬁle" },
+    { title: "plain", url: "https://plain.dev", groupTitle: "plain group" },
+  ];
+
+  it("builds the entries the whole-string builders did", () => {
+    expect(buildSearchHaystack(items)).toEqual(wholeEntry(items));
+    expect(buildTitleHaystack(items)).toEqual(wholeTitle(items));
+  });
+
+  it("builds both haystacks in one pass with the same entries", () => {
+    expect(buildHaystacks(items)).toEqual({ haystack: wholeEntry(items), titleHaystack: wholeTitle(items) });
+  });
+});
+
+describe("recencyOrder", () => {
+  it("is what an empty needle returns, without reading the haystack", () => {
+    const rec = [100, 400, 300, 200];
+    expect(recencyOrder(4, rec, 3)).toEqual(rankedSearch(["a", "b", "c", "d"], "", 3, rec));
+    expect(recencyOrder(3)).toEqual([0, 1, 2]);
   });
 });
