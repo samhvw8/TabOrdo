@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { installChromeStub, type ChromeStub } from "../testing/chrome-stub.ts";
-import { ungroupAll, collapseAllGroups, pickMajorityWindow, groupTabsByDomain, planDomainGroup } from "./group.ts";
+import { ungroupAll, collapseAllGroups, pickMajorityWindow, groupTabsByDomain, planDomainGroup, domainGroupPartners } from "./group.ts";
 import { getDomainMapper, getGroupNameMapper } from "../url.ts";
 
 let stub: ChromeStub;
@@ -272,57 +272,61 @@ describe("ignore lists", () => {
 
 // Background auto-group's decision for a tab no rule claimed.
 describe("planDomainGroup", () => {
-  const plan = async (
-    url: string,
-    windowTabs: any[],
-    windowGroups: any[] = [],
-    ignorePatterns: any[] = []
-  ) => planDomainGroup(99, url, windowTabs, windowGroups, await getDomainMapper(), await getGroupNameMapper(), ignorePatterns);
+  const plan = async (url: string, windowGroups: any[] = []) =>
+    planDomainGroup(url, windowGroups, await getDomainMapper(), await getGroupNameMapper());
 
   it("joins a group already titled for the site", async () => {
-    const p = await plan("https://github.com/x", [], [{ id: 7, title: "github", windowId: 1 }]);
+    const p = await plan("https://github.com/x", [{ id: 7, title: "github", windowId: 1 }]);
     expect(p).toMatchObject({ title: "github", joinGroupId: 7 });
   });
 
   it("joins a group titled with the full domain from before names were shortened", async () => {
-    const p = await plan("https://github.com/x", [], [{ id: 7, title: "github.com", windowId: 1 }]);
+    const p = await plan("https://github.com/x", [{ id: 7, title: "github.com", windowId: 1 }]);
     expect(p?.joinGroupId).toBe(7);
   });
 
   it("never joins a shared group", async () => {
-    const p = await plan("https://github.com/x", [], [{ id: 7, title: "github", windowId: 1, shared: true }]);
+    const p = await plan("https://github.com/x", [{ id: 7, title: "github", windowId: 1, shared: true }]);
     expect(p?.joinGroupId).toBeUndefined();
   });
 
+  it("names a new group after the site when there is none to join", async () => {
+    const p = await plan("https://github.com/x", [{ id: 7, title: "Work", windowId: 1 }]);
+    expect(p).toMatchObject({ title: "github" });
+    expect(p?.joinGroupId).toBeUndefined();
+  });
+});
+
+describe("domainGroupPartners", () => {
+  const partners = async (url: string, windowTabs: any[], ignorePatterns: any[] = []) => {
+    const nameOf = await getGroupNameMapper();
+    return domainGroupPartners(99, nameOf(url), windowTabs, nameOf, ignorePatterns);
+  };
+
   // No partner means no new group. The caller also relies on this when a join fails.
   it("has no partner for the only tab of a site", async () => {
-    const p = await plan("https://github.com/x", [
+    expect(await partners("https://github.com/x", [
       tab({ id: 99, url: "https://github.com/x" }),
       tab({ id: 2, url: "https://example.com" }),
-    ]);
-    expect(p?.partnerIds).toEqual([]);
+    ])).toEqual([]);
   });
 
   it("partners with a loose tab of the same site, not a grouped one", async () => {
-    const p = await plan("https://github.com/x", [
+    expect(await partners("https://github.com/x", [
       tab({ id: 2, url: "https://docs.github.com/a" }),
       tab({ id: 3, url: "https://github.com/b", groupId: 40 }),
-    ]);
-    expect(p?.partnerIds).toEqual([2]);
+    ])).toEqual([2]);
   });
 
   it("does not count a pinned tab as a partner", async () => {
-    const p = await plan("https://mail.google.com/x", [tab({ id: 2, url: "https://mail.google.com/y", pinned: true })]);
-    expect(p?.partnerIds).toEqual([]);
+    expect(await partners("https://mail.google.com/x", [tab({ id: 2, url: "https://mail.google.com/y", pinned: true })])).toEqual([]);
   });
 
   it("does not count an ignored URL as a partner", async () => {
-    const p = await plan(
+    expect(await partners(
       "https://docs.google.com/x",
       [tab({ id: 2, url: "https://mail.google.com/y" })],
-      [],
       [{ pattern: "mail.google.com", enabled: true }]
-    );
-    expect(p?.partnerIds).toEqual([]);
+    )).toEqual([]);
   });
 });

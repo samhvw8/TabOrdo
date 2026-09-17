@@ -4,12 +4,12 @@ title: Branch lineage
 description: TabOrdo's own record of which tab opened which, kept by the background worker in session storage, and the /branch, /branchup, /parent and @b features built on it.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabs/tree.ts
 tags: [lineage, branch, grouping, background]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-17T00:16:05Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-17T10:02:23Z }
 sources:
   - id: tree-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabs/tree.ts
     title: Tab lineage and branch gathering
-    last_modified: 2026-08-21
+    last_modified: 2026-09-17
   - id: tabs-index
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabs/index.ts
     title: lib/tabs barrel
@@ -33,7 +33,7 @@ sources:
   - id: tree-test
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabs/tree.test.ts
     title: Lineage tests
-    last_modified: 2026-08-21
+    last_modified: 2026-09-17
   - id: actions-test
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/actions.test.ts
     title: /branch and /parent handler tests
@@ -89,6 +89,7 @@ Chrome names the previously active tab as a new-tab page's opener and keeps that
 - Closing a **root** turns its children into roots that are no longer siblings. Deliberate: keeping them linked needs tombstones every reader must skip, which is "more machinery than the case earns".[^tree-ts]
 - A child does not inherit `EXPLICIT_ROOT` from a closed Ctrl+T ancestor.[^tree-ts]
 - `forgetTab` batches: a 50-tab window close fires 50 `onRemoved` events, and the first queued task splices the whole pending set in one read and one write. There is no debounce timer, because pending work could outlive the service worker. A failed write puts the batch back.[^tree-ts]
+- `recordOpener` batches the same way. Ctrl-clicking 20 links fires 20 `onCreated` events, and each used to read and rewrite the whole map: 40 storage calls, with the whole map read and written 20 times. The first queued task now records every pending link in one read and one write, and a failed write puts the batch back. Records and closes drain in separate batches, so one can run ahead of an earlier call of the other kind. The only effect is that a tab closed while its creation was still queued can keep a map entry, and `resolveParents` ignores it.[^tree-ts][^tree-test]
 - The `onRemoved` listener deliberately has no window-closing early-out; skipping teardown would drop the splice for every tab in the window.[^background]
 
 ## The background-only writer rule
@@ -126,7 +127,7 @@ Chrome names the previously active tab as a new-tab page's opener and keeps that
 
 | File | Guards |
 |------|--------|
-| `lib/tabs/tree.test.ts` | `resolveParents`, `lineageOpener`, explicit roots, splicing, window-close storm (one read, one write, retry after failure), `branchUpRoot`, `collectBranch`, `groupBranch` reuse[^tree-test] |
+| `lib/tabs/tree.test.ts` | `resolveParents`, `lineageOpener`, explicit roots, splicing, window-close storm and ctrl-click burst (one read, one write, retry after failure), `branchUpRoot`, `collectBranch`, `groupBranch` reuse[^tree-test] |
 | `lib/actions.test.ts` | `/branch`, `/branchup` messages, undo, protected and shared groups, target window, `/parent`[^actions-test] |
 
 # Related

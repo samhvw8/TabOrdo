@@ -103,6 +103,81 @@ describe("sortTabsInWindow", () => {
   });
 });
 
+describe("sortTabsInWindow call count", () => {
+  // Auto-sort runs this on every tab that finishes loading, so the common case is a window
+  // that is already sorted, or one tab away from it.
+  let groupCalls: () => number;
+
+  beforeEach(() => {
+    stub.openTabs = [
+      tab({ id: 1, url: "https://pinned.com", index: 0, pinned: true }),
+      tab({ id: 2, url: "https://a.com", index: 1, groupId: 50 }),
+      tab({ id: 3, url: "https://b.com", index: 2, groupId: 50 }),
+      tab({ id: 4, url: "https://c.com", index: 3, groupId: 60 }),
+      tab({ id: 5, url: "https://d.com", index: 4, groupId: 60 }),
+      tab({ id: 6, url: "https://e.com", index: 5 }),
+      tab({ id: 7, url: "https://f.com", index: 6 }),
+    ];
+    stub.groups = [
+      { id: 50, title: "Alpha", color: "blue", windowId: 1 },
+      { id: 60, title: "Work", color: "red", windowId: 1 },
+    ];
+    const group = chrome.tabs.group.bind(chrome.tabs);
+    let n = 0;
+    (chrome.tabs as { group: unknown }).group = (opts: chrome.tabs.GroupOptions) => { n++; return group(opts); };
+    groupCalls = () => n;
+  });
+
+  const at = (id: number, index: number) => {
+    const moved = stub.openTabs.find((t) => t.id === id)!;
+    const rest = strip().filter((x) => x !== id);
+    rest.splice(index, 0, id);
+    for (const t of stub.openTabs) t.index = rest.indexOf(t.id);
+    expect(moved.index).toBe(index);
+  };
+
+  it("makes no moves and no regroups on a window that is already sorted", async () => {
+    await sortTabsInWindow(1, "domain");
+    expect(stub.moves).toEqual([]);
+    expect(groupCalls()).toBe(0);
+    expect(strip()).toEqual([1, 2, 3, 4, 5, 6, 7]);
+  });
+
+  it("moves only the loose tabs when one of them is out of order", async () => {
+    at(7, 5);
+    await sortTabsInWindow(1, "domain");
+    expect(stub.moves).toEqual([{ ids: [6, 7], index: 5, windowId: undefined }]);
+    expect(groupCalls()).toBe(0);
+    expect(strip()).toEqual([1, 2, 3, 4, 5, 6, 7]);
+  });
+
+  it("moves and regroups only the group whose order changed", async () => {
+    at(5, 3);
+    await sortTabsInWindow(1, "domain");
+    expect(stub.moves).toEqual([{ ids: [4, 5], index: 3, windowId: undefined }]);
+    expect(groupCalls()).toBe(1);
+    expect(strip()).toEqual([1, 2, 3, 4, 5, 6, 7]);
+  });
+
+  // A link opened from a Chrome-pinned tab lands right after the pins, one slot ahead of every
+  // group. Re-laying block by block from the front would move and regroup each of them.
+  it("sends a loose tab stranded ahead of the groups to the tail instead of re-laying every group", async () => {
+    at(7, 1);
+    await sortTabsInWindow(1, "domain");
+    expect(stub.moves).toEqual([{ ids: [7], index: -1, windowId: undefined }]);
+    expect(groupCalls()).toBe(0);
+    expect(strip()).toEqual([1, 2, 3, 4, 5, 6, 7]);
+  });
+
+  it("still lands a stranded tab mid-way through the loose tabs", async () => {
+    at(6, 1);
+    await sortTabsInWindow(1, "domain");
+    expect(stub.moves).toHaveLength(2);
+    expect(groupCalls()).toBe(0);
+    expect(strip()).toEqual([1, 2, 3, 4, 5, 6, 7]);
+  });
+});
+
 describe("sortTabsInWindow with position locks", () => {
   // A lock is the whole reason sorting is not just a comparator: the locked tab has to land on
   // its held index and everything else has to flow around it.
@@ -149,6 +224,94 @@ describe("sortTabsInWindow with position locks", () => {
 
     await sortTabsInWindow(1, "domain");
     expect(strip()[0]).toBe(3);
+  });
+});
+
+describe("sortTabsInWindow with group locks", () => {
+  let groupCalls: () => number;
+  let windowQueries: () => number;
+
+  beforeEach(() => {
+    stub.openTabs = [
+      tab({ id: 1, url: "https://a.com", index: 0, groupId: 50 }),
+      tab({ id: 2, url: "https://b.com", index: 1, groupId: 60 }),
+      tab({ id: 3, url: "https://c.com", index: 2, groupId: 70 }),
+      tab({ id: 4, url: "https://d.com", index: 3 }),
+    ];
+    stub.groups = [
+      { id: 50, title: "Alpha", color: "blue", windowId: 1 },
+      { id: 60, title: "Beta", color: "red", windowId: 1 },
+      { id: 70, title: "Zulu", color: "green", windowId: 1 },
+    ];
+    const group = chrome.tabs.group.bind(chrome.tabs);
+    const query = chrome.tabs.query.bind(chrome.tabs);
+    let groups = 0;
+    let queries = 0;
+    (chrome.tabs as { group: unknown }).group = (opts: chrome.tabs.GroupOptions) => { groups++; return group(opts); };
+    (chrome.tabs as { query: unknown }).query = (q: chrome.tabs.QueryInfo) => {
+      if (q.windowId !== undefined) queries++;
+      return query(q);
+    };
+    groupCalls = () => groups;
+    windowQueries = () => queries;
+  });
+
+  const lock = (groupTitle: string, position: number) => {
+    const pins = (stub.localData.pinnedGroups as object[] | undefined) ?? [];
+    stub.localData.pinnedGroups = [...pins, { id: groupTitle, groupTitle, position }];
+  };
+  const resetCounts = () => {
+    stub.moves.length = 0;
+    const before = { groups: groupCalls(), queries: windowQueries() };
+    return () => ({ moves: stub.moves.length, groups: groupCalls() - before.groups, queries: windowQueries() - before.queries });
+  };
+
+  // The sort used to lay groups down alphabetically and let the lock pass drag Zulu back to
+  // the front — on every page load, even when Zulu was already there.
+  it("lays a locked group down in its slot, so sorting again moves nothing", async () => {
+    lock("Zulu", 0);
+    await sortTabsInWindow(1, "domain");
+    expect(strip()).toEqual([3, 1, 2, 4]);
+
+    const counts = resetCounts();
+    await sortTabsInWindow(1, "domain");
+    // One window query to plan the sort, one for the lock pass, which finds nothing to do.
+    expect(counts()).toEqual({ moves: 0, groups: 0, queries: 2 });
+    expect(strip()).toEqual([3, 1, 2, 4]);
+  });
+
+  it("holds several locks at once without moving anything on a sorted window", async () => {
+    lock("Zulu", 0);
+    lock("Beta", 1);
+    await sortTabsInWindow(1, "domain");
+    expect(strip()).toEqual([3, 2, 1, 4]);
+
+    const counts = resetCounts();
+    await sortTabsInWindow(1, "domain");
+    expect(counts()).toEqual({ moves: 0, groups: 0, queries: 2 });
+  });
+
+  // A group dragged to the last slot by the lock pass has always landed at the very end of the
+  // window, past the loose tabs. Laying it down directly keeps that.
+  it("keeps a group locked to the last slot behind the loose tabs", async () => {
+    lock("Alpha", 2);
+    await sortTabsInWindow(1, "domain");
+    expect(strip()).toEqual([2, 3, 4, 1]);
+
+    const counts = resetCounts();
+    await sortTabsInWindow(1, "domain");
+    expect(counts()).toEqual({ moves: 0, groups: 0, queries: 2 });
+  });
+
+  // Two locks clamped to one slot have no layout the pass leaves alone, so the sort falls back
+  // to the alphabetical layout plus the pass, exactly as before.
+  it("falls back to the old two-step when two locks clamp to the same slot", async () => {
+    lock("Alpha", 5);
+    lock("Beta", 5);
+    await sortTabsInWindow(1, "domain");
+    expect(strip()).toEqual([3, 4, 1, 2]);
+    await sortTabsInWindow(1, "domain");
+    expect(strip()).toEqual([3, 4, 1, 2]);
   });
 });
 

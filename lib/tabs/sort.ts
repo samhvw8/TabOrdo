@@ -1,7 +1,7 @@
 // Ordering tabs inside a window or a group, honouring position locks.
 
 import { getDomainMapper, type DomainMapper } from "../url.ts";
-import { getPinnedTabs, applyGroupPinsToWindow, type PinnedTabEntry } from "../pin.ts";
+import { getPinnedTabs, getPinnedGroups, applyGroupPinsToWindow, settleGroupPins, type PinnedTabEntry, type PinnedGroupEntry } from "../pin.ts";
 import { getSortRules, buildSortRanker, noSortRanking, type SortRanker } from "../rules.ts";
 
 /**
@@ -47,6 +47,7 @@ export async function organizeWindow(
   const tabs = await chrome.tabs.query({ windowId });
   const groups = await chrome.tabGroups.query({ windowId });
   const allPins = await getPinnedTabs();
+  const groupPins = await getPinnedGroups();
   const domainOf = await getDomainMapper();
   const rank = await rankerFor(by);
   const pinnedCount = tabs.filter((t) => t.pinned).length;
@@ -78,22 +79,148 @@ export async function organizeWindow(
   }
   ungrouped.sort((a, b) => compareTabs(a, b, by, domainOf, rank));
 
-  let index = pinnedCount;
+  const blocks: Block[] = sortedGroups.map((entry) => ({ ids: entry.tabs.map((t) => t.id!), groupId: entry.group.id }));
+  if (ungrouped.length > 0) blocks.push({ ids: ungrouped.map((t) => t.id!), groupId: -1 });
 
-  for (const entry of sortedGroups) {
-    const ids = entry.tabs.map((t) => t.id!);
-    if (ids.length > 0) {
-      await chrome.tabs.move(ids, { index });
-      index += ids.length;
-      await chrome.tabs.group({ tabIds: ids, groupId: entry.group.id });
-    }
-  }
-
-  const ungroupedIds = ungrouped.map((t) => t.id!);
-  if (ungroupedIds.length > 0) {
-    await chrome.tabs.move(ungroupedIds, { index });
+  const target = groupPins.length > 0 ? withGroupPins(tabs, groups, blocks, groupPins, pinnedCount) : blocks;
+  for (const step of planLayout(tabs, target, pinnedCount)) {
+    await chrome.tabs.move(step.ids, { index: step.index });
+    if (step.groupId !== -1) await chrome.tabs.group({ tabIds: step.ids, groupId: step.groupId });
   }
 }
+
+/**
+ * `blocks` in the order applyGroupPinsToWindow would leave them, so the pass that follows every
+ * sort finds its groups already in their slots. Alphabetical order used to go down first and
+ * the pass then dragged each pinned group back — with three group locks, an already-sorted
+ * window moved dozens of tabs out and back on every page load and re-queried the whole window
+ * per lock.
+ *
+ * The layout is the pass's own result, computed on a copy by settleGroupPins with the same
+ * slot maths, so the end state is what it always was. `blocks` comes back unchanged — the old
+ * two-step, move for move — whenever that cannot be promised:
+ *  - settleGroupPins finds no layout the pass would leave alone;
+ *  - a tab is outside every block (its group was missing from the query), or a Chrome-pinned
+ *    tab is not at the head of the strip, so the copy would not match the real strip;
+ *  - a lock's title names two groups. Which one the pass picks follows tabGroups.query order,
+ *    and nothing promises that order survives the strip being laid out differently.
+ */
+function withGroupPins(
+  tabs: chrome.tabs.Tab[],
+  groups: chrome.tabGroups.TabGroup[],
+  blocks: Block[],
+  pins: PinnedGroupEntry[],
+  pinnedCount: number
+): Block[] {
+  if (pins.some((p) => groups.filter((g) => g.title === p.groupTitle).length > 1)) return blocks;
+  const pinned = tabs.filter((t) => t.pinned).sort((a, b) => a.index - b.index);
+  const laidCount = blocks.reduce((n, b) => n + b.ids.length, 0);
+  if (pinned.length + laidCount !== tabs.length) return blocks;
+  if (pinned.some((t, i) => t.index !== i || t.groupId !== -1)) return blocks;
+
+  const byId = new Map(tabs.map((t) => [t.id!, t]));
+  const laidOut = [...pinned, ...blocks.flatMap((b) => b.ids.map((id) => byId.get(id)!))]
+    .map((t, index) => ({ ...t, index }));
+  const settled = settleGroupPins(laidOut, groups, pins, pinnedCount);
+  if (!settled) return blocks;
+
+  // Read the block order back off the settled strip. Every block has to come back whole: the
+  // pass only moves whole groups, so anything else means the copy went wrong somewhere.
+  const byGroup = new Map(blocks.map((b) => [b.groupId, b]));
+  const strip = settled.filter((t) => !t.pinned).sort((a, b) => a.index - b.index);
+  const ordered: Block[] = [];
+  for (let i = 0; i < strip.length; ) {
+    const block = byGroup.get(strip[i].groupId);
+    if (!block || !block.ids.every((id, k) => strip[i + k]?.id === id)) return blocks;
+    byGroup.delete(block.groupId);
+    ordered.push(block);
+    i += block.ids.length;
+  }
+  return ordered;
+}
+
+/** One run of the target strip: a whole group, or (groupId -1) every loose tab. */
+interface Block {
+  ids: number[];
+  groupId: number;
+}
+
+interface LayoutStep {
+  ids: number[];
+  /** As passed to tabs.move; -1 is the end of the window. */
+  index: number;
+  /** Re-assert this group once the tabs land, or -1 for loose tabs. */
+  groupId: number;
+}
+
+/**
+ * The moves that turn the window into `blocks` laid end to end after the Chrome-pinned tabs.
+ *
+ * This runs on every tab that finishes loading, and it used to move and regroup every block
+ * whether or not anything was out of place: 2 calls per group plus one for the loose tabs, 121
+ * of them on a 1000-tab window that was already sorted. Each block is now checked against a
+ * local copy of the strip and skipped when its tabs already sit at its index in order; the copy
+ * is updated for every move that is kept, so the blocks after it are checked against the strip
+ * as it will really be.
+ *
+ * Skipping cannot change where anything ends up. Blocks go down front to back, so when block k
+ * is reached everything before its index is already final, every tab it moves travels leftward,
+ * and a block found in place is exactly one whose move would have been a no-op. Leftward is
+ * also the only direction a multi-tab tabs.move is safe in: Chrome moves the ids one at a time
+ * to index, index+1, …, so a rightward batch lands scattered. The regroup is kept on every
+ * block that does move, because Chrome drops a tab from its group when it lands away from the
+ * rest of that group.
+ *
+ * One case still re-laid everything: a loose tab sitting ahead of the groups — a link opened
+ * from a Chrome-pinned tab lands right after the pins — puts every block after it one slot off.
+ * So a second plan first sends such strays to the end of the window (appended one at a time,
+ * which is safe in either direction, and a loose tab appended there joins no group) and then
+ * does the same pass; whichever plan makes fewer calls is used.
+ */
+function planLayout(tabs: chrome.tabs.Tab[], blocks: Block[], pinnedCount: number): LayoutStep[] {
+  const strip = [...tabs].sort((a, b) => a.index - b.index).map((t) => t.id!);
+  const direct = placeBlocks(strip, blocks, pinnedCount);
+
+  const loose = blocks.find((b) => b.groupId === -1);
+  if (!loose) return direct;
+  let looseStart = pinnedCount;
+  for (const b of blocks) {
+    if (b === loose) break;
+    looseStart += b.ids.length;
+  }
+  const early = new Set(strip.slice(0, looseStart));
+  const strays = loose.ids.filter((id) => early.has(id));
+  if (strays.length === 0) return direct;
+
+  const stray = new Set(strays);
+  const viaTail = [
+    { ids: strays, index: -1, groupId: -1 },
+    ...placeBlocks([...strip.filter((id) => !stray.has(id)), ...strays], blocks, pinnedCount),
+  ];
+  return callCount(viaTail) < callCount(direct) ? viaTail : direct;
+}
+
+function placeBlocks(strip: number[], blocks: Block[], pinnedCount: number): LayoutStep[] {
+  let model = strip;
+  const steps: LayoutStep[] = [];
+  let index = pinnedCount;
+  for (const block of blocks) {
+    // Membership needs no check of its own: a block's tabs are the ones tabs.query reported in
+    // that group, and only a tab that is moved can change group.
+    const inPlace = block.ids.every((id, i) => model[index + i] === id);
+    if (!inPlace) {
+      steps.push({ ids: block.ids, index, groupId: block.groupId });
+      const moving = new Set(block.ids);
+      model = model.filter((id) => !moving.has(id));
+      model.splice(index, 0, ...block.ids);
+    }
+    index += block.ids.length;
+  }
+  return steps;
+}
+
+const callCount = (steps: LayoutStep[]) =>
+  steps.reduce((n, s) => n + (s.groupId === -1 ? 1 : 2), 0);
 
 function pinAwareSortTabs(
   tabs: chrome.tabs.Tab[],

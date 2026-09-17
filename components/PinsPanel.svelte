@@ -65,7 +65,9 @@
   );
 
   async function load() {
-    const raw = await getPinnedTabs();
+    // Fresh, not cached: this list is normalised and written back below, and the side panel
+    // lives long enough for a cached copy to predate the worker's latest pin URL sync.
+    const raw = await getPinnedTabs(true);
     const groups = new Map<string, PinnedTabEntry[]>();
     for (const p of raw) {
       const list = groups.get(p.groupName) || [];
