@@ -4,7 +4,7 @@ title: Grouping rules and ignore lists
 description: How the shared rulesConfig is stored, cached and written; how group rules and ignore patterns match hostnames and group names without backtracking; and the Rules editor that edits them.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/rules.ts
 tags: [rules, config, ignore-lists, pattern-matching, storage]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-17T08:30:00Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-17T10:30:06Z }
 sources:
   - id: rules
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/rules.ts
@@ -91,7 +91,7 @@ On the very first read, `getConfig()` writes the all-false default. Normalisatio
 
 - **Background auto-group** uses rules only when `useRules` is on. A rule creates a group even for a single tab, and domain fallback needs 2 or more tabs. Ignored URLs are skipped, and they do not count toward those 2 tabs.[^bg-index][^group]
 - **Auto-ungroup** skips rule-named groups (with `useRules` on) and ignored group names.[^bg-index]
-- **`groupTabsByDomain`** (the dashboard Group and Regroup actions, the context menu's "Group tabs by domain") uses rules only when `useRules` is on. It skips ignored URLs and tabs inside protected groups, and leaves protected groups standing in rebuild mode. `ungroupAll` leaves them alone too. `untouchableGroupIds` (shared or ignored-name groups) protects them from `/branch`.[^group] The ignore lists used to be enforced only on the background path.[^group-test][^changelog]
+- **`groupTabsByDomain`** (the dashboard Group and Regroup actions, the context menu's "Group tabs by domain") uses rules only when `useRules` is on. It skips ignored URLs and tabs inside protected groups, and leaves protected groups standing in rebuild mode. `ungroupAll` leaves them alone too. `untouchableGroupIds` (shared or ignored-name groups) protects them from `/branch`.[^group] The ignore lists used to be enforced only on the background path.[^group-test][^changelog] A run ends by collapsing every group except the active tab's, and only groups in the wrong state get an update. Additive mode fetches every tab once, since only a rebuild changes the strip before the grouping pass.[^group][^group-test]
 - **Domain groups are titled by name, not domain.** Both grouping paths title and key a domain group by the registrable domain without its public suffix (`getGroupNameMapper`), so `google.com` and `google.de` share a group called `google`. A rule's name is used as written.[^group] Groups titled with a full domain before this change are still joined.
 - **`/group <query>` is different.** Its handler groups the matched tab ids directly into a group titled with the query, without consulting rules or either ignore list.[^actions]
 

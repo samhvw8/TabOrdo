@@ -4,7 +4,7 @@ title: Focus mode and workspace files
 description: /focus and /unfocus park the current window's tabs on a LIFO stack in chrome.storage.local and bring them back, while /save and /load export and import tab lists as text files.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/workspace.ts
 tags: [workspace, focus-mode, import-export]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-17T00:16:05Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-17T10:30:06Z }
 sources:
   - id: workspace-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/workspace.ts
@@ -74,7 +74,7 @@ Storage:[^workspace-ts]
 4. Open a new active tab.
 5. `closeTabs(ids, { snapshot: false })`.
 
-`/unfocus` (`unfocusMode`): pop the newest workspace; create each tab inactive with its pinned state, logging and skipping any URL Chrome refuses; **persist the stack whatever happened**; report how many came back.[^workspace-ts]
+`/unfocus` (`unfocusMode`): pop the newest workspace; create each tab inactive with its pinned state, logging and skipping any URL Chrome refuses; **persist the stack whatever happened**; report how many came back.[^workspace-ts] The creates are awaited one at a time on purpose. The tabs are meant to come back in their saved order, and nothing the stub can model shows that Chrome keeps concurrent `tabs.create` calls in order. `/freeze` and `/readlater` send their calls together because they have no order to keep.[^workspace-ts][^close-ts]
 
 # Invariants
 
@@ -108,6 +108,7 @@ Storage:[^workspace-ts]
 | `/load` (`loadTabsFromText`) | Each non-blank line's last tab-separated field (or the whole line); keeps values starting with `http`; stops at 2 MiB of URL bytes but always keeps the first; opens a new window on the first URL and adds the rest inactive and discarded |
 
 - The popup cannot load: the OS file picker takes focus, Chrome closes the popup, and the read dies. It says to use the side panel instead, where the picker works.[^popup-app][^changelog]
+- `/load` creates and discards one tab at a time, for the same ordering reason as `/unfocus`.[^workspace-ts]
 - `/load` returns `acted: false` and only opens the picker; the popup's file input handler reports "Loaded N tab(s) into new window".[^actions-ts][^popup-app]
 - Save and Load are an alt-click pair on the dashboard ([command palette](/features/command-palette.md)).
 

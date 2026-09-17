@@ -1,6 +1,7 @@
 # Update Log
 
 ## 2026-09-17
+* **Update**: Caught up the pages the batch work did not reach: realm caches and undo metadata keys in the overview, the undo index entry, why `/unfocus` and `/load` stay sequential, and Group's collapse and single-fetch behaviour — [overview](/architecture/overview.md), [focus workspaces](/features/focus-workspaces.md), [grouping rules](/features/grouping-rules.md).
 * **Update**: Performance pass. Auto-sort skips an already sorted window and places locked groups directly; lock lists are cached; lineage records are batched — [background automation](/features/background-automation.md), [sort priority](/features/sort-priority.md), [position locks](/features/position-locks.md), [branch lineage](/features/branch-lineage.md), [Chrome stub](/testing/chrome-stub.md).
 * **Update**: Undo entries are stored under one key each, and group undo leaves intact groups alone — [undo stack](/architecture/undo-stack.md), [overview](/architecture/overview.md).
 * **Update**: Search skips fuzzy matching for one-letter and accented needles, builds haystacks after first paint, and prefix views stop querying Chrome per keystroke — [search](/features/search.md), [command palette](/features/command-palette.md).

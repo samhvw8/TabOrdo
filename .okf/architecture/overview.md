@@ -3,7 +3,7 @@ type: Architecture
 title: Architecture overview
 description: How TabOrdo's MV3 entrypoints, lib modules, command dispatch and storage areas fit together, and which realm owns what.
 tags: [architecture, mv3, storage, realms]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-17T09:56:23Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-17T10:30:06Z }
 sources:
   - id: wxt-config
     resource: https://github.com/samhvw8/TabOrdo/blob/main/wxt.config.ts
@@ -40,6 +40,10 @@ sources:
   - id: undo-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/undo.ts
     title: Undo stack
+    last_modified: 2026-09-17
+  - id: pin-ts
+    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/pin.ts
+    title: Lock lists and their read cache
     last_modified: 2026-09-17
   - id: commit-7e3e91a
     resource: https://github.com/samhvw8/TabOrdo/commit/7e3e91acea53a8c29ffe62bb2ed40367d17bab09
@@ -89,11 +93,11 @@ Pins are the exception: they sit in `local` with a `tabId`, so the background's 
 
 # Realms share storage, not memory
 
-The popup and the side panel are the same component in two realms. Each has its own module instances (the undo mirror, write chains, config cache) over one shared storage area.[^undo-ts] So:
+The popup and the side panel are the same component in two realms. Each has its own module instances (the undo mirror, write chains, the config and lock-list caches) over one shared storage area.[^undo-ts][^pin-ts] So:
 
-- Any module-level cache of shared state must re-read before it mutates. See `syncFromStorage` in the [undo stack](/architecture/undo-stack.md).
+- Any module-level cache of shared state must re-read before it mutates. The undo stack refreshes its mirror first (`refreshMirror`, see [undo stack](/architecture/undo-stack.md)), and every lock or config setter reads with `fresh` past its cache ([position locks](/features/position-locks.md), [grouping rules](/features/grouping-rules.md)).[^undo-ts][^pin-ts]
 - `chrome.storage.session` has no compare-and-swap. A lock cannot be a refcount or a shared map, which is why the [bulk lock](/architecture/bulk-lock.md) uses one key per owner.
-- The component subscribes to `chrome.storage.onChanged` for `rulesConfig`, the action log, AI progress and the undo key, so a side panel left open stays current.[^popup-app]
+- The component subscribes to `chrome.storage.onChanged` for `rulesConfig`, the action log, AI progress and the undo stack's metadata keys (`touchesUndoStack`), so a side panel left open stays current.[^popup-app][^undo-ts]
 - The background also writes the undo stack: the context-menu dedup calls `closeTabs`, which snapshots.[^background]
 
 # Related
@@ -112,4 +116,5 @@ The popup and the side panel are the same component in two realms. Each has its 
 [^search-ts]: lib/search.ts
 [^tree-ts]: lib/tabs/tree.ts
 [^undo-ts]: lib/undo.ts
+[^pin-ts]: lib/pin.ts
 [^commit-7e3e91a]: Commit 7e3e91a
