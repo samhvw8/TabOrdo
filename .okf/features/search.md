@@ -4,7 +4,7 @@ title: Ranked search
 description: How lib/search.ts ranks tabs for the palette (literal tiers before approximate ones, title over URL, pinned and current-window then recency), plus regex, pinyin, Vietnamese, the non-tab sources, and the caching that keeps typing fast.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/search.ts
 tags: [search, palette, performance, i18n]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-17T09:50:38Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-17T09:54:06Z }
 sources:
   - id: search-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/search.ts
@@ -17,6 +17,14 @@ sources:
   - id: tabsearch-test
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabsearch.test.ts
     title: TabSearch tests
+    last_modified: 2026-09-17
+  - id: debounce-ts
+    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/debounce.ts
+    title: Debouncer for bookmark and history lookups
+    last_modified: 2026-09-17
+  - id: debounce-test
+    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/debounce.test.ts
+    title: Debouncer tests
     last_modified: 2026-09-17
   - id: pinyin-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/pinyin.ts
@@ -112,13 +120,22 @@ Group titles sit in both haystacks, so a group-name hit ranks as a title hit, an
 
 | Source | Reached by | Ranking |
 |--------|-----------|---------|
-| Bookmarks | Plain query of 2+ chars: 5 results after a 200 ms debounce, appended under a divider. `/b`: up to 20 | Chrome's `bookmarks.search` order[^popup-app][^search-ts] |
-| History | Same, via `history.search`. `/h`: up to 20 | Chrome's order[^popup-app] |
-| Reading List (`/rl`) | `readingList.query({})`; read items prefixed `✓ ` | `rankView`: `rankedSearch`, no recency[^popup-app][^readinglist-ts] |
-| Recently closed (`/rc`, `/recent`) | `sessions.getRecentlyClosed` (25), window sessions flattened | `rankView`[^sessions-ts][^popup-app] |
-| `/w`, `/p`, `/g` | Current window, Chrome-pinned, active group (or ungrouped) | `rankView`: `rankedSearch`, no recency or priority; an empty query lists the first 50[^popup-app][^tabsearch-ts] |
+| Bookmarks | Plain query of 2+ chars: 5 results after a 200 ms debounce, appended under a divider. `/b`: up to 20, on the same 200 ms debounce | Chrome's `bookmarks.search` order[^popup-app][^search-ts] |
+| History | Same, via `history.search`. `/h`: up to 20, debounced like `/b` | Chrome's order[^popup-app] |
+| Reading List (`/rl`) | `readingList.query({})` once per visit to the prefix; read items prefixed `✓ ` | `rankView`: `rankedSearch`, no recency[^popup-app][^readinglist-ts] |
+| Recently closed (`/rc`, `/recent`) | `sessions.getRecentlyClosed` (25), window sessions flattened; `/rc` reads it once per visit | `rankView`[^sessions-ts][^popup-app] |
+| `/w`, `/p`, `/g` | Current window, Chrome-pinned, active tab's group (or ungrouped), all filtered from the tabs the popup loaded | `rankView`: `rankedSearch`, no recency or priority; an empty query lists the first 50[^popup-app][^tabsearch-ts] |
 
-The debounced merge drops its result if the query changed meanwhile, and takes the tab rows from `tabSearch.rank`, which remembers its last query: re-ranking there cost 1.1 to 1.6 ms at 1000 tabs to rebuild a list already on screen. A reload creates a new `TabSearch`, so the remembered rows never outlive their tabs.[^popup-app][^tabsearch-ts]
+Keystrokes make no Chrome calls in the prefix views, measured with the chrome stub over a 6-letter word at 1000 tabs:[^popup-app]
+
+| View | Per keystroke before | Now |
+|------|----------------------|-----|
+| `/w` | `tabs.query({})` (every tab in every window), `tabGroups.query`, `windows.getCurrent`: 18 calls | 0; filters `allTabs` by `currentWindowId` |
+| `/g` | `tabs.query({active, currentWindow})`: 6 calls | 0; the active tab comes from `dashboardTabs` |
+| `/b`, `/h` | One lookup per key: 6[^debounce-ts] | 1, 200 ms after typing stops. Meanwhile the list shows "Searching...". Enter flushes the wait, and waits for a lookup already running, before opening the selected row |
+| `/rl`, `/rc` | One full-list read per key: 5 to 6 | 1 per visit. `updateResults` drops it when the query leaves the prefix, so coming back re-reads |
+
+Every new query cancels a pending lookup and clears `loading`, so a plain query typed over `/b foo` never keeps its spinner. The debounced merge drops its result if the query changed meanwhile, and takes the tab rows from `tabSearch.rank`, which remembers its last query: re-ranking there cost 1.1 to 1.6 ms at 1000 tabs to rebuild a list already on screen. A reload creates a new `TabSearch`, so the remembered rows never outlive their tabs.[^popup-app][^tabsearch-ts]
 
 # Performance decisions
 
@@ -135,6 +152,7 @@ The debounced merge drops its result if the query changed meanwhile, and takes t
 - `tabSearch` is a plain `let` and not reactive; a template that starts reading it will not update.[^popup-app]
 - Approximate tiers ignore priority and recency, so a pinned tab gets no boost there.[^search-ts]
 - `/re` tests the combined string, so `$` anchors to whatever was appended last (group title, stripped copy or pinyin), and to the URL only when nothing was.[^search-ts]
+- `/w`, `/g`, `/rl` and `/rc` show what was loaded, not what Chrome holds right now. In the popup that is the same moment. The side panel stays open, and it has no tab listeners, so a tab activated or closed elsewhere shows up only after the next `loadTabs`. The dashboard and the @ views already behaved that way.[^popup-app]
 - Selecting a bookmark, history, Reading List or recently closed row opens its URL in a new tab. For `/rc` that is not a session restore; `/restore` does that.[^popup-app]
 - No test pins the `WeakMap` identity contract.
 
@@ -143,6 +161,7 @@ The debounced merge drops its result if the query changed meanwhile, and takes t
 | File | Guards |
 |------|--------|
 | `lib/search.test.ts` | Tier order, title over URL, priority boost, abbreviations, reserved approximate budget, accented and one-letter needles, `parseCommand`, regex ReDoS guard[^search-test] |
+| `lib/debounce.test.ts` | Last call wins, cancel, flush runs now and waits for a call in flight[^debounce-test] |
 | `lib/tabsearch.test.ts` | Lazy build ranks exactly as eager haystacks; empty query builds nothing; last query remembered; `rankView` matches a rebuilt haystack for subsets, reorders, foreign rows and changed rows; `without` keeps arrays aligned[^tabsearch-test] |
 | `lib/pinyin.test.ts` | Pinyin variants, CJK queries, Vietnamese with and without diacritics[^pinyin-test] |
 | `lib/highlight.test.ts` | `matchRanges` and `highlightSegments`[^highlight-test] |
@@ -155,6 +174,8 @@ The debounced merge drops its result if the query changed meanwhile, and takes t
 [^search-ts]: lib/search.ts
 [^tabsearch-ts]: lib/tabsearch.ts
 [^tabsearch-test]: lib/tabsearch.test.ts
+[^debounce-ts]: lib/debounce.ts
+[^debounce-test]: lib/debounce.test.ts
 [^pinyin-ts]: lib/pinyin.ts
 [^rules-ts]: lib/rules.ts
 [^sessions-ts]: lib/sessions.ts

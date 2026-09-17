@@ -1,10 +1,11 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { getAllTabs, getCurrentWindowTabs, switchToTab, closeTabs, sortTabsInWindow, sortTabsInGroup, groupTabsByDomain, ungroupAll, removeDuplicates, mergeAllWindows, extractGroupToWindow, discardTabs, closeTabsToLeft, closeTabsToRight, closeTabsSameSite, closeOldTabs, shuffleTabs, uniteDomain, isolateDomain, splitWindow, splitByDomain, stackWindows, pinCurrentTab, unpinCurrentTab, outlineBranch, type TabInfo } from "../../lib/tabs/index.ts";
+  import { getAllTabs, switchToTab, closeTabs, sortTabsInWindow, sortTabsInGroup, groupTabsByDomain, ungroupAll, removeDuplicates, mergeAllWindows, extractGroupToWindow, discardTabs, closeTabsToLeft, closeTabsToRight, closeTabsSameSite, closeOldTabs, shuffleTabs, uniteDomain, isolateDomain, splitWindow, splitByDomain, stackWindows, pinCurrentTab, unpinCurrentTab, outlineBranch, type TabInfo } from "../../lib/tabs/index.ts";
   import { getPinnedTabs, getPinForTab, type PinnedTabEntry } from "../../lib/pin.ts";
   import { getArchiveCount } from "../../lib/archive.ts";
   import { search, tabsToSearchItems, searchBookmarks, searchHistory, parseCommand, type SearchResult } from "../../lib/search.ts";
   import { createTabSearch, type TabSearch } from "../../lib/tabsearch.ts";
+  import { createDebouncer } from "../../lib/debounce.ts";
   import { getAutoGroup, setAutoGroup, getAutoUngroup, setAutoUngroup, getUseRules, setUseRules, getAutoSort, setAutoSort, getAutoPinFollow, setAutoPinFollow, getAutoDiscard, setAutoDiscard, setSwitchToExisting } from "../../lib/rules.ts";
   import { matchCommands, ALL_COMMANDS, ACTION_COMMANDS, TRIAGE_COMMANDS, CATEGORY_STYLES, groupCommands, type CommandDefinition, type CommandCategory } from "../../lib/commands.ts";
   import { snapshotBeforeGroup, executeUndo, peekUndo, loadUndoStack, UNDO_KEY } from "../../lib/undo.ts";
@@ -67,7 +68,8 @@
   let fileInputEl = $state<HTMLInputElement | undefined>(undefined);
   let busy = $state(false);
   let aiProgress = $state<AIGroupProgress>(defaultProgress());
-  let searchTimer: ReturnType<typeof setTimeout> | undefined;
+  // Bookmark and history lookups: the rows under a plain query, and the /b and /h lists.
+  const lookup = createDebouncer(200);
   let pendingConfirm = $state<string | null>(null);
   let confirmTimer: ReturnType<typeof setTimeout> | undefined;
   let actionLog = $state<ActionLogEntry[]>([]);
@@ -320,6 +322,11 @@
   async function updateResults() {
     const { prefix, query: searchQuery } = parseCommand(query);
     highlightQuery = prefix ? searchQuery : query;
+    // A lookup for the previous query can only be stale now; the paths below schedule their own.
+    // Its "Searching..." goes with it, or a plain query typed over "/b foo" would keep it.
+    lookup.cancel();
+    loading = false;
+    if (prefixSource && prefixSource.prefix !== prefix) prefixSource = null;
 
     if ((query.startsWith("/") || query.startsWith("@")) && !query.includes(" ")) {
       commandHints = matchCommands(query);
@@ -334,15 +341,16 @@
 
     paletteMode = "search";
 
-    if (prefix) {
+    if (prefix === "b" || prefix === "h") {
+      lookUpSource(prefix, searchQuery);
+    } else if (prefix) {
       handlePrefixSearch(prefix, searchQuery);
     } else {
       results = tabSearch.rank(query);
 
-      clearTimeout(searchTimer);
       if (query.trim().length >= 2) {
         const capturedQuery = query;
-        searchTimer = setTimeout(async () => {
+        lookup.schedule(async () => {
           const [bookmarkResults, historyResults] = await Promise.all([
             searchBookmarks(capturedQuery, 5),
             searchHistory(capturedQuery, 5),
@@ -357,10 +365,53 @@
             ...(historyResults.length > 0 ? [{ type: "divider" as const, id: "div-history", title: "History", url: "" }, ...historyResults] : []),
           ];
           selectedIndex = firstSelectable();
-        }, 200);
+        });
       }
     }
     selectedIndex = firstSelectable();
+  }
+
+  /**
+   * /b and /h ask the browser process to search every bookmark or the whole history, and did
+   * so for each character typed. They wait for typing to settle now, on the same 200 ms
+   * debounce as the rows under a plain query, showing "Searching..." rather than the previous
+   * query's list meanwhile. Enter flushes the wait (see onkeydown), so "/b react" typed fast
+   * and entered still opens a match.
+   */
+  function lookUpSource(prefix: "b" | "h", searchQuery: string) {
+    if (!searchQuery.trim()) {
+      results = [];
+      return;
+    }
+    const capturedQuery = query;
+    loading = true;
+    lookup.schedule(async () => {
+      try {
+        const found = await (prefix === "b" ? searchBookmarks(searchQuery) : searchHistory(searchQuery));
+        if (query !== capturedQuery) return;
+        results = found;
+        selectedIndex = firstSelectable();
+      } finally {
+        if (query === capturedQuery) loading = false;
+      }
+    });
+  }
+
+  /**
+   * Reading List and recently closed hand back their whole (short) list on every call, so a
+   * keystroke only needs to re-rank what the view opened with. Fetched once per visit to the
+   * prefix, and dropped by updateResults when the query leaves it, so coming back re-reads.
+   */
+  let prefixSource: { prefix: string; rows: Promise<SearchResult[]> } | null = null;
+
+  function sourceOnce(prefix: string, load: () => Promise<SearchResult[]>): Promise<SearchResult[]> {
+    if (prefixSource?.prefix !== prefix) {
+      const rows = load();
+      prefixSource = { prefix, rows };
+      // A failed read must not stick for the rest of the visit.
+      rows.catch(() => { if (prefixSource?.rows === rows) prefixSource = null; });
+    }
+    return prefixSource!.rows;
   }
 
   async function handlePrefixSearch(prefix: string, searchQuery: string) {
@@ -381,18 +432,12 @@
       }
 
       switch (prefix) {
-        case "b": {
-          results = await searchBookmarks(searchQuery);
-          break;
-        }
-        case "h": {
-          results = await searchHistory(searchQuery);
-          break;
-        }
+        // /w and /g read the tabs this popup already loaded. /w used to call
+        // getCurrentWindowTabs() on every keystroke: tabs.query over every tab in every window
+        // plus tabGroups.query and windows.getCurrent, three IPC round-trips to keep a slice of
+        // what allTabs holds. The dashboard, @ views and plain search all work from the same load.
         case "w": {
-          const windowTabs = await getCurrentWindowTabs();
-          const items = tabsToSearchItems(windowTabs);
-          results = tabSearch.rankView("w", items, searchQuery);
+          results = tabSearch.rankView("w", allTabs.filter((t) => t.windowId === currentWindowId), searchQuery);
           break;
         }
         case "p": {
@@ -400,7 +445,7 @@
           break;
         }
         case "g": {
-          const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+          const activeTab = dashboardTabs.find((t) => t.active && t.windowId === currentWindowId);
           const activeGroupId = activeTab?.groupId ?? -1;
           const groupTabs = activeGroupId !== -1
             ? allTabs.filter((t) => t.groupId === activeGroupId)
@@ -426,16 +471,17 @@
         }
         case "rl": {
           if (!isReadingListAvailable()) { results = []; flashStatus("Reading List not available (Chrome 120+)"); break; }
-          const rlItems = await getReadingList();
-          const rlResults: SearchResult[] = rlItems.map((item, i) => ({
+          // Mapped inside the fetch, so every keystroke gets the same row objects and rankView
+          // keeps its haystack.
+          const rlResults = await sourceOnce("rl", async () => (await getReadingList()).map((item, i) => ({
             type: "bookmark" as const, id: `rl-${i}`, title: `${item.hasBeenRead ? "✓ " : ""}${item.title}`, url: item.url,
-          }));
+          })));
           results = searchQuery ? tabSearch.rankView("rl", rlResults, searchQuery) : rlResults;
           if (rlResults.length === 0) flashStatus("Reading List is empty");
           break;
         }
         case "rc": {
-          const rcItems = await getRecentlyClosed();
+          const rcItems = await sourceOnce("rc", () => getRecentlyClosed());
           results = searchQuery ? tabSearch.rankView("rc", rcItems, searchQuery) : rcItems;
           if (rcItems.length === 0) flashStatus("No recently closed tabs");
           break;
@@ -1086,6 +1132,10 @@
             handleActionCommand(prefix, searchQuery);
           } else if (paletteMode === "commands" && commandHints[selectedIndex]) {
             handleCommandSelect(commandHints[selectedIndex]);
+          } else if (prefix === "b" || prefix === "h") {
+            // The list only exists once the debounced lookup has run: without the flush, Enter
+            // inside the 200 ms after typing opened nothing, or the previous query's row.
+            void lookup.flush().then(() => { if (results[selectedIndex]) handleSelect(results[selectedIndex]); });
           } else if (results[selectedIndex]) {
             handleSelect(results[selectedIndex]);
           }
