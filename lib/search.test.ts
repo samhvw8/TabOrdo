@@ -217,6 +217,45 @@ describe("parseCommand", () => {
   });
 });
 
+// uFuzzy splits terms on ASCII letters and digits whatever its `unicode` option says, so a
+// Vietnamese needle used to reach it as its first letter alone and match every row with an h.
+describe("rankedSearch — accented and one-letter needles", () => {
+  const items = [
+    { title: "Hướng dẫn sử dụng", url: "https://docs.vn/huong-dan" },
+    { title: "Hello world", url: "https://hello.dev/" },
+    { title: "Chương 12 - Truyện", url: "https://truyen.vn/c12" },
+    { title: "Shell scripting", url: "https://bash.dev/" },
+    { title: "Hugo docs", url: "https://gohugo.io/" },
+  ];
+  const hay = buildSearchHaystack(items);
+  const titleHay = buildTitleHaystack(items);
+  const titlesFor = (q: string) => rankedSearch(hay, q, 50, undefined, titleHay).map((i) => items[i].title);
+
+  it("does not return rows that match an accented needle only on its first letter", () => {
+    const hits = titlesFor("hư");
+    expect(hits).not.toContain("Hello world");
+    expect(hits).not.toContain("Shell scripting");
+  });
+
+  it("keeps the literal matches of an accented needle first, then its folded fuzzy hits", () => {
+    expect(titlesFor("hư")).toEqual(["Hướng dẫn sử dụng", "Chương 12 - Truyện", "Hugo docs"]);
+    // "Chương" folds to "chuong", which does contain "huo".
+    expect(titlesFor("hướ")).toEqual(["Hướng dẫn sử dụng", "Chương 12 - Truyện"]);
+  });
+
+  it("still forgives a typo in an accented word", () => {
+    expect(titlesFor("huogn")).toContain("Hướng dẫn sử dụng");
+    expect(titlesFor("hướgn")).toContain("Hướng dẫn sử dụng");
+  });
+
+  it("returns exactly the rows containing a one-letter needle", () => {
+    expect([...titlesFor("h")].sort()).toEqual(
+      ["Chương 12 - Truyện", "Hello world", "Hugo docs", "Hướng dẫn sử dụng", "Shell scripting"].sort()
+    );
+    expect(titlesFor("w")).toEqual(["Hello world"]);
+  });
+});
+
 describe("rankedSearch — abbreviation and tier budget", () => {
   const items = [
     { title: "(276) I'm begging you to manage your time - YouTube", url: "https://youtube.com/watch?v=1" },

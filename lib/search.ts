@@ -174,7 +174,16 @@ export function rankedSearch(
   // Bounded by the haystack, not by `limit`, exactly as the literal tiers above are: truncating
   // to `limit` here would spend the whole quota on indices the literal tiers already claimed,
   // and dedup afterwards would leave nothing.
-  take(approximate, fuzzySearch(haystack, needle, haystack.length));
+  //
+  // uFuzzy splits terms on [^A-Za-z\d']+ even with `unicode: true`, which only adds the /u
+  // flag, so "hư" reached it as the lone term "h" and pulled in every tab with an h: 861 rows
+  // at 1000 tabs that matched nothing the user typed. Every haystack entry already carries a
+  // diacritic-stripped copy, so fold the needle to meet it. A one-letter needle is skipped
+  // outright: any entry uFuzzy matches contains that letter, which the substring tier has
+  // already claimed (a lone "ư" folds to "u", and those extra hits are the junk above). At
+  // 1000 tabs the call found nothing new for 0.98 ms of a 1.69 ms keystroke.
+  const fuzzyNeedle = stripDiacritics(needle);
+  if (fuzzyNeedle.trim().length >= 2) take(approximate, fuzzySearch(haystack, fuzzyNeedle, haystack.length));
   take(approximate, subsequenceSearch(titleHay, needle, titleHay.length));
   take(approximate, subsequenceSearch(haystack, needle, haystack.length));
 

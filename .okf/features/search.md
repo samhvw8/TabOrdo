@@ -4,12 +4,12 @@ title: Ranked search
 description: How lib/search.ts ranks tabs for the palette (literal tiers before approximate ones, title over URL, pinned and current-window then recency), plus regex, pinyin, Vietnamese, the non-tab sources, and the caching that keeps typing fast.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/search.ts
 tags: [search, palette, performance, i18n]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-17T00:16:05Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-17T09:41:15Z }
 sources:
   - id: search-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/search.ts
     title: Search engine
-    last_modified: 2026-08-21
+    last_modified: 2026-09-17
   - id: pinyin-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/pinyin.ts
     title: Pinyin variants
@@ -33,7 +33,7 @@ sources:
   - id: search-test
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/search.test.ts
     title: Search tests
-    last_modified: 2026-08-02
+    last_modified: 2026-09-17
   - id: pinyin-test
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/pinyin.test.ts
     title: Pinyin and unicode query tests
@@ -88,6 +88,7 @@ Group titles sit in both haystacks, so a group-name hit ranks as a title hit, an
 - The popup sets priority to 1 for Chrome-pinned tabs and tabs in the current window, and recency to `lastAccessed` except the active tab, which gets 0.[^popup-app]
 - Empty needle: every tab by recency. With the active tab sunk, row 0 is the previous tab, so `Cmd+E` then `Enter` works like alt-tab.[^popup-app][^changelog]
 - uFuzzy runs with `intraMode: 1` (one error per term), `intraIns: 1`, `interIns: 3`, `unicode: true`. It cannot turn `yt` into `youtube` (two insertions), which is why the subsequence tier exists; needles under 2 characters skip it.[^search-ts]
+- uFuzzy splits terms at every character that is not an ASCII letter, digit or apostrophe, whatever `unicode` says (that option only adds the `/u` flag), so it gets the needle with diacritics stripped, and is skipped when that folded needle is under 2 characters. Before, `hư` reached it as the term `h` and matched all 1000 tabs of a test fixture; now 477 rows match. A one-letter needle gained nothing from it, because the substring tier already holds every row containing the letter.[^search-ts][^search-test]
 - Highlighting (`matchRanges`) runs on the displayed title, not the haystack: a contiguous match, else a greedy in-order match, else nothing.[^search-ts]
 
 # Regex, CJK, pinyin, Vietnamese
@@ -95,7 +96,7 @@ Group titles sit in both haystacks, so a group-name hit ranks as a title hit, an
 - **`/re`**: `search(…, "regex", 50, recency)`, case-insensitive, over the full haystack. Patterns over 100 characters, nested quantifiers (`hasNestedQuantifier`, a best-effort heuristic from `lib/rules.ts`) and invalid patterns return nothing; a 50 ms deadline is checked between entries.[^search-ts][^rules-ts][^popup-app]
 - **CJK needles** (U+3400–4DBF, U+4E00–9FFF) skip every tier but substring, because uFuzzy's term matching only handles space-delimited scripts.[^pinyin-ts][^search-ts]
 - **Pinyin** (tiny-pinyin) adds spaced syllables, the joined form and initials for title and group title only. "知乎 - 首页" gains `zhi hu shou ye zhihushouye zhsy`, so `zhihu` and `zh` both find it.[^pinyin-ts]
-- **Vietnamese**: `stripDiacritics` applies NFD, drops U+0300–036F and maps `đ`/`Đ` to `d`. Only the haystack is folded, never the needle; `tieng viet` and `tiếng` both find "Tiếng Việt".[^search-ts][^pinyin-test]
+- **Vietnamese**: `stripDiacritics` applies NFD, drops U+0300–036F and maps `đ`/`Đ` to `d`. The literal and subsequence tiers match the needle as typed against a haystack that holds both forms; only the uFuzzy tier folds the needle too. `tieng viet` and `tiếng` both find "Tiếng Việt", and `hư` also fuzzy-matches ASCII rows containing `hu` ("Hugo", "github").[^search-ts][^pinyin-test][^search-test]
 
 # Non-tab sources
 
@@ -128,7 +129,7 @@ The debounced merge drops its result if the query changed meanwhile, and re-rank
 
 | File | Guards |
 |------|--------|
-| `lib/search.test.ts` | Tier order, title over URL, priority boost, abbreviations, reserved approximate budget, `parseCommand`, regex ReDoS guard[^search-test] |
+| `lib/search.test.ts` | Tier order, title over URL, priority boost, abbreviations, reserved approximate budget, accented and one-letter needles, `parseCommand`, regex ReDoS guard[^search-test] |
 | `lib/pinyin.test.ts` | Pinyin variants, CJK queries, Vietnamese with and without diacritics[^pinyin-test] |
 | `lib/highlight.test.ts` | `matchRanges` and `highlightSegments`[^highlight-test] |
 
