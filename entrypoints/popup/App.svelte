@@ -6,7 +6,7 @@
   import { search, rankedSearch, tabsToSearchItems, searchBookmarks, searchHistory, parseCommand, buildSearchHaystack, buildTitleHaystack, type SearchResult } from "../../lib/search.ts";
   import { getAutoGroup, setAutoGroup, getAutoUngroup, setAutoUngroup, getUseRules, setUseRules, getAutoSort, setAutoSort, getAutoPinFollow, setAutoPinFollow, getAutoDiscard, setAutoDiscard, setSwitchToExisting } from "../../lib/rules.ts";
   import { matchCommands, ALL_COMMANDS, ACTION_COMMANDS, TRIAGE_COMMANDS, CATEGORY_STYLES, groupCommands, type CommandDefinition, type CommandCategory } from "../../lib/commands.ts";
-  import { snapshotBeforeGroup, executeUndo, peekUndo, loadUndoStack, UNDO_KEY } from "../../lib/undo.ts";
+  import { snapshotBeforeGroup, executeUndo, peekUndo, loadUndoStack, touchesUndoStack } from "../../lib/undo.ts";
   import { focusMode, unfocusMode, hasSavedWorkspace, exportTabsToFile, loadTabsFromText } from "../../lib/workspace.ts";
   import { addTabsToReadingList, isReadingListAvailable, getReadingList } from "../../lib/readinglist.ts";
   import { getRecentlyClosed } from "../../lib/sessions.ts";
@@ -971,9 +971,11 @@
           if (p.status === "done") loadTabs();
         }
       }
-      if (changes[UNDO_KEY]) {
-        const next = changes[UNDO_KEY].newValue;
-        canUndo = Array.isArray(next) && next.length > 0;
+      // Another surface pushed or popped. The reload lists key names and reads only metadata
+      // this realm hasn't seen, never a snapshot. The mirror has to follow, not just the button:
+      // every other `canUndo = !!peekUndo()` in this file reads it.
+      if (touchesUndoStack(changes)) {
+        void loadUndoStack().then(() => { canUndo = !!peekUndo(); });
       }
     };
     chrome.storage.onChanged.addListener(listener);

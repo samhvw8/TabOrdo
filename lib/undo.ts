@@ -32,44 +32,122 @@ interface GroupAssignment {
   index?: number;
 }
 
-export const UNDO_KEY = "tabOrdo_undoStack";
-// In-memory mirror of the persisted stack, so peekUndo can stay synchronous for the UI's
-// `canUndo` binding. Every mutation re-reads storage first — see syncFromStorage.
-const stack: UndoEntry[] = [];
+// Storage layout: one key per entry, and a small metadata key beside it.
+//
+// The stack used to be ONE array under `tabOrdo_undoStack`, and every push was a
+// read-modify-write of all of it. A group snapshot covers every unpinned tab, so with twenty of
+// them at a thousand tabs each push read 1.2 MB, wrote 1.2 MB, and storage.onChanged handed old
+// AND new — 2.4 MB — to the service worker and every open popup and side panel. A single-tab
+// close still paid ~600 KB each way, and every popup open read the whole stack just to decide
+// whether to light the Undo button.
+//
+// So each entry has its own pair of keys, written together in one set():
+//   tabOrdo_undo:<id>      the entry, snapshot and all. Read only by popUndo, and only the top one.
+//   tabOrdo_undoMeta:<id>  { type, label, timestamp }. All the UI's mirror ever holds.
+// `<id>` leads with a zero-padded timestamp, so key order is stack order. A realm always pushes
+// above the newest entry it has seen; two surfaces pushing in the same millisecond order
+// arbitrarily, and both entries survive. Entries are found by name with getKeys, which returns
+// no values, and evicted with remove. As bulklock.ts found for its leases, writers that only add
+// or remove their own keys have no shared value to lose an update on: two surfaces pushing back
+// to back can no longer drop each other's entry, which the old layout needed a re-read before
+// every write to (mostly) prevent.
+const ENTRY_PREFIX = "tabOrdo_undo:";
+const META_PREFIX = "tabOrdo_undoMeta:";
+/** The single-array layout described above. Only ever read to migrate it. */
+const LEGACY_KEY = "tabOrdo_undoStack";
 const MAX_STACK = 20;
 
-/** Throws on a failed write. pushUndo's contract is durability, so its callers have to be
- *  able to see the failure and abandon the destructive action they were about to take. */
-async function persistStack(): Promise<void> {
-  await chrome.storage.session?.set({ [UNDO_KEY]: [...stack] });
+/** An entry without its snapshot: enough for `canUndo`, and a few hundred bytes for all twenty. */
+export interface UndoMeta {
+  /** Storage id. Ids sort oldest first. */
+  id: string;
+  type: string;
+  label: string;
+  timestamp: number;
+}
+
+// Metadata of the persisted stack, oldest first, so peekUndo can stay synchronous for the UI's
+// `canUndo` binding. The popup and the side panel are the same component in two realms, each
+// with its own mirror over one persisted stack, so every mutation refreshes it first.
+let mirror: UndoMeta[] = [];
+
+function newEntryId(): string {
+  // Above the newest entry this realm knows of, so a push lands on top even within the same
+  // millisecond as the last one, or after the clock has stepped back.
+  const newest = mirror.length > 0 ? Number(mirror[mirror.length - 1].id.slice(0, 16)) || 0 : 0;
+  const stamp = Math.max(Date.now(), newest + 1);
+  return `${String(stamp).padStart(16, "0")}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/** Key names in the session area, plus the values when getting the names meant reading them. */
+async function listSession(): Promise<{ names: string[]; values: Record<string, unknown> | null }> {
+  const area = chrome.storage.session;
+  const getKeys = (area as { getKeys?: () => Promise<string[]> }).getKeys;
+  // getKeys is Chrome 130+. Older builds read the whole area, as bulklock.ts does: correct, and
+  // no more expensive than the single-array layout was on every build.
+  if (typeof getKeys !== "function") {
+    const values = await area.get(null);
+    return { names: Object.keys(values), values };
+  }
+  return { names: await getKeys.call(area), values: null };
 }
 
 /**
- * Refresh the mirror from storage before mutating it. The popup and the side panel are the
- * same component in two realms, each with its own module instance but one shared persisted
- * stack — pushing onto a mirror loaded at mount time would overwrite whatever the other
- * surface recorded in the meantime.
+ * Move a stack left by the single-array layout onto per-entry keys, then delete it. Chrome clears
+ * the session area when an extension updates or reloads, so in practice there is nothing to find,
+ * and looking costs nothing: it is one name in a listing every refresh makes anyway. The ids are
+ * fixed by position and sort before any timestamped id, so two realms migrating at once write the
+ * same keys, and the old stack stays under everything pushed since.
  */
-async function syncFromStorage(): Promise<void> {
-  try {
-    const data = await chrome.storage.session.get(UNDO_KEY);
-    const loaded = data[UNDO_KEY];
-    if (Array.isArray(loaded)) {
-      stack.length = 0;
-      stack.push(...loaded);
-    }
-  } catch {}
+async function migrateLegacy(values: Record<string, unknown> | null): Promise<void> {
+  const area = chrome.storage.session;
+  const legacy = values ? values[LEGACY_KEY] : (await area.get(LEGACY_KEY))[LEGACY_KEY];
+  const items: Record<string, unknown> = {};
+  if (Array.isArray(legacy)) {
+    legacy.slice(-MAX_STACK).forEach((entry: UndoEntry, i) => {
+      if (!entry || typeof entry !== "object") return;
+      const id = `${String(i).padStart(16, "0")}-legacy`;
+      items[ENTRY_PREFIX + id] = entry;
+      items[META_PREFIX + id] = { type: entry.type, label: entry.label, timestamp: entry.timestamp };
+    });
+  }
+  if (Object.keys(items).length > 0) await area.set(items);
+  await area.remove(LEGACY_KEY);
 }
+
+/** Rebuild the mirror from key names, reading only metadata this realm has not seen yet. */
+async function refreshMirror(): Promise<void> {
+  let { names, values } = await listSession();
+  if (names.includes(LEGACY_KEY)) {
+    await migrateLegacy(values);
+    ({ names, values } = await listSession());
+  }
+  const ids = names
+    .filter((k) => k.startsWith(META_PREFIX))
+    .map((k) => k.slice(META_PREFIX.length))
+    .sort();
+  const known = new Map(mirror.map((m) => [m.id, m]));
+  const unseen = ids.filter((id) => !known.has(id));
+  if (unseen.length > 0) {
+    const got = values ? values : await chrome.storage.session.get(unseen.map((id) => META_PREFIX + id));
+    for (const id of unseen) {
+      const m = got[META_PREFIX + id] as Omit<UndoMeta, "id"> | undefined;
+      if (m) known.set(id, { id, type: m.type, label: m.label, timestamp: m.timestamp });
+    }
+  }
+  mirror = ids.flatMap((id) => known.get(id) ?? []);
+}
+
+// Pushes, pops and reloads in one realm run one at a time. Storage writes no longer race — each
+// entry has its own keys — but mirror refreshes still could: a slow one landing after a newer
+// one would roll `canUndo` back to a stack that no longer exists.
+let writeChain: Promise<unknown> = Promise.resolve();
 
 export async function loadUndoStack(): Promise<void> {
-  await syncFromStorage();
+  const run = writeChain.then(refreshMirror).catch(() => {});
+  writeChain = run;
+  return run;
 }
-
-// Every push is a read-modify-write of one shared array, and syncFromStorage rewrites it in
-// place. Serializing them keeps two snapshots taken back to back from racing, where the
-// second sync lands before the first write and silently drops it — same shape as the config
-// write chain in rules.ts.
-let writeChain: Promise<unknown> = Promise.resolve();
 
 /**
  * Await this before doing the thing being undone. The write has to be durable while the
@@ -79,30 +157,68 @@ let writeChain: Promise<unknown> = Promise.resolve();
  */
 export async function pushUndo(entry: UndoEntry): Promise<void> {
   const run = writeChain.then(async () => {
-    await syncFromStorage();
-    stack.push(entry);
-    if (stack.length > MAX_STACK) stack.shift();
-    await persistStack();
+    const id = newEntryId();
+    const meta = { type: entry.type, label: entry.label, timestamp: entry.timestamp };
+    // One set() for both keys, so no surface ever lists an entry whose snapshot is not there.
+    await chrome.storage.session?.set({ [ENTRY_PREFIX + id]: entry, [META_PREFIX + id]: meta });
+    mirror = [...mirror, { id, ...meta }];
+    // The snapshot is durable from here on. Eviction is housekeeping, and failing it must not
+    // fail the push a caller is waiting on before it closes anything.
+    try {
+      await refreshMirror();
+      const evicted = mirror.slice(0, Math.max(0, mirror.length - MAX_STACK));
+      if (evicted.length > 0) {
+        await chrome.storage.session.remove(evicted.flatMap((m) => [ENTRY_PREFIX + m.id, META_PREFIX + m.id]));
+        mirror = mirror.slice(evicted.length);
+      }
+    } catch {}
   });
   writeChain = run.catch(() => {});
   return run;
 }
 
-export function peekUndo(): UndoEntry | null {
-  return stack.length > 0 ? stack[stack.length - 1] : null;
+/** The top entry's metadata. Synchronous, from the mirror; the snapshot itself stays in storage. */
+export function peekUndo(): UndoMeta | null {
+  return mirror.length > 0 ? mirror[mirror.length - 1] : null;
+}
+
+/** The top entry with its snapshot. Reads that one payload. */
+export async function peekUndoEntry(): Promise<UndoEntry | null> {
+  await loadUndoStack();
+  const top = peekUndo();
+  if (!top) return null;
+  const key = ENTRY_PREFIX + top.id;
+  return ((await chrome.storage.session.get(key))[key] as UndoEntry | undefined) ?? null;
 }
 
 export async function popUndo(): Promise<UndoEntry | null> {
-  await syncFromStorage();
-  const entry = stack.pop() || null;
-  // Survivable here, unlike on push: the entry is already out of the mirror and the undo it
-  // drives runs either way. Failing the pop would only cost the user their undo.
-  await persistStack().catch(() => {});
-  return entry;
+  const run = writeChain.then(async () => {
+    await refreshMirror().catch(() => {});
+    while (mirror.length > 0) {
+      const top = mirror[mirror.length - 1];
+      const key = ENTRY_PREFIX + top.id;
+      const entry = (await chrome.storage.session.get(key))[key] as UndoEntry | undefined;
+      mirror = mirror.slice(0, -1);
+      // Survivable here, unlike on push: the entry is already out of the mirror and the undo it
+      // drives runs either way. Failing the pop would only cost the user their undo.
+      await chrome.storage.session.remove([key, META_PREFIX + top.id]).catch(() => {});
+      // Missing means the other surface popped it between our listing and this read: take the
+      // one under it rather than report an empty stack.
+      if (entry) return entry;
+    }
+    return null;
+  });
+  writeChain = run.catch(() => {});
+  return run;
 }
 
 export function undoStackSize(): number {
-  return stack.length;
+  return mirror.length;
+}
+
+/** Whether a storage.onChanged batch touched the undo stack, so a surface should reload its mirror. */
+export function touchesUndoStack(changes: Record<string, unknown>): boolean {
+  return Object.keys(changes).some((k) => k.startsWith(META_PREFIX) || k === LEGACY_KEY);
 }
 
 /**
@@ -265,41 +381,20 @@ export async function executeUndo(): Promise<string> {
       return `Reopened ${reopened} tab(s)`;
     }
     case "group": {
-      const assignments = entry.data as GroupAssignment[];
-      const currentTabs = await chrome.tabs.query({});
-      const currentIds = new Set(currentTabs.map((t) => t.id));
+      // Snapshot order. Within one window that is strip order; entries from before indexes were
+      // recorded keep the order they were recorded in (the sort is stable).
+      const assignments = (entry.data as GroupAssignment[])
+        .slice()
+        .sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+      let currentTabs = await chrome.tabs.query({});
+      let byTabId = new Map(currentTabs.map((t) => [t.id!, t]));
       const snapshotIds = new Set(assignments.map((a) => a.tabId));
-
-      // Only tabs the snapshot actually covers. Ungrouping everything currently grouped also
-      // dissolved groups the user built *after* the snapshot, in windows this undo never
-      // touched — an undo that destroys unrelated state isn't an undo.
-      const toUngroup = currentTabs.filter((t) => t.groupId !== -1 && snapshotIds.has(t.id!));
-      if (toUngroup.length > 0) {
-        await chrome.tabs.ungroup(toUngroup.map((t) => t.id!)).catch(() => {});
-      }
-
-      // Put tabs back in the window they came from before regrouping. /aigroup relocates tabs
-      // across windows, and chrome.tabs.group rejects ids spanning windows anyway, so this has
-      // to happen first. Ungrouping above frees them from their current group's block.
       const openWindows = new Set<number>();
       try {
         for (const w of await chrome.windows.getAll()) {
           if (w.id !== undefined) openWindows.add(w.id);
         }
       } catch {}
-      const byTabId = new Map(currentTabs.map((t) => [t.id!, t]));
-      const relocations = assignments
-        .filter((a) => a.windowId !== undefined && currentIds.has(a.tabId) && openWindows.has(a.windowId))
-        .filter((a) => {
-          const t = byTabId.get(a.tabId);
-          return !!t && (t.windowId !== a.windowId || t.index !== a.index);
-        })
-        .sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
-      for (const a of relocations) {
-        await chrome.tabs
-          .move(a.tabId, { windowId: a.windowId!, index: a.index ?? -1 })
-          .catch(() => {});
-      }
 
       // Bucket by window as well as title/color. Keying on title:color alone folded two
       // same-named groups living in different windows into one bucket, and the resulting
@@ -310,9 +405,33 @@ export async function executeUndo(): Promise<string> {
           ? a.windowId
           : byTabId.get(a.tabId)?.windowId;
 
+      // Groups the action never touched keep their id and collapsed state. Undo used to dissolve
+      // and rebuild every group the snapshot named: after a /group that changed 8 of 63 groups
+      // it rebuilt all 63, and every one came back expanded.
+      const intact = findIntactGroups(assignments, currentTabs, windowFor);
+
+      // Only tabs the snapshot actually covers. Ungrouping everything currently grouped also
+      // dissolved groups the user built *after* the snapshot, in windows this undo never
+      // touched — an undo that destroys unrelated state isn't an undo.
+      const toUngroup = currentTabs.filter(
+        (t) => t.groupId !== -1 && snapshotIds.has(t.id!) && !intact.has(t.groupId)
+      );
+      if (toUngroup.length > 0) {
+        await chrome.tabs.ungroup(toUngroup.map((t) => t.id!)).catch(() => {});
+        // Chrome moves a tab it ungroups out to the edge of its group, so the strip the moves
+        // below are planned against has to be read again.
+        currentTabs = await chrome.tabs.query({});
+        byTabId = new Map(currentTabs.map((t) => [t.id!, t]));
+      }
+
+      // Put tabs back in the window and order they came from before regrouping. /aigroup
+      // relocates tabs across windows, and chrome.tabs.group rejects ids spanning windows anyway,
+      // so this has to happen first. Ungrouping above frees them from their current group's block.
+      await restoreOrder(assignments, intact, currentTabs, openWindows);
+
       const byGroup = new Map<string, { title: string; color: string; windowId?: number; tabIds: number[] }>();
       for (const a of assignments) {
-        if (a.groupId === -1 || !currentIds.has(a.tabId)) continue;
+        if (a.groupId === -1 || intact.has(a.groupId) || !byTabId.has(a.tabId)) continue;
         const windowId = windowFor(a);
         const key = `${windowId ?? "?"}:${a.groupTitle || ""}:${a.groupColor || ""}`;
         if (!byGroup.has(key)) {
@@ -339,6 +458,21 @@ export async function executeUndo(): Promise<string> {
           failed++;
         }
       }
+      // A group left standing may still have been renamed (/branch, /aigroup). Rebuilding it
+      // used to restore the name as a side effect; now that it isn't rebuilt, restore it here.
+      if (intact.size > 0) {
+        const liveGroups = new Map((await chrome.tabGroups.query({}).catch(() => [])).map((g) => [g.id, g]));
+        for (const [gid, [a]] of intact) {
+          const g = liveGroups.get(gid);
+          if (!g || ((g.title || "") === (a.groupTitle || "") && (g.color || "") === (a.groupColor || ""))) continue;
+          await chrome.tabGroups
+            .update(gid, {
+              title: a.groupTitle || "",
+              ...(a.groupColor ? { color: a.groupColor as chrome.tabGroups.ColorEnum } : {}),
+            })
+            .catch(() => {});
+        }
+      }
       if (failed > 0) {
         return `Restored previous group state — ${failed} group(s) could not be rebuilt`;
       }
@@ -346,5 +480,278 @@ export async function executeUndo(): Promise<string> {
     }
     default:
       return "Unknown undo type";
+  }
+}
+
+/**
+ * Snapshot groups whose live group is exactly what was recorded: the same tabs, in the same
+ * order, in the window the snapshot puts them in, still in one contiguous block. Keyed by group
+ * id, members in snapshot order. Tabs closed since don't count against a group — there is
+ * nothing to put back — but a tab that joined it since does.
+ */
+function findIntactGroups(
+  assignments: GroupAssignment[],
+  tabs: chrome.tabs.Tab[],
+  windowFor: (a: GroupAssignment) => number | undefined
+): Map<number, GroupAssignment[]> {
+  const open = new Set(tabs.map((t) => t.id));
+  const recorded = new Map<number, GroupAssignment[]>();
+  for (const a of assignments) {
+    if (a.groupId === -1 || !open.has(a.tabId)) continue;
+    const list = recorded.get(a.groupId);
+    if (list) list.push(a);
+    else recorded.set(a.groupId, [a]);
+  }
+  const live = new Map<number, chrome.tabs.Tab[]>();
+  for (const t of tabs) {
+    if (t.groupId === -1) continue;
+    const list = live.get(t.groupId);
+    if (list) list.push(t);
+    else live.set(t.groupId, [t]);
+  }
+  const intact = new Map<number, GroupAssignment[]>();
+  for (const [groupId, members] of recorded) {
+    const now = (live.get(groupId) ?? []).sort((a, b) => a.index - b.index);
+    const windowId = windowFor(members[0]);
+    const same =
+      now.length === members.length &&
+      now.every(
+        (t, i) =>
+          t.id === members[i].tabId &&
+          t.windowId === windowId &&
+          (i === 0 || t.index === now[i - 1].index + 1)
+      );
+    if (same) intact.set(groupId, members);
+  }
+  return intact;
+}
+
+// Restoring the strip order.
+//
+// This used to be one awaited tabs.move per displaced tab: 971 round-trips to undo a /shuffle at
+// 1000 tabs, three seconds at a couple of milliseconds each. It is now planned against a model of
+// the strip, and each window gets whichever of two plans needs fewer calls. What the plans may
+// ask of Chrome is set by how Chromium actually moves tabs:
+//
+//  - tabs.move places an id list "one after another" (TabsMoveFunction::MoveTab): each tab goes
+//    to `index`, then index+1. A batch is only exact when every tab arrives from the right of
+//    its slot or from another window. A tab travelling rightward shifts the tabs before its
+//    slot left under it, so rightward moves go one per call.
+//  - A tab moved away from the rest of its group leaves the group, and a tab dropped between two
+//    tabs of one group joins it (TabStripModel::GetGroupToAssign). So a group left intact moves
+//    whole, with tabGroups.move — whose index is the group's first tab after the move, either
+//    direction — and every tab lands right after a tab the snapshot put before it, which is never
+//    the inside of a group. A one-tab group keeps its group wherever it lands, so it moves as a tab.
+//  - tabs.ungroup has already run for everything not intact, so the rest move ungrouped.
+
+/** What moves as one piece: a tab, or an intact group of two or more (which has `groupId`). */
+interface Unit {
+  ids: number[];
+  groupId?: number;
+}
+
+/** One planned chrome call. `batchable`: every tab in it arrives from its right or another window. */
+interface Move extends Unit {
+  index: number;
+  batchable: boolean;
+  /** Already at `index`. Planned only so the batch around it stays one call. */
+  settled?: boolean;
+}
+
+/** Each window's tab ids in strip order, pinned included, plus where every tab is. */
+interface StripModel {
+  strips: Map<number, number[]>;
+  windowOf: Map<number, number>;
+  pinned: Set<number>;
+}
+
+function modelStrips(tabs: chrome.tabs.Tab[]): StripModel {
+  const m: StripModel = { strips: new Map(), windowOf: new Map(), pinned: new Set() };
+  for (const t of [...tabs].sort((a, b) => a.index - b.index)) {
+    const strip = m.strips.get(t.windowId);
+    if (strip) strip.push(t.id!);
+    else m.strips.set(t.windowId, [t.id!]);
+    m.windowOf.set(t.id!, t.windowId);
+    if (t.pinned) m.pinned.add(t.id!);
+  }
+  return m;
+}
+
+const cloneModel = (m: StripModel): StripModel => ({
+  strips: new Map([...m.strips].map(([w, ids]) => [w, [...ids]])),
+  windowOf: new Map(m.windowOf),
+  pinned: m.pinned,
+});
+
+function stripOf(m: StripModel, windowId: number): number[] {
+  let strip = m.strips.get(windowId);
+  if (!strip) m.strips.set(windowId, (strip = []));
+  return strip;
+}
+
+/** Lift `ids` out of wherever they are and insert them at `index` of the window's strip. */
+function relocate(m: StripModel, ids: number[], windowId: number, index: number): void {
+  for (const id of ids) {
+    const from = stripOf(m, m.windowOf.get(id)!);
+    from.splice(from.indexOf(id), 1);
+    m.windowOf.set(id, windowId);
+  }
+  stripOf(m, windowId).splice(index, 0, ...ids);
+}
+
+const firstUnpinned = (m: StripModel, windowId: number) =>
+  stripOf(m, windowId).filter((id) => m.pinned.has(id)).length;
+
+/**
+ * Walk the snapshot order left to right, pulling each piece to the cursor unless it is already
+ * there. Every move is leftward or from another window, so consecutive tabs batch: a /shuffle
+ * comes back in one call.
+ */
+function planFromFront(m: StripModel, windowId: number, units: Unit[]): Move[] {
+  const moves: Move[] = [];
+  let cursor = firstUnpinned(m, windowId);
+  for (const u of units) {
+    const last = moves[moves.length - 1];
+    if (stripOf(m, windowId)[cursor] !== u.ids[0]) {
+      moves.push({ ...u, index: cursor, batchable: true });
+      relocate(m, u.ids, windowId, cursor);
+    } else if (u.groupId === undefined && last && last.groupId === undefined && last.index + last.ids.length === cursor) {
+      // A tab that happens to be in place mid-batch rides along: Chrome skips a tab already at
+      // its index, and leaving it out would split the batch in two calls around it.
+      moves.push({ ...u, index: cursor, batchable: true, settled: true });
+    }
+    cursor += u.ids.length;
+  }
+  return moves;
+}
+
+/**
+ * Leave the longest run already in snapshot order where it is and put each other piece right
+ * after its snapshot predecessor: a handful of tabs pulled out of place come back in a handful
+ * of calls, however long the strip around them.
+ */
+function planAroundLongestRun(m: StripModel, windowId: number, units: Unit[]): Move[] {
+  const rank = new Map(units.map((u, i) => [u.ids[0], i]));
+  const anchors = longestIncreasing(stripOf(m, windowId).flatMap((id) => rank.get(id) ?? []));
+  const moves: Move[] = [];
+  let prev: Unit | undefined;
+  for (const [i, u] of units.entries()) {
+    if (!anchors.has(i)) {
+      const strip = stripOf(m, windowId);
+      const from = m.windowOf.get(u.ids[0]) === windowId ? strip.indexOf(u.ids[0]) : -1;
+      let index = firstUnpinned(m, windowId);
+      if (prev) {
+        const after = strip.indexOf(prev.ids[prev.ids.length - 1]);
+        // `index` is where the piece sits once lifted out, and lifting it from the left of its
+        // predecessor shifts the predecessor left too.
+        index = from !== -1 && from < after ? after + 1 - u.ids.length : after + 1;
+      }
+      if (from !== index) {
+        moves.push({ ...u, index, batchable: from === -1 || from > index });
+        relocate(m, u.ids, windowId, index);
+      }
+    }
+    prev = u;
+  }
+  return moves;
+}
+
+/** Values of one longest strictly increasing subsequence. */
+function longestIncreasing(seq: number[]): Set<number> {
+  const tails: number[] = [];
+  const back: number[] = [];
+  for (let i = 0; i < seq.length; i++) {
+    let lo = 0;
+    let hi = tails.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (seq[tails[mid]] < seq[i]) lo = mid + 1;
+      else hi = mid;
+    }
+    back[i] = lo > 0 ? tails[lo - 1] : -1;
+    tails[lo] = i;
+  }
+  const out = new Set<number>();
+  for (let i = tails.length > 0 ? tails[tails.length - 1] : -1; i !== -1; i = back[i]) out.add(seq[i]);
+  return out;
+}
+
+/** Fold consecutive single-tab moves that land side by side, all arriving from the right, into one call. */
+function toCalls(moves: Move[]): Move[] {
+  const calls: Move[] = [];
+  // Settled tabs held back until a real move continues the batch past them; a batch never ends on one.
+  let riders: number[] = [];
+  for (const mv of moves) {
+    const last = calls[calls.length - 1];
+    const joins =
+      !!last &&
+      last.groupId === undefined &&
+      mv.groupId === undefined &&
+      last.batchable &&
+      mv.batchable &&
+      mv.index === last.index + last.ids.length + riders.length;
+    if (mv.settled) {
+      if (joins) riders.push(...mv.ids);
+      continue;
+    }
+    if (joins) last.ids = [...last.ids, ...riders, ...mv.ids];
+    else calls.push({ ...mv, ids: [...mv.ids] });
+    riders = [];
+  }
+  return calls;
+}
+
+async function restoreOrder(
+  assignments: GroupAssignment[],
+  intact: Map<number, GroupAssignment[]>,
+  tabs: chrome.tabs.Tab[],
+  openWindows: Set<number>
+): Promise<void> {
+  const live = new Map(tabs.map((t) => [t.id!, t]));
+  // The pieces each window should hold, in snapshot order. Entries from before windows were
+  // recorded aren't relocated, a tab whose window has closed stays where it is, and a tab
+  // pinned since belongs to the pinned block, where Chrome won't let an unpinned order reach.
+  const targets = new Map<number, Unit[]>();
+  const placed = new Set<number>();
+  for (const a of assignments) {
+    const t = live.get(a.tabId);
+    if (a.windowId === undefined || !openWindows.has(a.windowId) || !t || t.pinned) continue;
+    let units = targets.get(a.windowId);
+    if (!units) targets.set(a.windowId, (units = []));
+    const group = intact.get(a.groupId);
+    if (!group) {
+      units.push({ ids: [a.tabId] });
+    } else if (!placed.has(a.groupId)) {
+      placed.add(a.groupId);
+      const ids = group.map((g) => g.tabId);
+      units.push(ids.length > 1 ? { ids, groupId: a.groupId } : { ids });
+    }
+  }
+
+  let model = modelStrips(tabs);
+  for (const [windowId, units] of [...targets].sort(([a], [b]) => a - b)) {
+    const front = cloneModel(model);
+    const around = cloneModel(model);
+    const a = toCalls(planFromFront(front, windowId, units));
+    const b = toCalls(planAroundLongestRun(around, windowId, units));
+    const moved = (calls: Move[]) => calls.reduce((n, c) => n + c.ids.length, 0);
+    const useB = b.length < a.length || (b.length === a.length && moved(b) <= moved(a));
+    model = useB ? around : front;
+    for (const call of useB ? b : a) {
+      try {
+        if (call.groupId !== undefined) await chrome.tabGroups.move(call.groupId, { index: call.index });
+        else await chrome.tabs.move(call.ids, { windowId, index: call.index });
+      } catch (e) {
+        // Every later index in this window was computed against a strip this call didn't produce.
+        // Leave the window as it is and plan the next one against the strip Chrome reports.
+        console.warn("[TabOrdo] undo: could not restore tab order", e);
+        try {
+          model = modelStrips(await chrome.tabs.query({}));
+        } catch {
+          return;
+        }
+        break;
+      }
+    }
   }
 }

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { installChromeStub, type ChromeStub } from "./testing/chrome-stub.ts";
-import { popUndo, peekUndo, executeUndo } from "./undo.ts";
+import { popUndo, peekUndo, peekUndoEntry, executeUndo } from "./undo.ts";
 import { getArchive } from "./archive.ts";
 import { runAction, ACTION_HANDLERS, mergeStatus, type ActionContext } from "./actions.ts";
 import { ACTION_COMMANDS } from "./commands.ts";
@@ -131,7 +131,7 @@ describe("/archive", () => {
   // older entry happened to be on the stack.
   it("snapshots the close so undo can bring the tabs back", async () => {
     await runAction("archive", ctx({ matchingTabs: [asResult({ id: 2, url: "https://b.com", title: "B" })] }));
-    const top = peekUndo();
+    const top = await peekUndoEntry();
     expect(top?.type).toBe("close");
     expect((top?.data as { url: string }[]).map((d) => d.url)).toEqual(["https://b.com"]);
   });
@@ -596,7 +596,7 @@ describe("/branch and /branchup", () => {
 
     expect(stub.openTabs.find((t) => t.id === 4)!.windowId).toBe(1); // the move did land
     // UndoEntry.data is `unknown`; the "group" entries are GroupAssignment[], which isn't exported.
-    const data = peekUndo()?.data as { tabId: number; windowId?: number }[] | undefined;
+    const data = (await peekUndoEntry())?.data as { tabId: number; windowId?: number }[] | undefined;
     expect(data?.find((d) => d.tabId === 4)?.windowId).toBe(2); // and undo can reverse it
   });
 

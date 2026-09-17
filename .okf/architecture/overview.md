@@ -3,7 +3,7 @@ type: Architecture
 title: Architecture overview
 description: How TabOrdo's MV3 entrypoints, lib modules, command dispatch and storage areas fit together, and which realm owns what.
 tags: [architecture, mv3, storage, realms]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-17T00:16:05Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-17T09:52:34Z }
 sources:
   - id: wxt-config
     resource: https://github.com/samhvw8/TabOrdo/blob/main/wxt.config.ts
@@ -83,7 +83,7 @@ Every background listener is registered through `register()`, so one throwing re
 | Area | Keys | Why this area |
 |---|---|---|
 | `chrome.storage.local` | `rulesConfig`, `pinnedTabs`, `pinnedGroups`, `tabOrdo_archive`, `tabOrdo_archiveCount`, `tabOrdo_actionLog`, `tabOrdo_workspaces`, and popup prefs `collapsedGroups`, `dashboardActionIds`, `onboardingDismissed` | User data and settings that must survive a browser restart. |
-| `chrome.storage.session` | `tabOrdo_undoStack`, `bulkOpLock:<owner>`, `tabParents`, `tabOrdo_aiGroupProgress`, `openMode` | State keyed to tab ids or to live runs. Tab ids are per browser session, and the next session reuses the same small range, so a map that outlived the session would point at unrelated tabs.[^tree-ts][^undo-ts] |
+| `chrome.storage.session` | `tabOrdo_undo:<id>` and `tabOrdo_undoMeta:<id>`, `bulkOpLock:<owner>`, `tabParents`, `tabOrdo_aiGroupProgress`, `openMode` | State keyed to tab ids or to live runs. Tab ids are per browser session, and the next session reuses the same small range, so a map that outlived the session would point at unrelated tabs.[^tree-ts][^undo-ts] |
 
 Pins are the exception: they sit in `local` with a `tabId`, so the background's `runtime.onStartup` clears those ids and URL matching backfills fresh ones.[^background]
 
