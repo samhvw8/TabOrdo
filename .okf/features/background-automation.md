@@ -4,7 +4,7 @@ title: Background automation
 description: The service worker's tab listeners (auto-group, auto-ungroup, auto-sort, pin follow, auto-discard, switch-to-existing, context menus) and the guards that keep them from fighting other extensions or each other.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/entrypoints/background/index.ts
 tags: [background, service-worker, automation, auto-group, coexistence]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-17T09:48:15Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-17T09:58:09Z }
 sources:
   - id: bg-index
     resource: https://github.com/samhvw8/TabOrdo/blob/main/entrypoints/background/index.ts
@@ -74,7 +74,7 @@ sources:
 
 # Overview
 
-`entrypoints/background/index.ts` is the MV3 service worker. Every automation is off by default and driven by a flag in the shared `rulesConfig` object (see [grouping rules](/features/grouping-rules.md)); listeners read it through the cached `getConfig()` on each event.[^bg-index] The popup's toggle row writes the flags.[^popup-app]
+`entrypoints/background/index.ts` is the MV3 service worker. Every automation is off by default and driven by a flag in the shared `rulesConfig` object (see [grouping rules](/features/grouping-rules.md)); listeners read it through the cached `getConfig()` on each event.[^bg-index] The pin URL sync listener, which runs on every url, title and status event, reads the equally cached lock list, so a tab no lock tracks costs no storage read ([position locks](/features/position-locks.md)). The popup's toggle row writes the flags.[^popup-app]
 
 | Flag | Toggle label | Trigger | Effect |
 |------|--------------|---------|--------|
