@@ -1,5 +1,5 @@
 import { getConfig, matchDomainToRule, isIgnoredUrl, isIgnoredGroupName } from "../../lib/rules.ts";
-import { getFullHostname, getDomainMapper, getGroupNameMapper, planDomainGroup, sortTabsInWindow, pickMajorityWindow, setTitleBadge, recordOpener, lineageOpener, forgetTab, isSharedGroup, closeTabs } from "../../lib/tabs/index.ts";
+import { getFullHostname, getDomainMapper, getGroupNameMapper, planDomainGroup, domainGroupPartners, sortTabsInWindow, pickMajorityWindow, setTitleBadge, recordOpener, lineageOpener, forgetTab, isSharedGroup, closeTabs } from "../../lib/tabs/index.ts";
 import { syncPinUrl, clearPinTabIds } from "../../lib/pin.ts";
 import { findBounceTarget } from "../../lib/bounce.ts";
 import { logAction } from "../../lib/actionLog.ts";
@@ -140,12 +140,12 @@ async function safeGroupUpdate(groupId: number, props: chrome.tabGroups.UpdatePr
  * Join an existing group. False when it can't be joined (shared, or gone by now), and creating
  * a replacement is left to the caller: a rule makes a group of one on purpose, a domain never
  * does.
+ *
+ * Both callers take the group from a tabGroups.query they have just filtered with isSharedGroup,
+ * so this no longer re-reads it with tabGroups.get to ask again. A group that has gone, or turned
+ * shared, since that query makes tabs.group reject, and a rejection already comes back false.
  */
 async function tryJoinGroup(tabId: number, groupId: number, title: string): Promise<boolean> {
-  try {
-    const group = await chrome.tabGroups.get(groupId).catch(() => null);
-    if (group && isSharedGroup(group)) return false;
-  } catch {}
   markSelfWrite([tabId]);
   try {
     await chrome.tabs.group({ tabIds: [tabId], groupId });
@@ -381,16 +381,26 @@ export default defineBackground(() => {
                 }
               }
               if (!grouped) {
-                const [domainOf, nameOf, windowTabs, windowGroups] = await Promise.all([
+                const [domainOf, nameOf, windowGroups] = await Promise.all([
                   getDomainMapper(),
                   getGroupNameMapper(),
-                  chrome.tabs.query({ windowId: tab.windowId }),
                   chrome.tabGroups.query({ windowId: tab.windowId }),
                 ]);
-                const plan = planDomainGroup(tabId, url, windowTabs, windowGroups, domainOf, nameOf, config.ignorePatterns);
+                const plan = planDomainGroup(url, windowGroups, domainOf, nameOf);
                 const joined = plan?.joinGroupId !== undefined && (await tryJoinGroup(tabId, plan.joinGroupId, plan.title));
-                if (plan && !joined && plan.partnerIds.length > 0) {
-                  const memberIds = [tabId, ...plan.partnerIds];
+                // Tabs only once a join is off the table, and only the loose ones: this runs on
+                // every URL change, and a join needs no tabs at all.
+                const partnerIds = plan && !joined
+                  ? domainGroupPartners(
+                      tabId,
+                      plan.title,
+                      await chrome.tabs.query({ windowId: tab.windowId, groupId: -1 }),
+                      nameOf,
+                      config.ignorePatterns
+                    )
+                  : [];
+                if (plan && partnerIds.length > 0) {
+                  const memberIds = [tabId, ...partnerIds];
                   markSelfWrite(memberIds);
                   const groupId = await chrome.tabs.group({ tabIds: memberIds }).catch((e) => { console.error("[TabOrdo] domain group create:", e); return null; });
                   if (groupId) {

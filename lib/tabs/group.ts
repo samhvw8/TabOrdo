@@ -159,27 +159,27 @@ export interface DomainGroupPlan {
   color: chrome.tabGroups.ColorEnum;
   /** A group already titled for this site, to join. */
   joinGroupId?: number;
-  /** Other loose tabs of the site. A new group needs at least one, or it would hold one tab. */
-  partnerIds: number[];
 }
 
 /**
- * Where background auto-group puts a tab that no rule claimed. Pure, so the one-tab-group
- * guarantee can be tested without the service worker.
+ * Where background auto-group puts a tab that no rule claimed: the group already titled for the
+ * site, if there is one, and the title and colour a new group would get. Pure, so the one-tab-
+ * group guarantee can be tested without the service worker.
  *
  * The caller joins `joinGroupId` if there is one and it still exists, and otherwise creates a
- * group only from the tab plus `partnerIds`. A failed join used to fall back to a group of the
- * tab alone, which made a group of one — and a join fails precisely when the group is gone by
+ * group only from the tab plus domainGroupPartners. A failed join used to fall back to a group of
+ * the tab alone, which made a group of one — and a join fails precisely when the group is gone by
  * the time we reach it, auto-ungroup dissolving it for having one tab left among the ways.
+ *
+ * Partners are a separate step because they need the window's tabs and a join does not. Planning
+ * both at once made every URL change fetch every tab in the window, and a join — the common case
+ * once a site has its group — then threw the whole list away.
  */
 export function planDomainGroup(
-  tabId: number,
   url: string,
-  windowTabs: chrome.tabs.Tab[],
   windowGroups: chrome.tabGroups.TabGroup[],
   domainOf: DomainMapper,
-  nameOf: DomainMapper,
-  ignorePatterns: IgnoreRule[]
+  nameOf: DomainMapper
 ): DomainGroupPlan | null {
   const name = nameOf(url);
   if (!name) return null;
@@ -187,9 +187,24 @@ export function planDomainGroup(
   const join = windowGroups.find(
     (g) => !isSharedGroup(g) && (g.title === name || (!!legacyTitle && g.title === legacyTitle))
   );
+  return { title: name, color: domainGroupColor(name), joinGroupId: join?.id };
+}
+
+/**
+ * The other loose tabs of the site named `title`, which a new domain group for `tabId` takes in.
+ * A new group needs at least one, or it would hold one tab. The caller only has to pass the
+ * window's loose tabs, but anything grouped is filtered out here too.
+ */
+export function domainGroupPartners(
+  tabId: number,
+  title: string,
+  windowTabs: chrome.tabs.Tab[],
+  nameOf: DomainMapper,
+  ignorePatterns: IgnoreRule[]
+): number[] {
   // Pinned tabs and ignored URLs are never auto-grouped themselves, so they don't count as the
   // second tab either — the same exclusions groupTabsByDomain already makes.
-  const partnerIds = windowTabs
+  return windowTabs
     .filter(
       (t) =>
         t.id !== undefined &&
@@ -197,10 +212,9 @@ export function planDomainGroup(
         t.groupId === -1 &&
         !t.pinned &&
         !isIgnoredUrl(t.url || "", ignorePatterns) &&
-        nameOf(t.url || "") === name
+        nameOf(t.url || "") === title
     )
     .map((t) => t.id!);
-  return { title: name, color: domainGroupColor(name), joinGroupId: join?.id, partnerIds };
 }
 
 /**

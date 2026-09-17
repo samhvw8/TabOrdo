@@ -4,7 +4,7 @@ title: Background automation
 description: The service worker's tab listeners (auto-group, auto-ungroup, auto-sort, pin follow, auto-discard, switch-to-existing, context menus) and the guards that keep them from fighting other extensions or each other.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/entrypoints/background/index.ts
 tags: [background, service-worker, automation, auto-group, coexistence]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-17T09:58:09Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-17T10:00:38Z }
 sources:
   - id: bg-index
     resource: https://github.com/samhvw8/TabOrdo/blob/main/entrypoints/background/index.ts
@@ -12,7 +12,7 @@ sources:
     last_modified: 2026-09-17
   - id: group
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabs/group.ts
-    title: lib/tabs/group.ts (planDomainGroup)
+    title: lib/tabs/group.ts (planDomainGroup, domainGroupPartners)
     last_modified: 2026-09-17
   - id: url
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/url.ts
@@ -87,7 +87,9 @@ sources:
 
 # Behaviour
 
-**Auto-group.** Skipped for Chrome-pinned tabs and while the [bulk lock](/architecture/bulk-lock.md) is held. A tab created under 300 ms ago waits out the rest of that window, then the tab is re-read and only a still-ungrouped tab is grouped.[^bg-index] The wait gives other extensions time to group their own tabs,[^commit-race] and the re-read stops TabOrdo stealing a tab Chrome is about to put in its opener's group.[^commit-steal] `chrome://` URLs and ignored URLs are not grouped. With `useRules` on, the first matching rule wins: join a non-shared group in the same window titled with the rule name, or create a one-tab group (also when that join fails).[^bg-index] Otherwise `planDomainGroup` decides by the site's **group name**, the registrable domain without its public suffix (`github.com` → `github`, `bbc.co.uk` → `bbc`; hosts with no registrable domain, such as `localhost`, keep the hostname).[^url] It joins a non-shared group titled with that name, or with the full domain, which is what groups made before the rename are called. When there is none, or the join fails, it creates a group only if the window holds another ungrouped, unpinned, non-ignored tab with the same name. The colour is `GROUP_COLORS[hash(name)]`.[^group]
+**Auto-group.** Skipped for Chrome-pinned tabs and while the [bulk lock](/architecture/bulk-lock.md) is held. A tab created under 300 ms ago waits out the rest of that window, then the tab is re-read and only a still-ungrouped tab is grouped.[^bg-index] The wait gives other extensions time to group their own tabs,[^commit-race] and the re-read stops TabOrdo stealing a tab Chrome is about to put in its opener's group.[^commit-steal] `chrome://` URLs and ignored URLs are not grouped. With `useRules` on, the first matching rule wins: join a non-shared group in the same window titled with the rule name, or create a one-tab group (also when that join fails).[^bg-index] Otherwise `planDomainGroup` decides by the site's **group name**, the registrable domain without its public suffix (`github.com` → `github`, `bbc.co.uk` → `bbc`; hosts with no registrable domain, such as `localhost`, keep the hostname).[^url] It joins a non-shared group titled with that name, or with the full domain, which is what groups made before the rename are called. When there is none, or the join fails, the worker fetches the window's loose tabs (`groupId: -1`), and `domainGroupPartners` creates a group only if the window holds another ungrouped, unpinned, non-ignored tab with the same name. The colour is `GROUP_COLORS[hash(name)]`.[^group][^bg-index]
+
+The window's groups are queried before any tabs, because a join needs no tabs. Planning the join and the partners together used to fetch every tab in the window on every URL change and then discard the list whenever the tab joined a group. `tryJoinGroup` also re-read the target with `tabGroups.get` to re-check that it was not shared, although both callers take it from a query they have just filtered with `isSharedGroup`. A group that has gone or turned shared since that query makes `tabs.group` reject, and the join returns false. A domain join now makes 6 calls (bulk-lock check, `tabs.get`, `tabGroups.query`, `tabs.group`, and the action log's read and write) where it made 8, and fetches no tabs.[^bg-index][^group]
 
 A failed domain join used to fall back to a group of the tab alone, the same way the rule path does. A join fails when the group has gone by the time it is reached, and auto-ungroup dissolving it for having one tab left is one way that happens, so the fallback made groups of one tab. Pinned tabs and ignored URLs also used to count as the second tab.[^group]
 
@@ -140,7 +142,7 @@ The settle window and the self-write ledger came in as a pair: the first general
 
 # Tests that guard it
 
-Nothing imports the entrypoint. The logic it calls is tested: `lib/tabs/group.test.ts` "planDomainGroup" (join by name or legacy full-domain title, never a shared group, no partner for a lone tab, pinned and ignored tabs are not partners),[^group] `lib/bounce.test.ts` (Duplicate-Tab skip, most-recent copy, http(s) only)[^bounce-test], `lib/actionLog.test.ts` (newest first, cap of 20, never throws)[^action-log-test], plus the bulk lock, rules and `closeTabs` suites. See the [chrome stub](/testing/chrome-stub.md).
+Nothing imports the entrypoint. The logic it calls is tested: `lib/tabs/group.test.ts` "planDomainGroup" (join by name or legacy full-domain title, never a shared group, a new group named after the site) and "domainGroupPartners" (no partner for a lone tab, a grouped tab is not a partner, pinned and ignored tabs are not partners),[^group] `lib/bounce.test.ts` (Duplicate-Tab skip, most-recent copy, http(s) only)[^bounce-test], `lib/actionLog.test.ts` (newest first, cap of 20, never throws)[^action-log-test], plus the bulk lock, rules and `closeTabs` suites. See the [chrome stub](/testing/chrome-stub.md).
 
 # Related
 
