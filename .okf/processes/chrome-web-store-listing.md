@@ -43,7 +43,7 @@ Both the dashboard and the public listing refuse browser automation ("Not allowe
 
 # Privacy practices answers
 
-The store requires disclosure even when data never leaves the device.[^cws-user-data-faq] The tab has one justification field per manifest permission.[^cws-privacy-docs] Keep this table in step with the `permissions` array in the manifest.[^wxt-config]
+The store requires disclosure even when data never leaves the device.[^cws-user-data-faq] The tab has one justification field per manifest permission, and every one is mandatory.[^cws-privacy-docs] Keep this table in step with the built manifest.[^wxt-config]
 
 **Single purpose:** Organise the user's open browser tabs: find, group, sort, deduplicate, close and restore them from a keyboard-driven command palette, dashboard and side panel.
 
@@ -61,6 +61,9 @@ The store requires disclosure even when data never leaves the device.[^cws-user-
 | `contextMenus` | Add group, dedup, sort, reading-list, discard and side-panel actions to the toolbar icon's right-click menu.[^bg-index] |
 | `sessions` | List and restore recently closed tabs and windows (`/rc`, `/recent`, `/restore`). |
 | `favicon` | Show site icons from Chrome's local favicon cache, so no request goes to a favicon service. |
+| `sidePanel` | Open TabOrdo in Chrome's side panel (`/sidepanel` and the toolbar menu), so the tab dashboard can stay open beside the page. |
+
+`sidePanel` is not in the `permissions` array: WXT adds it to the built manifest because the config declares `side_panel`. Read `.output/chrome-mv3/manifest.json` for the list the dashboard will ask about. The publish block that began with 0.7.0 was exactly this: the Chrome API integrations commit (`c1eeece`, 2026-07-24) added `readingList`, `contextMenus`, `sessions`, `favicon` and `sidePanel`, and their justification fields were never filled.
 
 **Remote code:** No. All code ships in the package.[^privacy-md]
 
