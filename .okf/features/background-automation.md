@@ -4,7 +4,7 @@ title: Background automation
 description: The service worker's tab listeners (auto-group, auto-ungroup, auto-sort, pin follow, auto-discard, switch-to-existing, context menus) and the guards that keep them from fighting other extensions or each other.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/entrypoints/background/index.ts
 tags: [background, service-worker, automation, auto-group, coexistence]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-17T08:30:00Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-17T09:48:15Z }
 sources:
   - id: bg-index
     resource: https://github.com/samhvw8/TabOrdo/blob/main/entrypoints/background/index.ts
@@ -133,7 +133,7 @@ The settle window and the self-write ledger came in as a pair: the first general
 
 # Gotchas
 
-- Auto-sort re-sorts the whole window every time any tab finishes loading.
+- Auto-sort re-plans the whole window every time any tab finishes loading: it queries the window's tabs and groups each time. It only moves the blocks that are out of place, though, so a window that is already sorted costs no moves ([sort priority](/features/sort-priority.md)).
 - Switch-to-existing compares raw URLs, while [dedup](/features/dedup.md) normalises them, so the two disagree on tracking parameters.
 - The "Discard inactive tabs" menu item ignores age and `frozen`, unlike the alarm.[^bg-index]
 - `groupCreatedAt` lives in memory, so after a worker restart older groups count as settled.
