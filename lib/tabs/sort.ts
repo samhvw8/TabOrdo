@@ -1,7 +1,7 @@
 // Ordering tabs inside a window or a group, honouring position locks.
 
 import { getDomainMapper, type DomainMapper } from "../url.ts";
-import { getPinnedTabs, applyGroupPinsToWindow, type PinnedTabEntry } from "../pin.ts";
+import { getPinnedTabs, getPinnedGroups, applyGroupPinsToWindow, settleGroupPins, type PinnedTabEntry, type PinnedGroupEntry } from "../pin.ts";
 import { getSortRules, buildSortRanker, noSortRanking, type SortRanker } from "../rules.ts";
 
 /**
@@ -47,6 +47,7 @@ export async function organizeWindow(
   const tabs = await chrome.tabs.query({ windowId });
   const groups = await chrome.tabGroups.query({ windowId });
   const allPins = await getPinnedTabs();
+  const groupPins = await getPinnedGroups();
   const domainOf = await getDomainMapper();
   const rank = await rankerFor(by);
   const pinnedCount = tabs.filter((t) => t.pinned).length;
@@ -81,10 +82,61 @@ export async function organizeWindow(
   const blocks: Block[] = sortedGroups.map((entry) => ({ ids: entry.tabs.map((t) => t.id!), groupId: entry.group.id }));
   if (ungrouped.length > 0) blocks.push({ ids: ungrouped.map((t) => t.id!), groupId: -1 });
 
-  for (const step of planLayout(tabs, blocks, pinnedCount)) {
+  const target = groupPins.length > 0 ? withGroupPins(tabs, groups, blocks, groupPins, pinnedCount) : blocks;
+  for (const step of planLayout(tabs, target, pinnedCount)) {
     await chrome.tabs.move(step.ids, { index: step.index });
     if (step.groupId !== -1) await chrome.tabs.group({ tabIds: step.ids, groupId: step.groupId });
   }
+}
+
+/**
+ * `blocks` in the order applyGroupPinsToWindow would leave them, so the pass that follows every
+ * sort finds its groups already in their slots. Alphabetical order used to go down first and
+ * the pass then dragged each pinned group back — with three group locks, an already-sorted
+ * window moved dozens of tabs out and back on every page load and re-queried the whole window
+ * per lock.
+ *
+ * The layout is the pass's own result, computed on a copy by settleGroupPins with the same
+ * slot maths, so the end state is what it always was. `blocks` comes back unchanged — the old
+ * two-step, move for move — whenever that cannot be promised:
+ *  - settleGroupPins finds no layout the pass would leave alone;
+ *  - a tab is outside every block (its group was missing from the query), or a Chrome-pinned
+ *    tab is not at the head of the strip, so the copy would not match the real strip;
+ *  - a lock's title names two groups. Which one the pass picks follows tabGroups.query order,
+ *    and nothing promises that order survives the strip being laid out differently.
+ */
+function withGroupPins(
+  tabs: chrome.tabs.Tab[],
+  groups: chrome.tabGroups.TabGroup[],
+  blocks: Block[],
+  pins: PinnedGroupEntry[],
+  pinnedCount: number
+): Block[] {
+  if (pins.some((p) => groups.filter((g) => g.title === p.groupTitle).length > 1)) return blocks;
+  const pinned = tabs.filter((t) => t.pinned).sort((a, b) => a.index - b.index);
+  const laidCount = blocks.reduce((n, b) => n + b.ids.length, 0);
+  if (pinned.length + laidCount !== tabs.length) return blocks;
+  if (pinned.some((t, i) => t.index !== i || t.groupId !== -1)) return blocks;
+
+  const byId = new Map(tabs.map((t) => [t.id!, t]));
+  const laidOut = [...pinned, ...blocks.flatMap((b) => b.ids.map((id) => byId.get(id)!))]
+    .map((t, index) => ({ ...t, index }));
+  const settled = settleGroupPins(laidOut, groups, pins, pinnedCount);
+  if (!settled) return blocks;
+
+  // Read the block order back off the settled strip. Every block has to come back whole: the
+  // pass only moves whole groups, so anything else means the copy went wrong somewhere.
+  const byGroup = new Map(blocks.map((b) => [b.groupId, b]));
+  const strip = settled.filter((t) => !t.pinned).sort((a, b) => a.index - b.index);
+  const ordered: Block[] = [];
+  for (let i = 0; i < strip.length; ) {
+    const block = byGroup.get(strip[i].groupId);
+    if (!block || !block.ids.every((id, k) => strip[i + k]?.id === id)) return blocks;
+    byGroup.delete(block.groupId);
+    ordered.push(block);
+    i += block.ids.length;
+  }
+  return ordered;
 }
 
 /** One run of the target strip: a whole group, or (groupId -1) every loose tab. */

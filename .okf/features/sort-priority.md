@@ -4,7 +4,7 @@ title: Domain sort and sort priority
 description: How a domain sort lays out a window, and the per-domain sort priority rules (first domains, segment-aware anchored path patterns, cross-rule tiers) that change its order without ever overriding a position lock.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabs/sort.ts
 tags: [sorting, sort-priority, path-patterns, tab-order]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-17T09:48:15Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-17T09:52:43Z }
 sources:
   - id: sort
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabs/sort.ts
@@ -71,7 +71,7 @@ sources:
 1. Chrome-pinned tabs are left in place, and the layout starts after them.
 2. Groups come next, ordered **by title**. Each group's tabs are sorted with the comparator, with locks placed by `pinAwareSortTabs`.
 3. Ungrouped tabs come last, sorted with the comparator.
-4. `sortTabsInWindow` then applies group locks (`applyGroupPinsToWindow`).
+4. A group lock moves its group to the slot `applyGroupPinsToWindow` would drag it to, when that result is settled. `sortTabsInWindow` then runs `applyGroupPinsToWindow` anyway, and it normally finds nothing left to move ([position locks](/features/position-locks.md)).
 
 That order is the *target*. `planLayout` turns it into moves by walking the blocks (each group, then the loose tabs) against a local copy of the strip and skipping every block whose tabs already sit at its index in order, so a window that is already sorted costs no `tabs.move` or `tabs.group` call at all. It used to move and regroup every block on every run: 121 calls on a 1000-tab sorted window. Blocks are placed front to back, so every move is leftward. That is the only direction a multi-tab `tabs.move` lands contiguously, because Chrome moves the ids one at a time. A block that does move is still regrouped. A loose tab stranded ahead of the groups (a link opened from a Chrome-pinned tab lands right after the pins) would push every block one slot off, so the planner also costs a variant that first appends such tabs to the end of the window, and keeps whichever plan makes fewer calls.[^sort]
 
