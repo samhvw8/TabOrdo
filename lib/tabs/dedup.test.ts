@@ -204,8 +204,8 @@ describe("removeDuplicates", () => {
     expect(await executeUndo()).toBe("Reopened 1 tab(s)");
   });
 
-  // The remaining kind of failure is a tab Chrome would not close — mid-drag, or holding a
-  // beforeunload prompt. That one is still there, and "No duplicates found" would be a lie.
+  // The remaining kind of failure is a tab Chrome refuses to close, such as one mid-drag.
+  // That one is still there, and "No duplicates found" would be a lie.
   it("throws, after closing what it can, when Chrome refuses a duplicate", async () => {
     stub.openTabs = [
       { id: 1, url: "https://a.com/", pinned: false, windowId: 1, groupId: -1, lastAccessed: 99 },

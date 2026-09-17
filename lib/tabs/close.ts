@@ -28,10 +28,14 @@ function isAlreadyGone(reason: unknown): boolean {
  *
  * Rejections come in two kinds and are kept apart. "No tab with id" means the tab went
  * between the caller's scan and this call; the intent is satisfied and it counts as closed.
- * Anything else — a tab mid-drag, a held beforeunload prompt — means the tab is still there,
- * and is thrown once the rest of the batch has been attempted, so one refused tab neither
- * hides behind "Closed 4" nor keeps the other three open. Undo copes with the entry naming a
- * tab that is still open: executeUndo restores only what is actually gone.
+ * Anything else — a tab mid-drag — means the tab is still there, and is thrown once the rest
+ * of the batch has been attempted, so one refused tab neither hides behind "Closed 4" nor
+ * keeps the other three open. Undo copes with the entry naming a tab that is still open:
+ * executeUndo restores only what is actually gone.
+ *
+ * A page whose "Leave site?" prompt the user answers with Stay is not a rejection. That
+ * remove never settles, so neither does this call; a per-id timeout was judged a tuning knob
+ * for a hang nobody has reported.
  *
  * Resolves to the number of ids that are no longer open.
  *
