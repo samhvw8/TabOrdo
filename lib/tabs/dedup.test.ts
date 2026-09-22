@@ -1,12 +1,63 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { installChromeStub, type ChromeStub } from "../testing/chrome-stub.ts";
-import { removeDuplicates } from "./index.ts";
+import { findDuplicateGroups, removeDuplicates } from "./index.ts";
 import { executeUndo } from "../undo.ts";
 
 let stub: ChromeStub;
 
 beforeEach(() => {
   stub = installChromeStub();
+});
+
+describe("findDuplicateGroups", () => {
+  const row = (id: number, url: string) => ({ id, url });
+  const ids = (groups: Map<string, { id: number }[]>) => [...groups.values()].map((g) => g.map((t) => t.id));
+
+  it("groups copies of one page and leaves single tabs out", () => {
+    const groups = findDuplicateGroups([
+      row(1, "https://a.com/"), row(2, "https://b.com/"), row(3, "https://a.com/"),
+    ]);
+    expect(ids(groups)).toEqual([[1, 3]]);
+  });
+
+  it("ignores tracking params but not the rest of the query or the hash", () => {
+    const groups = findDuplicateGroups([
+      row(1, "https://blog.com/post?id=7"),
+      row(2, "https://blog.com/post?id=7&utm_source=x&fbclid=y"),
+      row(3, "https://blog.com/post?id=7&gclid=z"),
+      row(4, "https://blog.com/post?id=8"),
+      row(5, "https://blog.com/post?id=7#comments"),
+    ]);
+    expect(ids(groups)).toEqual([[1, 2, 3]]);
+  });
+
+  it("never groups browser pages or unparseable URLs", () => {
+    const groups = findDuplicateGroups([
+      row(1, "chrome://newtab/"), row(2, "chrome://newtab/"),
+      row(3, "chrome-extension://abc/popup.html"), row(4, "chrome-extension://abc/popup.html"),
+      row(5, ""), row(6, ""),
+    ]);
+    expect(groups.size).toBe(0);
+  });
+
+  // The popup's "N dupes" badge and @d view used to compare raw URLs, so the badge could
+  // report duplicates that /dedup then answered "No dupes" to, and miss ones it closed.
+  it("finds exactly the copies removeDuplicates closes", async () => {
+    const tabs = [
+      { id: 1, url: "https://a.com/?utm_medium=mail", pinned: false, windowId: 1, groupId: -1 },
+      { id: 2, url: "https://a.com/", pinned: false, windowId: 1, groupId: -1 },
+      { id: 3, url: "chrome://settings/", pinned: false, windowId: 1, groupId: -1 },
+      { id: 4, url: "chrome://settings/", pinned: false, windowId: 1, groupId: -1 },
+      { id: 5, url: "https://b.com/x", pinned: false, windowId: 2, groupId: -1 },
+      { id: 6, url: "https://b.com/x", pinned: false, windowId: 1, groupId: -1 },
+      { id: 7, url: "https://b.com/x#top", pinned: false, windowId: 1, groupId: -1 },
+    ];
+    stub.openTabs = tabs;
+    const extra = [...findDuplicateGroups(tabs).values()].reduce((n, g) => n + g.length - 1, 0);
+
+    expect(extra).toBe(2);
+    expect(await removeDuplicates()).toBe(extra);
+  });
 });
 
 describe("removeDuplicates", () => {

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { getAllTabs, switchToTab, closeTabs, sortTabsInGroup, groupTabsByDomain, ungroupAll, removeDuplicates, mergeAllWindows, extractGroupToWindow, discardTabs, closeTabsToLeft, closeTabsToRight, closeTabsSameSite, closeOldTabs, shuffleTabs, uniteDomain, isolateDomain, splitWindow, splitByDomain, stackWindows, pinCurrentTab, unpinCurrentTab, outlineBranch, type TabInfo } from "../../lib/tabs/index.ts";
+  import { getAllTabs, switchToTab, closeTabs, sortTabsInGroup, groupTabsByDomain, ungroupAll, removeDuplicates, findDuplicateGroups, mergeAllWindows, extractGroupToWindow, discardTabs, closeTabsToLeft, closeTabsToRight, closeTabsSameSite, closeOldTabs, shuffleTabs, uniteDomain, isolateDomain, splitWindow, splitByDomain, stackWindows, pinCurrentTab, unpinCurrentTab, outlineBranch, type TabInfo } from "../../lib/tabs/index.ts";
   import { getPinnedTabs, getPinForTab, type PinnedTabEntry } from "../../lib/pin.ts";
   import { getArchiveCount } from "../../lib/archive.ts";
   import { regexSearch, tabsToSearchItems, searchBookmarks, searchHistory, parseCommand, type SearchResult } from "../../lib/search.ts";
@@ -604,19 +604,9 @@
     return out;
   }
 
+  /** Every copy in each duplicate group, by the rule /dedup closes by. */
   function findDuplicateTabs(tabs: SearchResult[]): SearchResult[] {
-    const urlMap = new Map<string, SearchResult[]>();
-    for (const tab of tabs) {
-      if (tab.type !== "tab" || !tab.url) continue;
-      const existing = urlMap.get(tab.url);
-      if (existing) existing.push(tab);
-      else urlMap.set(tab.url, [tab]);
-    }
-    const dupes: SearchResult[] = [];
-    for (const group of urlMap.values()) {
-      if (group.length > 1) dupes.push(...group);
-    }
-    return dupes;
+    return [...findDuplicateGroups(tabs).values()].flat();
   }
 
   // Read-only. The background owns the AI progress state machine end to end: runAIGroup's
