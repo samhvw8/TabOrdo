@@ -597,10 +597,13 @@ export default defineBackground(() => {
         grouped: 0, groupCount: 0, error: "",
       });
 
-      const suggestions = await suggestGroups(tabData);
+      const { suggestions, omitted } = await suggestGroups(tabData);
+      // The model only saw the tabs that fit its context window; the rest stay as they are.
+      const leftOut = omitted > 0 ? `${omitted} tab(s) didn't fit the on-device model and were left as they are` : "";
+      const withLeftOut = (msg: string) => (leftOut ? `${msg}; ${leftOut}` : msg);
       if (suggestions.length === 0) {
-        await setAIProgress({ ...defaultProgress(), status: "done", total: tabData.length, processed: tabData.length });
-        return { ok: true, message: "AI found no groups to suggest" };
+        await setAIProgress({ ...defaultProgress(), status: "done", total: tabData.length, processed: tabData.length, currentTab: leftOut });
+        return { ok: true, message: withLeftOut("AI found no groups to suggest") };
       }
 
       await setAIProgress({
@@ -635,7 +638,7 @@ export default defineBackground(() => {
         grouped += memberIds.length;
       }
 
-      const msg = `AI grouped ${grouped} tab(s) into ${suggestions.length} group(s)`;
+      const msg = withLeftOut(`AI grouped ${grouped} tab(s) into ${suggestions.length} group(s)`);
       await setAIProgress({
         status: "done", total: tabData.length, processed: tabData.length,
         currentTab: msg, grouped, groupCount: suggestions.length, error: "",
