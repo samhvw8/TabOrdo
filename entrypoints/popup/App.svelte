@@ -1577,9 +1577,6 @@
               <div class="p-1 grid gap-0.5">
                 {#each chunkRows(group.tabs) as rows}
                   <LazyRows rows={rows.length}>
-                    <!-- Keyed: TabCard owns per-instance state (an open volume slider), so an
-                         unkeyed list re-binds that slider to whatever tab lands on the index
-                         after an action reorders things. -->
                     {#each rows as tab (tab.id)}
                       <TabCard {tab} selected={selectedTabs.has(tab.id)}
                         positionPinned={!!getPinForTab(tab.url, group.title, pinnedTabs)}
