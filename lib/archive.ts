@@ -1,3 +1,5 @@
+import { isReopenablePage } from "./url.ts";
+
 export interface ArchivedTab {
   id: string;
   url: string;
@@ -25,7 +27,7 @@ async function saveArchive(archive: ArchivedTab[]): Promise<void> {
 /** What archiveTabs will actually keep. Exported so a caller that closes the tabs afterwards
  *  can close exactly the ones that were archived, and no more. */
 export function isArchivable(tab: { url?: string }): boolean {
-  return !!tab.url && tab.url !== "chrome://newtab/";
+  return isReopenablePage(tab.url);
 }
 
 export async function archiveTabs(

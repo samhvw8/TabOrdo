@@ -26,7 +26,7 @@
 // would confidently point every branch at unrelated tabs.
 
 import { GROUP_COLORS } from "./types.ts";
-import { untouchableGroupIds } from "./group.ts";
+import { buildGroup, gatherIntoGroup, untouchableGroupIds } from "./group.ts";
 import { getFullHostname, hashCode } from "../url.ts";
 
 const TREE_KEY = "tabParents";
@@ -215,11 +215,6 @@ export function spliceParents(parents: ParentMap, tabIds: number[]): ParentMap |
     next[c] = p;
   }
   return changed ? next : null;
-}
-
-/** Single-tab spliceParents. Kept for the one-at-a-time callers and the shape it documents. */
-export function spliceParent(parents: ParentMap, tabId: number): ParentMap {
-  return spliceParents(parents, [tabId]) ?? parents;
 }
 
 export async function readParents(): Promise<ParentMap> {
@@ -515,18 +510,15 @@ export async function groupBranch(
 
   if (existingGroup) {
     const toAdd = tabs.filter((t) => t.groupId !== existingGroup.id);
-    const strays = toAdd.filter((t) => t.windowId !== windowId).map((t) => t.id!);
-    if (strays.length > 0) await chrome.tabs.move(strays, { windowId, index: -1 });
-    if (toAdd.length > 0) {
-      await chrome.tabs.group({ tabIds: toAdd.map((t) => t.id!), groupId: existingGroup.id });
-    }
+    const strays = toAdd.filter((t) => t.windowId !== windowId).length;
+    if (toAdd.length > 0) await gatherIntoGroup(toAdd, windowId, { groupId: existingGroup.id });
     // Rename on request only; the colour stays — the group is the user's, not this run's.
     if (wanted && wanted !== existingGroup.title) {
       await chrome.tabGroups.update(existingGroup.id, { title: wanted });
     }
     return {
       grouped: tabs.length,
-      moved: strays.length,
+      moved: strays,
       title: wanted || existingGroup.title,
       added: toAdd.length,
       reused: true,
@@ -547,20 +539,12 @@ export async function groupBranch(
     rest = others;
   }
 
-  const groupId = await chrome.tabs.group({
-    tabIds: seed.map((t) => t.id!),
-    createProperties: { windowId },
-  });
   const name = wanted || branchTitle(root);
-  await chrome.tabGroups.update(groupId, {
+  const groupId = await buildGroup(seed.map((t) => t.id!), {
+    windowId,
     title: name,
     color: GROUP_COLORS[Math.abs(hashCode(name)) % GROUP_COLORS.length],
   });
-
-  if (rest.length > 0) {
-    const ids = rest.map((t) => t.id!);
-    await chrome.tabs.move(ids, { windowId, index: -1 });
-    await chrome.tabs.group({ tabIds: ids, groupId });
-  }
+  if (rest.length > 0) await gatherIntoGroup(rest, windowId, { groupId });
   return { grouped: tabs.length, moved, title: name, added: tabs.length, reused: false };
 }

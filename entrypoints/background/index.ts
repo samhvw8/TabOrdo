@@ -471,9 +471,7 @@ export default defineBackground(() => {
           chrome.contextMenus.create({ id: "tabOrdo-dedup", title: "Remove duplicate tabs", contexts: ["action"] });
           chrome.contextMenus.create({ id: "tabOrdo-sort", title: "Sort tabs by domain", contexts: ["action"] });
           chrome.contextMenus.create({ type: "separator", id: "tabOrdo-sep1", contexts: ["action"] });
-          if (chrome.readingList) {
-            chrome.contextMenus.create({ id: "tabOrdo-readlater", title: "Save to Reading List", contexts: ["action"] });
-          }
+          chrome.contextMenus.create({ id: "tabOrdo-readlater", title: "Save to Reading List", contexts: ["action"] });
           chrome.contextMenus.create({ id: "tabOrdo-discard", title: "Discard inactive tabs", contexts: ["action"] });
           if (chrome.sidePanel) {
             chrome.contextMenus.create({ type: "separator", id: "tabOrdo-sep2", contexts: ["action"] });

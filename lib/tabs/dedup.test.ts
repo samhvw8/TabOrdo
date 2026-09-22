@@ -1,15 +1,12 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { installChromeStub, type ChromeStub } from "../testing/chrome-stub.ts";
 import { removeDuplicates } from "./index.ts";
-import { executeUndo, popUndo } from "../undo.ts";
+import { executeUndo } from "../undo.ts";
 
 let stub: ChromeStub;
 
-beforeEach(async () => {
+beforeEach(() => {
   stub = installChromeStub();
-  while (await popUndo()) {
-    /* drain the module-level stack between tests */
-  }
 });
 
 describe("removeDuplicates", () => {

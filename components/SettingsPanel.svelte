@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { getIgnorePatterns, setIgnorePatterns, getIgnoreGroupNames, setIgnoreGroupNames, ruleMatches, ruleToRegex, generalizePatterns, type IgnoreRule } from "../lib/rules.ts";
+  import { getConfig, updateConfig, ruleMatches, ruleToRegex, generalizePatterns, type IgnoreRule } from "../lib/rules.ts";
   import { getActionLog, clearActionLog, ACTION_LOG_KEY, type ActionLogEntry } from "../lib/actionLog.ts";
 
   let ignorePatterns = $state<IgnoreRule[]>([]);
@@ -10,8 +10,9 @@
   let actionLog = $state<ActionLogEntry[]>([]);
 
   onMount(async () => {
-    ignorePatterns = await getIgnorePatterns();
-    ignoreGroupNames = await getIgnoreGroupNames();
+    const config = await getConfig();
+    ignorePatterns = config.ignorePatterns;
+    ignoreGroupNames = config.ignoreGroupNames;
     actionLog = await getActionLog();
   });
 
@@ -90,22 +91,22 @@
     newIgnorePattern = "";
     newPatternIsRegex = false;
     newPatternCaseSensitive = false;
-    await setIgnorePatterns(ignorePatterns);
+    await updateConfig({ ignorePatterns });
   }
 
   async function removeIgnorePattern(p: string) {
     ignorePatterns = ignorePatterns.filter((r) => r.pattern !== p);
-    await setIgnorePatterns(ignorePatterns);
+    await updateConfig({ ignorePatterns });
   }
 
   async function toggleIgnorePattern(p: string) {
     ignorePatterns = ignorePatterns.map((r) => r.pattern === p ? { ...r, enabled: !r.enabled } : r);
-    await setIgnorePatterns(ignorePatterns);
+    await updateConfig({ ignorePatterns });
   }
 
   async function toggleIgnorePatternCase(p: string) {
     ignorePatterns = ignorePatterns.map((r) => r.pattern === p ? { ...r, caseSensitive: !r.caseSensitive || undefined } : r);
-    await setIgnorePatterns(ignorePatterns);
+    await updateConfig({ ignorePatterns });
   }
 
   async function addIgnoreGroupName() {
@@ -119,22 +120,22 @@
     newIgnoreGroupName = "";
     newGroupIsRegex = false;
     newGroupCaseSensitive = false;
-    await setIgnoreGroupNames(ignoreGroupNames);
+    await updateConfig({ ignoreGroupNames });
   }
 
   async function removeIgnoreGroupName(p: string) {
     ignoreGroupNames = ignoreGroupNames.filter((r) => r.pattern !== p);
-    await setIgnoreGroupNames(ignoreGroupNames);
+    await updateConfig({ ignoreGroupNames });
   }
 
   async function toggleIgnoreGroupName(p: string) {
     ignoreGroupNames = ignoreGroupNames.map((r) => r.pattern === p ? { ...r, enabled: !r.enabled } : r);
-    await setIgnoreGroupNames(ignoreGroupNames);
+    await updateConfig({ ignoreGroupNames });
   }
 
   async function toggleIgnoreGroupNameCase(p: string) {
     ignoreGroupNames = ignoreGroupNames.map((r) => r.pattern === p ? { ...r, caseSensitive: !r.caseSensitive || undefined } : r);
-    await setIgnoreGroupNames(ignoreGroupNames);
+    await updateConfig({ ignoreGroupNames });
   }
 
   async function addCurrentGroupToIgnore() {
@@ -144,7 +145,7 @@
     if (!group?.title) return;
     if (!ignoreGroupNames.some((r) => r.pattern === group.title)) {
       ignoreGroupNames = [...ignoreGroupNames, { pattern: group.title!, enabled: true }];
-      await setIgnoreGroupNames(ignoreGroupNames);
+      await updateConfig({ ignoreGroupNames });
     }
   }
 </script>

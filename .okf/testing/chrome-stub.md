@@ -4,7 +4,7 @@ title: Chrome API stub
 description: lib/testing/chrome-stub.ts is the repo's executable model of Chrome tab, group, window and storage semantics for vitest, with failure-injection knobs; its fidelity decides what the tests can prove.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/testing/chrome-stub.ts
 tags: [testing, vitest, chrome-api]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-17T09:58:53Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-22T12:00:00Z }
 sources:
   - id: stub
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/testing/chrome-stub.ts
@@ -79,9 +79,9 @@ Recorders: `created`, `removedIds`, `ungroupedIds`, `discardedIds`, `reloadedIds
 
 # How tests use it
 
-- Call `stub = installChromeStub()` in `beforeEach`. Each install starts clean.[^stub] Module-level state in the code under test is **not** reset: undo tests drain the stack mirror with `popUndo()` after installing.[^undo-test]
+- Call `stub = installChromeStub()` in `beforeEach`. Each install starts clean, and so does the undo stack, which lives only in the stub's session area.[^stub][^undo-test] Module-level state in the code under test is **not** reset.
 - A module that touches `chrome` at import time needs the stub first. `rules.ts` registers `storage.onChanged` at module scope, so `rules-cache.test.ts` installs, calls `vi.resetModules()`, and re-imports per test.[^rules-cache-test] `pin.ts` does the same for its lock-list cache, and `pin-cache.test.ts` follows the same pattern. Every other test imports these modules before any stub exists, so their caches stay unarmed there and a direct write to `stub.localData` is always read back.
-- APIs the stub lacks (`sessions`, `sidePanel`) are assigned onto `globalThis.chrome` ad hoc in the test.
+- APIs the stub lacks (`sessions`, `readingList`, `sidePanel`) are assigned onto `globalThis.chrome` ad hoc in the test.
 - `lib/workspace.test.ts` and `lib/sessions.test.ts` build their own `chrome` fake instead. The workspace fake's `remove` always succeeds.[^workspace-test]
 - `vitest.config.ts` includes `{lib,entrypoints,components}/**/*.test.ts`, widened from `lib/**/*.test.ts` in `3431468`. There are no setup files, so every test installs what it needs.[^vitest-config][^commit-3431468] No test files currently exist under `entrypoints/` or `components/`.
 

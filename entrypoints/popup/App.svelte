@@ -6,11 +6,11 @@
   import { search, tabsToSearchItems, searchBookmarks, searchHistory, parseCommand, type SearchResult } from "../../lib/search.ts";
   import { createTabSearch, type TabSearch } from "../../lib/tabsearch.ts";
   import { createDebouncer } from "../../lib/debounce.ts";
-  import { getAutoGroup, setAutoGroup, getAutoUngroup, setAutoUngroup, getUseRules, setUseRules, getAutoSort, setAutoSort, getAutoPinFollow, setAutoPinFollow, getAutoDiscard, setAutoDiscard, setSwitchToExisting } from "../../lib/rules.ts";
+  import { updateConfig } from "../../lib/rules.ts";
   import { matchCommands, ALL_COMMANDS, ACTION_COMMANDS, TRIAGE_COMMANDS, CATEGORY_STYLES, groupCommands, type CommandDefinition, type CommandCategory } from "../../lib/commands.ts";
-  import { snapshotBeforeGroup, executeUndo, peekUndo, loadUndoStack, touchesUndoStack } from "../../lib/undo.ts";
+  import { snapshotBeforeGroup, executeUndo, hasUndo, touchesUndoStack } from "../../lib/undo.ts";
   import { focusMode, unfocusMode, hasSavedWorkspace, exportTabsToFile, loadTabsFromText } from "../../lib/workspace.ts";
-  import { addTabsToReadingList, isReadingListAvailable, getReadingList } from "../../lib/readinglist.ts";
+  import { addTabsToReadingList, getReadingList } from "../../lib/readinglist.ts";
   import { getRecentlyClosed } from "../../lib/sessions.ts";
   import { withBulkLock } from "../../lib/bulklock.ts";
   import { checkAIAvailability, getAIProgress, defaultProgress, AI_PROGRESS_KEY, type AIGroupProgress } from "../../lib/ai.ts";
@@ -179,6 +179,15 @@
     statusTimer = setTimeout(() => { statusMessage = ""; }, ms);
   }
 
+  // hasUndo lists key names only, so it is cheap to ask after every action and storage change.
+  // Only the newest answer lands: an older one resolving late would light or dim the button for
+  // a stack that has changed since.
+  let undoCheck = 0;
+  function refreshCanUndo(): void {
+    const seq = ++undoCheck;
+    void hasUndo().then((v) => { if (seq === undoCheck) canUndo = v; }, () => {});
+  }
+
   async function handleUndo() {
     if (busy) return;
     busy = true;
@@ -191,7 +200,7 @@
       // message, no undo, and an unhandled rejection in the console.
       flashStatus(`Undo failed: ${e instanceof Error ? e.message : "unknown error"}`, 5000);
     } finally {
-      canUndo = !!peekUndo();
+      refreshCanUndo();
       busy = false;
     }
   }
@@ -478,7 +487,6 @@
           break;
         }
         case "rl": {
-          if (!isReadingListAvailable()) { results = []; flashStatus("Reading List not available (Chrome 120+)"); break; }
           // Mapped inside the fetch, so every keystroke gets the same row objects and rankView
           // keeps its haystack.
           const rlResults = await sourceOnce("rl", async () => (await getReadingList()).map((item, i) => ({
@@ -656,7 +664,7 @@
       flashStatus("Could not save an undo point — AI grouping cancelled", 5000);
       return;
     }
-    canUndo = !!peekUndo();
+    refreshCanUndo();
 
     activeSection = "ai";
     aiProgress = { ...defaultProgress(), status: "checking" };
@@ -748,7 +756,6 @@
       case "pin": goBack(); handlePinCurrent(new MouseEvent("click", { altKey: altPressed })); break;
       case "aigroup": goBack(); await startAIGroup(); break;
       case "readlater": goBack(); dashAction(async () => {
-        if (!isReadingListAvailable()) return "Reading List not available (Chrome 120+)";
         const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
         if (active?.url && active.title) { await addTabsToReadingList([{ url: active.url, title: active.title }]); return "Added to Reading List"; }
         return "No active tab";
@@ -808,7 +815,7 @@
 
         if (outcome.acted) {
           query = "";
-          canUndo = !!peekUndo();
+          refreshCanUndo();
           await loadTabs();
         }
       });
@@ -911,7 +918,7 @@
     } finally {
       // Refresh on failure too: a bulk close that Chrome refused one tab of has still closed
       // the others and pushed an undo entry, and the strip on screen has to say so.
-      canUndo = !!peekUndo();
+      refreshCanUndo();
       await loadTabs().catch(() => {});
       busy = false;
     }
@@ -1019,12 +1026,8 @@
           if (p.status === "done") loadTabs();
         }
       }
-      // Another surface pushed or popped. The reload lists key names and reads only metadata
-      // this realm hasn't seen, never a snapshot. The mirror has to follow, not just the button:
-      // every other `canUndo = !!peekUndo()` in this file reads it.
-      if (touchesUndoStack(changes)) {
-        void loadUndoStack().then(() => { canUndo = !!peekUndo(); });
-      }
+      // Another surface pushed or popped.
+      if (touchesUndoStack(changes)) refreshCanUndo();
     };
     chrome.storage.onChanged.addListener(listener);
     return () => chrome.storage.onChanged.removeListener(listener);
@@ -1067,7 +1070,7 @@
       chrome.storage.session.get("openMode").catch(() => ({}) as Record<string, unknown>),
     ]);
 
-    void loadUndoStack().then(() => { canUndo = !!peekUndo(); });
+    refreshCanUndo();
     void hasSavedWorkspace().then((v) => { hasWorkspace = v; });
     void getArchiveCount().then((v) => { archiveCount = v; });
     void getActionLog().then((v) => { actionLog = v; });
@@ -1451,9 +1454,9 @@
 
       <!-- Toggles -->
       <div class="flex items-center gap-1 px-3 pb-2 text-[10px]">
-        {#each [{label: "Rules", enabled: useRulesEnabled, toggle: async () => { useRulesEnabled = !useRulesEnabled; await setUseRules(useRulesEnabled); }, tip: "Custom rules for grouping"},
-                {label: "Auto", enabled: autoGroupEnabled, toggle: async () => { autoGroupEnabled = !autoGroupEnabled; await setAutoGroup(autoGroupEnabled); }, tip: "Auto-group new tabs"},
-                {label: "Ungroup", enabled: autoUngroupEnabled, toggle: async () => { autoUngroupEnabled = !autoUngroupEnabled; await setAutoUngroup(autoUngroupEnabled); }, tip: "Dissolve a group when only one tab is left. Named groups only — untitled ones are left alone, since another extension may still be filling them."}] as t}
+        {#each [{label: "Rules", enabled: useRulesEnabled, toggle: async () => { useRulesEnabled = !useRulesEnabled; await updateConfig({ useRules: useRulesEnabled }); }, tip: "Custom rules for grouping"},
+                {label: "Auto", enabled: autoGroupEnabled, toggle: async () => { autoGroupEnabled = !autoGroupEnabled; await updateConfig({ autoGroup: autoGroupEnabled }); }, tip: "Auto-group new tabs"},
+                {label: "Ungroup", enabled: autoUngroupEnabled, toggle: async () => { autoUngroupEnabled = !autoUngroupEnabled; await updateConfig({ autoUngroup: autoUngroupEnabled }); }, tip: "Dissolve a group when only one tab is left. Named groups only — untitled ones are left alone, since another extension may still be filling them."}] as t}
           <button
             class="px-1.5 py-0.5 rounded transition-colors border
               {t.enabled ? 'bg-primary/15 text-primary border-primary/30 font-medium' : 'bg-surface-hover text-text-muted border-transparent hover:border-border'}"
@@ -1461,10 +1464,10 @@
           >{t.enabled ? "✓ " : ""}{t.label}</button>
         {/each}
         <div class="w-px h-3 bg-border/40 mx-0.5"></div>
-        {#each [{label: "Sort", enabled: autoSortEnabled, toggle: async () => { autoSortEnabled = !autoSortEnabled; await setAutoSort(autoSortEnabled); }, tip: "Auto-sort on load"},
-                {label: "Pin", enabled: autoPinFollowEnabled, toggle: async () => { autoPinFollowEnabled = !autoPinFollowEnabled; await setAutoPinFollow(autoPinFollowEnabled); }, tip: "Sync pins across windows"},
-                {label: "Discard", enabled: autoDiscardEnabled, toggle: async () => { autoDiscardEnabled = !autoDiscardEnabled; await setAutoDiscard(autoDiscardEnabled); }, tip: "Auto-discard 45min+"},
-                {label: "Switch", enabled: switchToExistingEnabled, toggle: async () => { switchToExistingEnabled = !switchToExistingEnabled; await setSwitchToExisting(switchToExistingEnabled); }, tip: "Jump to existing tab instead of duplicate"}] as t}
+        {#each [{label: "Sort", enabled: autoSortEnabled, toggle: async () => { autoSortEnabled = !autoSortEnabled; await updateConfig({ autoSort: autoSortEnabled }); }, tip: "Auto-sort on load"},
+                {label: "Pin", enabled: autoPinFollowEnabled, toggle: async () => { autoPinFollowEnabled = !autoPinFollowEnabled; await updateConfig({ autoPinFollow: autoPinFollowEnabled }); }, tip: "Sync pins across windows"},
+                {label: "Discard", enabled: autoDiscardEnabled, toggle: async () => { autoDiscardEnabled = !autoDiscardEnabled; await updateConfig({ autoDiscard: autoDiscardEnabled }); }, tip: "Auto-discard 45min+"},
+                {label: "Switch", enabled: switchToExistingEnabled, toggle: async () => { switchToExistingEnabled = !switchToExistingEnabled; await updateConfig({ switchToExisting: switchToExistingEnabled }); }, tip: "Jump to existing tab instead of duplicate"}] as t}
           <button
             class="px-1.5 py-0.5 rounded transition-colors border
               {t.enabled ? 'bg-primary/15 text-primary border-primary/30 font-medium' : 'bg-surface-hover text-text-muted border-transparent hover:border-border'}"

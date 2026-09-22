@@ -1,50 +1,46 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { installChromeStub, type ChromeStub } from "./testing/chrome-stub.ts";
-import { pushUndo, peekUndo, peekUndoEntry, popUndo, undoStackSize, loadUndoStack, touchesUndoStack, snapshotBeforeClose, snapshotBeforeGroup, executeUndo } from "./undo.ts";
+import { pushUndo, hasUndo, peekUndoEntry, popUndo, touchesUndoStack, snapshotBeforeClose, snapshotBeforeGroup, executeUndo } from "./undo.ts";
 import { shuffleTabs } from "./tabs/order.ts";
 
 let stub: ChromeStub;
 
 const entry = (type: string, data: unknown = []) => ({ type, label: type, timestamp: 1, data });
 
-/** The side panel: the same component in a second realm, with its own module instance and
- *  mirror, over the same session storage. */
+/** The side panel: the same component in a second realm, with its own module instance, over
+ *  the same session storage. */
 async function otherRealm(): Promise<typeof import("./undo.ts")> {
   vi.resetModules();
   return import("./undo.ts");
 }
 
-const entryKeys = () => Object.keys(stub.sessionData).filter((k) => k.startsWith("tabOrdo_undo:"));
-const metaKeys = () => Object.keys(stub.sessionData).filter((k) => k.startsWith("tabOrdo_undoMeta:"));
+const entryKeys = () => Object.keys(stub.sessionData).filter((k) => k.startsWith("tabOrdo_undo:")).sort();
+const stackSize = () => entryKeys().length;
 /** Every snapshot-bearing key a storage read named since `from`. "*" is a whole-area get. */
 const payloadReads = (from = 0) =>
   stub.storageReads.slice(from).flatMap((r) => r.keys).filter((k) => k === "*" || k.startsWith("tabOrdo_undo:"));
 
-beforeEach(async () => {
+beforeEach(() => {
   stub = installChromeStub();
-  // Drain the module-level stack between tests
-  while (await popUndo()) {
-    /* empty */
-  }
 });
 
 describe("undo stack", () => {
-  it("push / peek / pop / size", async () => {
-    expect(undoStackSize()).toBe(0);
+  it("push / peek / pop / hasUndo", async () => {
+    expect(await hasUndo()).toBe(false);
     await pushUndo(entry("close"));
     await pushUndo(entry("group"));
-    expect(undoStackSize()).toBe(2);
-    expect(peekUndo()?.type).toBe("group");
+    expect(await hasUndo()).toBe(true);
+    expect(stackSize()).toBe(2);
+    expect((await peekUndoEntry())?.type).toBe("group");
     expect((await popUndo())?.type).toBe("group");
     expect((await popUndo())?.type).toBe("close");
     expect(await popUndo()).toBeNull();
+    expect(await hasUndo()).toBe(false);
   });
 
   it("caps at 20 entries, dropping the oldest", async () => {
     for (let i = 0; i < 25; i++) await pushUndo(entry("close", i));
-    expect(undoStackSize()).toBe(20);
-    expect(entryKeys()).toHaveLength(20);
-    expect(metaKeys()).toHaveLength(20);
+    expect(stackSize()).toBe(20);
     expect((await peekUndoEntry())?.data).toBe(24);
     let bottom = null;
     let e;
@@ -53,21 +49,20 @@ describe("undo stack", () => {
     expect(Object.keys(stub.sessionData)).toEqual([]);
   });
 
-  it("stores each entry under its own key, with its metadata beside it", async () => {
-    await pushUndo({ type: "close", label: "Closed 1 tab(s)", timestamp: 42, data: ["x"] });
-    expect(entryKeys()).toHaveLength(1);
-    const id = entryKeys()[0].slice("tabOrdo_undo:".length);
-    expect(stub.sessionData[`tabOrdo_undoMeta:${id}`]).toEqual({ type: "close", label: "Closed 1 tab(s)", timestamp: 42 });
+  it("stores each entry under its own key, where another surface finds it", async () => {
+    const pushed = { type: "close", label: "Closed 1 tab(s)", timestamp: 42, data: ["x"] };
+    await pushUndo(pushed);
+    expect(Object.keys(stub.sessionData)).toEqual(entryKeys());
+    expect(stub.sessionData[entryKeys()[0]]).toEqual(pushed);
 
     const panel = await otherRealm();
-    await panel.loadUndoStack();
-    expect(panel.undoStackSize()).toBe(1);
-    expect(panel.peekUndo()).toEqual({ id, type: "close", label: "Closed 1 tab(s)", timestamp: 42 });
+    expect(await panel.hasUndo()).toBe(true);
+    expect(await panel.peekUndoEntry()).toEqual(pushed);
   });
 });
 
-// Stack order is key order, and ids lead with the push time. A realm always pushes above what it
-// has seen; two surfaces' pushes are a user action apart, so tests model that with a clock step
+// Stack order is key order, and ids lead with the push time. A push stamps above the newest entry
+// it lists; two surfaces' pushes are a user action apart, so tests model that with a clock step
 // rather than letting a fresh realm share a millisecond with the other one's last push.
 let clock = 0;
 const tick = () => vi.setSystemTime(new Date(2_000_000_000_000 + ++clock * 1000));
@@ -88,7 +83,7 @@ describe("cross-realm stack", () => {
     await panel.pushUndo(entry("group", "theirs"));
     tick();
     await pushUndo(entry("close", "later"));
-    expect(undoStackSize()).toBe(3);
+    expect(stackSize()).toBe(3);
     expect([(await popUndo())?.data, (await popUndo())?.data, (await popUndo())?.data]).toEqual(["later", "theirs", "mine"]);
   });
 
@@ -101,8 +96,7 @@ describe("cross-realm stack", () => {
     tick();
     await Promise.all([pushUndo(entry("close", "popup")), panel.pushUndo(entry("close", "panel"))]);
 
-    await loadUndoStack();
-    expect(undoStackSize()).toBe(20);
+    expect(stackSize()).toBe(20);
     const popped: unknown[] = [];
     let e;
     while ((e = await popUndo())) popped.push(e.data);
@@ -120,14 +114,13 @@ describe("cross-realm stack", () => {
   });
 
   it("recognises the keys a push or pop changes, and nothing else", () => {
-    expect(touchesUndoStack({ "tabOrdo_undoMeta:0001-a": {} })).toBe(true);
-    expect(touchesUndoStack({ tabOrdo_undoStack: {} })).toBe(true);
+    expect(touchesUndoStack({ "tabOrdo_undo:0001-a": {} })).toBe(true);
     expect(touchesUndoStack({ tabParents: {}, "bulkOpLock:x": {} })).toBe(false);
   });
 });
 
-// A group snapshot covers every unpinned tab. The whole stack used to be one array, so each push
-// read and rewrote all twenty snapshots, and every popup open read them to light one button.
+// A group snapshot covers every unpinned tab, so a read that names every entry reads twenty of
+// them. Only a pop needs a snapshot, and only the top one.
 describe("storage cost", () => {
   const bigGroupEntry = (tag: number) =>
     entry("group", [...Array(300)].map((_, i) => ({ tabId: i, groupId: -1, windowId: 1, index: i, tag })));
@@ -140,64 +133,21 @@ describe("storage cost", () => {
     const from = stub.storageReads.length;
     await pushUndo(entry("close", "new"));
     expect(payloadReads(from)).toEqual([]);
-    expect(undoStackSize()).toBe(20);
+    expect(stackSize()).toBe(20);
   });
 
-  it("opening a surface reads metadata only", async () => {
+  it("asking whether there is anything to undo reads key names only", async () => {
     const panel = await otherRealm();
     const from = stub.storageReads.length;
-    await panel.loadUndoStack();
-    expect(payloadReads(from)).toEqual([]);
-    expect(panel.undoStackSize()).toBe(20);
-    expect(panel.peekUndo()?.type).toBe("group");
+    expect(await panel.hasUndo()).toBe(true);
+    expect(stub.storageReads.slice(from).map((r) => r.keys)).toEqual([["<keys>"]]);
   });
 
   it("a pop reads the top snapshot and no other", async () => {
-    const top = peekUndo()!;
+    const top = entryKeys()[19];
     const from = stub.storageReads.length;
     await popUndo();
-    expect(payloadReads(from)).toEqual([`tabOrdo_undo:${top.id}`]);
-  });
-
-  it("still works on a build without getKeys", async () => {
-    const area = chrome.storage.session as unknown as { getKeys?: unknown };
-    const saved = area.getKeys;
-    delete area.getKeys; // Chrome < 130
-    try {
-      const panel = await otherRealm();
-      await panel.loadUndoStack();
-      expect(panel.undoStackSize()).toBe(20);
-      await panel.pushUndo(entry("close", "old chrome"));
-      expect(entryKeys()).toHaveLength(20);
-      expect((await popUndo())?.data).toBe("old chrome");
-    } finally {
-      area.getKeys = saved;
-    }
-  });
-});
-
-// The layout before per-entry keys. Chrome clears the session area on an extension update, so
-// this should never be found — but a stack left in it must not be lost or left behind.
-describe("legacy single-array stack", () => {
-  it("is moved onto per-entry keys under anything pushed since, and the old key removed", async () => {
-    stub.sessionData.tabOrdo_undoStack = [entry("close", "old-1"), entry("group", "old-2")];
-    await loadUndoStack();
-    expect(stub.sessionData.tabOrdo_undoStack).toBeUndefined();
-    expect(undoStackSize()).toBe(2);
-    expect(peekUndo()?.type).toBe("group");
-
-    await pushUndo(entry("close", "new"));
-    const popped: unknown[] = [];
-    let e;
-    while ((e = await popUndo())) popped.push(e.data);
-    expect(popped).toEqual(["new", "old-2", "old-1"]);
-  });
-
-  it("is found by a push as well as by a load", async () => {
-    stub.sessionData.tabOrdo_undoStack = [entry("close", "old")];
-    await pushUndo(entry("close", "new"));
-    expect(stub.sessionData.tabOrdo_undoStack).toBeUndefined();
-    expect(undoStackSize()).toBe(2);
+    expect(payloadReads(from)).toEqual([top]);
   });
 });
 
@@ -226,13 +176,13 @@ describe("executeUndo — close", () => {
       // ...while a tab whose window is gone falls back to the focused one
       { url: "https://b.com", pinned: false, active: false },
     ]);
-    expect(undoStackSize()).toBe(0);
+    expect(stackSize()).toBe(0);
   });
 
   it("pushes nothing when none of the ids are open", async () => {
     stub.openTabs = [];
     await snapshotBeforeClose([7, 8]);
-    expect(undoStackSize()).toBe(0);
+    expect(stackSize()).toBe(0);
   });
 
   // The snapshot is taken before the close and so can name a tab the close then failed to
@@ -247,19 +197,6 @@ describe("executeUndo — close", () => {
 
     expect(await executeUndo()).toBe("Reopened 1 tab(s)");
     expect(stub.created.map((c) => c.url)).toEqual(["https://b.com"]);
-  });
-
-  // Entries written by versions before the id was recorded: nothing to compare, restore as before.
-  it("restores a legacy entry that recorded no ids", async () => {
-    stub.openTabs = [{ id: 1, url: "https://a.com", pinned: false, windowId: 1, groupId: -1 }];
-    await pushUndo({
-      type: "close",
-      label: "Closed 1 tab(s)",
-      timestamp: 1,
-      data: [{ url: "https://a.com", pinned: false, windowId: 1 }],
-    });
-
-    expect(await executeUndo()).toBe("Reopened 1 tab(s)");
   });
 
   it("returns a message for unknown entry types", async () => {
@@ -322,7 +259,7 @@ describe("pushUndo durability", () => {
   it("rejects when the stack cannot be persisted", async () => {
     stub.failWrites = true;
     await expect(pushUndo(entry("close", "x"))).rejects.toThrow();
-    expect(undoStackSize()).toBe(0);
+    expect(stackSize()).toBe(0);
   });
 
   // The single-array layout reloaded a shared module-level array before each write, so two
@@ -477,15 +414,6 @@ describe("executeUndo — group", () => {
     stub.openTabs[0].groupId = -1;
     stub.failGroup = true;
     expect(await executeUndo()).toBe("Restored previous group state — 1 group(s) could not be rebuilt");
-  });
-
-  it("does not relocate for legacy entries that recorded no window", async () => {
-    stub.windows = [{ id: 1 }, { id: 2 }];
-    stub.openTabs = [{ id: 1, url: "https://a.com", pinned: false, windowId: 2, groupId: -1, index: 0 }];
-    await pushUndo({ type: "group", label: "Group change", timestamp: 1, data: [{ tabId: 1, groupId: -1 }] });
-
-    await executeUndo();
-    expect(stub.moves).toEqual([]);
   });
 });
 

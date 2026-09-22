@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { installChromeStub, type ChromeStub } from "../testing/chrome-stub.ts";
 import {
-  resolveParents, collectSubtree, spliceParent, spliceParents, recordOpener, forgetTab,
+  resolveParents, collectSubtree, spliceParents, recordOpener, forgetTab,
   readParents, branchUpRoot, collectBranch, groupBranch, lineageOpener, EXPLICIT_ROOT,
   parentOf, branchOutline, outlineBranch,
 } from "./tree.ts";
@@ -189,22 +189,22 @@ describe("branchOutline", () => {
   });
 });
 
-describe("spliceParent", () => {
+describe("spliceParents, one closed tab", () => {
   it("re-parents children to their grandparent so the branch survives", () => {
     // Article 3 closes; its sub-link 4 should still belong to the Hacker News tab.
-    expect(spliceParent(HN_PARENTS, 3)).toEqual({ 2: 1, 4: 1 });
+    expect(spliceParents(HN_PARENTS, [3])).toEqual({ 2: 1, 4: 1 });
   });
 
   it("promotes children to roots when the closed tab was one", () => {
-    expect(spliceParent(HN_PARENTS, 1)).toEqual({ 4: 3 });
+    expect(spliceParents(HN_PARENTS, [1])).toEqual({ 4: 3 });
   });
 
   it("leaves unrelated links alone", () => {
-    expect(spliceParent(HN_PARENTS, 2)).toEqual({ 3: 1, 4: 3 });
+    expect(spliceParents(HN_PARENTS, [2])).toEqual({ 3: 1, 4: 3 });
   });
 
   it("never re-parents a tab onto itself", () => {
-    expect(spliceParent({ 2: 1, 1: 2 }, 1)).toEqual({});
+    expect(spliceParents({ 2: 1, 1: 2 }, [1])).toEqual({});
   });
 });
 

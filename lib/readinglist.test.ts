@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { addToReadingList, getReadingList, removeFromReadingList, markAsRead, addTabsToReadingList } from "./readinglist.ts";
+import { addToReadingList, getReadingList, addTabsToReadingList } from "./readinglist.ts";
 
 let entries: { url: string; title: string; hasBeenRead: boolean }[];
 
@@ -12,13 +12,6 @@ beforeEach(() => {
         entries.push({ url: props.url, title: props.title, hasBeenRead: props.hasBeenRead });
       }),
       query: vi.fn(async () => entries),
-      removeEntry: vi.fn(async (props: { url: string }) => {
-        entries = entries.filter((e) => e.url !== props.url);
-      }),
-      updateEntry: vi.fn(async (props: { url: string; hasBeenRead: boolean }) => {
-        const entry = entries.find((e) => e.url === props.url);
-        if (entry) entry.hasBeenRead = props.hasBeenRead;
-      }),
     },
   } as unknown as typeof chrome;
 });
@@ -37,22 +30,6 @@ describe("getReadingList", () => {
     entries.push({ url: "https://b.com", title: "B", hasBeenRead: true });
     const result = await getReadingList();
     expect(result).toHaveLength(2);
-  });
-});
-
-describe("removeFromReadingList", () => {
-  it("removes entry by URL", async () => {
-    entries.push({ url: "https://a.com", title: "A", hasBeenRead: false });
-    await removeFromReadingList("https://a.com");
-    expect(entries).toHaveLength(0);
-  });
-});
-
-describe("markAsRead", () => {
-  it("sets hasBeenRead to true", async () => {
-    entries.push({ url: "https://a.com", title: "A", hasBeenRead: false });
-    await markAsRead("https://a.com");
-    expect(entries[0].hasBeenRead).toBe(true);
   });
 });
 

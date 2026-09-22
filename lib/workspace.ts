@@ -1,4 +1,5 @@
 import { closeTabs } from "./tabs/close.ts";
+import { isSaveablePage } from "./url.ts";
 
 interface SavedWorkspace {
   tabs: { url: string; pinned: boolean }[];
@@ -25,7 +26,7 @@ async function saveWorkspaceStack(stack: SavedWorkspace[]): Promise<void> {
 
 export async function focusMode(): Promise<number> {
   const tabs = await chrome.tabs.query({ currentWindow: true });
-  const toSave = tabs.filter((t) => t.url && !t.url.startsWith("chrome://") && !t.url.startsWith("chrome-extension://"));
+  const toSave = tabs.filter((t) => isSaveablePage(t.url));
   if (toSave.length === 0) return 0;
   const stack = await getWorkspaceStack();
   stack.push({
@@ -70,7 +71,7 @@ export async function hasSavedWorkspace(): Promise<boolean> {
 export function exportTabsToFile(): void {
   chrome.tabs.query({ currentWindow: true }, (tabs) => {
     const sorted = tabs
-      .filter((t) => t.url && !t.url.startsWith("chrome://") && !t.url.startsWith("chrome-extension://"))
+      .filter((t) => isSaveablePage(t.url))
       .sort((a, b) => (a.title || "").localeCompare(b.title || ""));
     const lines = sorted.map((t) => `${t.title}\t${t.url}`);
     const blob = new Blob([lines.join("\n")], { type: "text/plain" });
