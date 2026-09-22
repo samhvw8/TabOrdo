@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { getRules, saveRules, getAutoGroup, setAutoGroup, populateFromCurrentGroups, mergeRules, domainMatches, type GroupRule } from "../lib/rules.ts";
+  import { getConfig, updateConfig, populateFromCurrentGroups, mergeRules, domainMatches, type GroupRule } from "../lib/rules.ts";
   import { getFullHostname } from "../lib/tabs/index.ts";
 
   let {
@@ -28,17 +28,18 @@
   };
 
   onMount(async () => {
-    rules = await getRules();
-    autoGroup = await getAutoGroup();
+    const config = await getConfig();
+    rules = config.rules;
+    autoGroup = config.autoGroup;
   });
 
   async function save() {
-    await saveRules(rules);
+    await updateConfig({ rules });
   }
 
   async function toggleAutoGroup() {
     autoGroup = !autoGroup;
-    await setAutoGroup(autoGroup);
+    await updateConfig({ autoGroup });
   }
 
   function normalizePattern(p: string): string {
@@ -111,14 +112,14 @@
   async function handleMerge(targetId: string) {
     if (!mergeSource || mergeSource === targetId) return;
     await mergeRules(targetId, mergeSource);
-    rules = await getRules();
+    rules = (await getConfig()).rules;
     mergeSource = null;
     flash("Rules merged");
   }
 
   async function handlePopulate() {
     const count = await populateFromCurrentGroups();
-    rules = await getRules();
+    rules = (await getConfig()).rules;
     flash(count > 0 ? `Added ${count} rule(s) from groups` : "No new groups to add");
   }
 

@@ -4,7 +4,7 @@ title: Grouping rules and ignore lists
 description: How the shared rulesConfig is stored, cached and written; how group rules and ignore patterns match hostnames and group names without backtracking; and the Rules editor that edits them.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/rules.ts
 tags: [rules, config, ignore-lists, pattern-matching, storage]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-17T10:30:06Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-22T12:00:00Z }
 sources:
   - id: rules
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/rules.ts
@@ -72,7 +72,8 @@ On the very first read, `getConfig()` writes the all-false default. Normalisatio
 
 - **The read cache is armed only once `storage.onChanged` is subscribed.** A cached read returns a `structuredClone`, and any write to `rulesConfig` from any context clears the cache. The cache exists because the worker wakes for every tab event and several listeners each need the config.[^rules]
 - **The cache is primed only after a successful `set()`.** Priming it first left a config that was never saved cached, and the next writer saved that phantom to storage.[^rules][^rules-cache-test]
-- **Every setter goes through `updateConfig`**, a per-context promise chain that does read, mutate, then save, so two quick toggles in one context cannot revert each other. Its read uses `getConfig(true)` and bypasses the cache: the popup and side panel are the same component in two contexts, and a warm cache would revert the sibling's write.[^rules]
+- **Every write goes through `updateConfig`**, a per-context promise chain that does read, change, then save, so two quick toggles in one context cannot revert each other. It takes a patch of fields (`updateConfig({ autoSort: true })`), or a function for an edit that depends on the stored value (`mergeRules`, adding a rule). Its read uses `getConfig(true)` and bypasses the cache: the popup and side panel are the same component in two contexts, and a warm cache would revert the sibling's write.[^rules]
+- **Readers call `getConfig()` and take the fields they need.** There are no per-field getters or setters, except `getSortRules` and `setSortRules`, which the sort and the Pins panel use.[^rules]
 
 # Matching
 
@@ -102,9 +103,9 @@ This is the sidebar's Rules section. It has an auto-group toggle, "Import from g
 # Gotchas
 
 - **Ignore patterns see only the hostname**, which has no port and no path. The Settings placeholder `e.g. localhost:5763` can therefore never match, and neither can `*github.com/org*`. Both were confirmed by running `isIgnoredUrl`.[^rules][^settings-panel]
-- The editor keeps its own copy of `rules` from mount and `saveRules` replaces the whole array, so two open editors are last-writer-wins on rules even though other fields merge safely.[^rules-editor]
+- The editor keeps its own copy of `rules` from mount and saves with `updateConfig({ rules })`, which replaces the whole array, so two open editors are last-writer-wins on rules even though other fields merge safely.[^rules-editor]
 - A broad pattern listed earlier shadows a specific one listed later. The tester shows this.[^rules-test]
-- `useAI`, the unused `STORAGE_KEY = "groupRules"` constant and `ruleToRegex`'s `.*` expansion are leftovers. `ruleToRegex` only generates regex text in Settings; it never matches anything.[^rules]
+- `useAI` and `ruleToRegex`'s `.*` expansion are leftovers. `ruleToRegex` only generates regex text in Settings; it never matches anything.[^rules]
 
 # Tests that guard it
 

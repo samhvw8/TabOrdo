@@ -36,8 +36,8 @@ describe("config cache", () => {
   });
 
   it("drops the cache when another context writes the config", async () => {
-    await rules.setAutoGroup(true);
-    expect(await rules.getAutoGroup()).toBe(true);
+    await rules.updateConfig({ autoGroup: true });
+    expect((await rules.getConfig()).autoGroup).toBe(true);
 
     // Another realm writes directly, then its onChanged is delivered.
     await chrome.storage.local.set({
@@ -45,7 +45,7 @@ describe("config cache", () => {
     });
     await settle();
 
-    expect(await rules.getAutoGroup()).toBe(false);
+    expect((await rules.getConfig()).autoGroup).toBe(false);
   });
 });
 
@@ -54,21 +54,21 @@ describe("config cache — failed writes", () => {
     await rules.getConfig();
     stub.failWrites = true;
 
-    await expect(rules.setAutoGroup(true)).rejects.toThrow();
+    await expect(rules.updateConfig({ autoGroup: true })).rejects.toThrow();
 
     // The write never landed, so no onChanged will ever arrive to invalidate a cache primed
     // ahead of it. The next read must go to storage and report the truth.
     stub.failWrites = false;
-    expect(await rules.getAutoGroup()).toBe(false);
+    expect((await rules.getConfig()).autoGroup).toBe(false);
   });
 
   it("does not launder a failed write into storage on the next write", async () => {
     await rules.getConfig();
     stub.failWrites = true;
-    await expect(rules.setAutoGroup(true)).rejects.toThrow();
+    await expect(rules.updateConfig({ autoGroup: true })).rejects.toThrow();
     stub.failWrites = false;
 
-    await rules.setAutoSort(true);
+    await rules.updateConfig({ autoSort: true });
 
     const stored = stub.localData.rulesConfig as { autoGroup: boolean; autoSort: boolean };
     expect(stored.autoSort).toBe(true);
@@ -87,7 +87,7 @@ describe("config cache — cross-context writes", () => {
       autoGroup: true,
     };
 
-    await rules.setAutoSort(true);
+    await rules.updateConfig({ autoSort: true });
 
     const stored = stub.localData.rulesConfig as { autoGroup: boolean; autoSort: boolean };
     expect(stored.autoSort).toBe(true);
@@ -97,7 +97,11 @@ describe("config cache — cross-context writes", () => {
   });
 
   it("still serializes rapid toggles within one context", async () => {
-    await Promise.all([rules.setAutoGroup(true), rules.setAutoSort(true), rules.setUseRules(true)]);
+    await Promise.all([
+      rules.updateConfig({ autoGroup: true }),
+      rules.updateConfig({ autoSort: true }),
+      rules.updateConfig({ useRules: true }),
+    ]);
     const stored = stub.localData.rulesConfig as Record<string, boolean>;
     expect(stored.autoGroup).toBe(true);
     expect(stored.autoSort).toBe(true);
