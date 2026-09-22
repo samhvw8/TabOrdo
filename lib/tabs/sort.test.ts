@@ -447,6 +447,9 @@ describe("sortTabsInGroup", () => {
   it("leaves tabs outside the group where they were", async () => {
     await sortTabsInGroup(50, "title");
     expect(stub.openTabs.find((t) => t.id === 3)!.groupId).toBe(-1);
+    // The group sorts in place: moving its tabs to index -1 used to carry the whole group to
+    // the end of the window, past tab 3.
+    expect(strip()).toEqual([2, 1, 3]);
   });
 
   it("is a no-op for a group with no tabs", async () => {

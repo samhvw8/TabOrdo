@@ -35,7 +35,9 @@ export async function sortTabsInGroup(
     : tabs.sort((a, b) => compareTabs(a, b, by, domainOf, rank));
   const ids = ordered.map((t) => t.id!);
   if (ids.length > 0) {
-    await chrome.tabs.move(ids, { index: -1 });
+    // Back into the group's own slot, not index -1: every id sits at or right of the group's
+    // first index, so moving them there in order sorts the group in place.
+    await chrome.tabs.move(ids, { index: Math.min(...tabs.map((t) => t.index)) });
     await chrome.tabs.group({ tabIds: ids, groupId });
   }
 }
