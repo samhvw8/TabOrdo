@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { SvelteSet } from "svelte/reactivity";
   import { getConfig, updateConfig, ruleMatches, ruleToRegex, generalizePatterns, type IgnoreRule } from "../lib/rules.ts";
   import { clearActionLog, type ActionLogEntry } from "../lib/actionLog.ts";
   import { relTime } from "../lib/format.ts";
@@ -17,11 +18,11 @@
     draft: string;
     isRegex: boolean;
     caseSensitive: boolean;
-    selected: Set<string>;
+    selected: SvelteSet<string>;
   }
 
   const newEditor = (key: IgnoreKey): IgnoreEditor =>
-    ({ key, rules: [], draft: "", isRegex: false, caseSensitive: false, selected: new Set() });
+    ({ key, rules: [], draft: "", isRegex: false, caseSensitive: false, selected: new SvelteSet() });
   let urlList = $state(newEditor("ignorePatterns"));
   let groupList = $state(newEditor("ignoreGroupNames"));
 
@@ -42,10 +43,8 @@
     try { return ruleMatches(testerInput, rule); } catch { return false; }
   });
 
-  function toggleSelect(set: Set<string>, pattern: string) {
-    const next = new Set(set);
-    if (next.has(pattern)) next.delete(pattern); else next.add(pattern);
-    return next;
+  function toggleSelected(ed: IgnoreEditor, pattern: string) {
+    if (ed.selected.has(pattern)) ed.selected.delete(pattern); else ed.selected.add(pattern);
   }
 
   function combineRegex(rules: IgnoreRule[], selected: Set<string>): string {
@@ -56,7 +55,7 @@
   function applyGenerated(ed: IgnoreEditor, regex: string) {
     ed.draft = regex;
     ed.isRegex = true;
-    ed.selected = new Set();
+    ed.selected.clear();
   }
 
   async function save(ed: IgnoreEditor, rules: IgnoreRule[]) {
@@ -140,8 +139,8 @@
               {ed.selected.has(rule.pattern) ? 'ring-1 ring-primary bg-primary/10 border-primary/40' : rule.enabled ? 'bg-surface border-border text-text' : 'bg-surface/50 border-border/50 text-text-muted line-through'}"
             role="option"
             aria-selected={ed.selected.has(rule.pattern)}
-            onclick={(e) => { if (e.shiftKey) ed.selected = toggleSelect(ed.selected, rule.pattern); }}
-            onkeydown={(e) => { if (e.key === " ") { e.preventDefault(); ed.selected = toggleSelect(ed.selected, rule.pattern); } }}
+            onclick={(e) => { if (e.shiftKey) toggleSelected(ed, rule.pattern); }}
+            onkeydown={(e) => { if (e.key === " ") { e.preventDefault(); toggleSelected(ed, rule.pattern); } }}
             tabindex="0"
             title="Shift+click to select for regex generation"
           >
@@ -167,7 +166,7 @@
           >Combine</button>
           <button
             class="px-1.5 py-0.5 rounded text-[10px] text-text-muted hover:text-text transition-colors"
-            onclick={() => ed.selected = new Set()}
+            onclick={() => ed.selected.clear()}
           >Clear</button>
         </div>
       {/if}

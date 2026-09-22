@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { SvelteSet } from "svelte/reactivity";
   import { getArchive, restoreFromArchive, deleteFromArchive, clearArchive, type ArchivedTab } from "../../lib/archive.ts";
   import { faviconCacheUrl } from "../../lib/favicon.ts";
   import { createFlash } from "../../lib/flash.ts";
@@ -9,12 +10,12 @@
   // put a trap on every property read for no reactivity anyone used.
   let archive = $state.raw<ArchivedTab[]>([]);
   let searchQuery = $state("");
-  let selectedIds = $state<Set<string>>(new Set());
+  const selectedIds = new SvelteSet<string>();
   let statusMessage = $state("");
   // Tracks what is closed, not what is open. The other way round needed an empty set to mean
   // "everything is expanded", so collapsing the last open group emptied the set and sprang
   // them all back open.
-  let collapsedGroups = $state<Set<string>>(new Set());
+  const collapsedGroups = new SvelteSet<string>();
 
   let filtered = $derived.by(() => {
     if (!searchQuery.trim()) return archive;
@@ -65,14 +66,12 @@
   }
 
   function toggleGroup(dateKey: string) {
-    const next = new Set(collapsedGroups);
-    if (next.has(dateKey)) next.delete(dateKey); else next.add(dateKey);
-    collapsedGroups = next;
+    if (collapsedGroups.has(dateKey)) collapsedGroups.delete(dateKey); else collapsedGroups.add(dateKey);
   }
 
   async function reload() {
     archive = await getArchive();
-    selectedIds = new Set();
+    selectedIds.clear();
   }
 
   async function handleRestore(ids: string[]) {
@@ -97,21 +96,22 @@
   const showStatus = createFlash((msg) => { statusMessage = msg; }, 3000);
 
   function toggleSelect(id: string) {
-    const next = new Set(selectedIds);
-    if (next.has(id)) next.delete(id); else next.add(id);
-    selectedIds = next;
+    if (selectedIds.has(id)) selectedIds.delete(id); else selectedIds.add(id);
   }
 
-  function selectAll() { selectedIds = new Set(filtered.map((a) => a.id)); }
-  function selectNone() { selectedIds = new Set(); }
+  // Exactly what the search shows: a selection hidden by the filter would otherwise ride along
+  // into Restore or Delete unseen.
+  function selectAll() {
+    selectedIds.clear();
+    for (const a of filtered) selectedIds.add(a.id);
+  }
+  function selectNone() { selectedIds.clear(); }
 
   function selectGroup(items: ArchivedTab[]) {
-    const next = new Set(selectedIds);
-    const allSelected = items.every((i) => next.has(i.id));
+    const allSelected = items.every((i) => selectedIds.has(i.id));
     for (const item of items) {
-      if (allSelected) next.delete(item.id); else next.add(item.id);
+      if (allSelected) selectedIds.delete(item.id); else selectedIds.add(item.id);
     }
-    selectedIds = next;
   }
 
   function faviconUrl(item: ArchivedTab): string {
