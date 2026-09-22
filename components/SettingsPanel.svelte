@@ -1,29 +1,33 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { getConfig, updateConfig, ruleMatches, ruleToRegex, generalizePatterns, type IgnoreRule } from "../lib/rules.ts";
-  import { getActionLog, clearActionLog, ACTION_LOG_KEY, type ActionLogEntry } from "../lib/actionLog.ts";
+  import { clearActionLog, type ActionLogEntry } from "../lib/actionLog.ts";
 
-  let ignorePatterns = $state<IgnoreRule[]>([]);
-  let ignoreGroupNames = $state<IgnoreRule[]>([]);
-  let newIgnorePattern = $state("");
-  let newIgnoreGroupName = $state("");
-  let actionLog = $state<ActionLogEntry[]>([]);
+  // App already keeps the log live for its automation strip, so it hands it down rather than
+  // this panel holding a second storage subscription.
+  let { actionLog }: { actionLog: ActionLogEntry[] } = $props();
+
+  // The URL and group-name ignore lists share one editor: they differ only in their labels,
+  // the config key they save to, and the group list's "+ Current" button.
+  type IgnoreKey = "ignorePatterns" | "ignoreGroupNames";
+  interface IgnoreEditor {
+    key: IgnoreKey;
+    rules: IgnoreRule[];
+    draft: string;
+    isRegex: boolean;
+    caseSensitive: boolean;
+    selected: Set<string>;
+  }
+
+  const newEditor = (key: IgnoreKey): IgnoreEditor =>
+    ({ key, rules: [], draft: "", isRegex: false, caseSensitive: false, selected: new Set() });
+  let urlList = $state(newEditor("ignorePatterns"));
+  let groupList = $state(newEditor("ignoreGroupNames"));
 
   onMount(async () => {
     const config = await getConfig();
-    ignorePatterns = config.ignorePatterns;
-    ignoreGroupNames = config.ignoreGroupNames;
-    actionLog = await getActionLog();
-  });
-
-  $effect(() => {
-    const listener = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
-      if (area === "local" && changes[ACTION_LOG_KEY]) {
-        actionLog = Array.isArray(changes[ACTION_LOG_KEY].newValue) ? changes[ACTION_LOG_KEY].newValue : [];
-      }
-    };
-    chrome.storage.onChanged.addListener(listener);
-    return () => chrome.storage.onChanged.removeListener(listener);
+    urlList.rules = config.ignorePatterns;
+    groupList.rules = config.ignoreGroupNames;
   });
 
   function formatLogTime(ts: number): string {
@@ -32,16 +36,6 @@
     if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
     return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   }
-
-  async function handleClearLog() {
-    await clearActionLog();
-    actionLog = [];
-  }
-
-  let newPatternIsRegex = $state(false);
-  let newPatternCaseSensitive = $state(false);
-  let newGroupIsRegex = $state(false);
-  let newGroupCaseSensitive = $state(false);
 
   let testerOpen = $state(false);
   let testerPattern = $state("");
@@ -54,9 +48,6 @@
     try { return ruleMatches(testerInput, rule); } catch { return false; }
   });
 
-  let selectedUrlPatterns = $state<Set<string>>(new Set());
-  let selectedGroupNames = $state<Set<string>>(new Set());
-
   function toggleSelect(set: Set<string>, pattern: string) {
     const next = new Set(set);
     if (next.has(pattern)) next.delete(pattern); else next.add(pattern);
@@ -68,87 +59,128 @@
     return parts.length === 1 ? parts[0] : `(${parts.join("|")})`;
   }
 
-  function applyGenerated(target: "url" | "group", regex: string) {
-    if (target === "url") {
-      newIgnorePattern = regex;
-      newPatternIsRegex = true;
-      selectedUrlPatterns = new Set();
-    } else {
-      newIgnoreGroupName = regex;
-      newGroupIsRegex = true;
-      selectedGroupNames = new Set();
-    }
+  function applyGenerated(ed: IgnoreEditor, regex: string) {
+    ed.draft = regex;
+    ed.isRegex = true;
+    ed.selected = new Set();
   }
 
-  async function addIgnorePattern() {
-    const v = newIgnorePattern.trim();
-    if (!v || ignorePatterns.some((r) => r.pattern === v)) return;
-    ignorePatterns = [...ignorePatterns, {
+  async function save(ed: IgnoreEditor, rules: IgnoreRule[]) {
+    ed.rules = rules;
+    await updateConfig((config) => { config[ed.key] = rules; });
+  }
+
+  async function addRule(ed: IgnoreEditor) {
+    const v = ed.draft.trim();
+    if (!v || ed.rules.some((r) => r.pattern === v)) return;
+    const rule: IgnoreRule = {
       pattern: v, enabled: true,
-      ...(newPatternIsRegex ? { isRegex: true } : {}),
-      ...(newPatternCaseSensitive ? { caseSensitive: true } : {}),
-    }];
-    newIgnorePattern = "";
-    newPatternIsRegex = false;
-    newPatternCaseSensitive = false;
-    await updateConfig({ ignorePatterns });
+      ...(ed.isRegex ? { isRegex: true } : {}),
+      ...(ed.caseSensitive ? { caseSensitive: true } : {}),
+    };
+    ed.draft = "";
+    ed.isRegex = false;
+    ed.caseSensitive = false;
+    await save(ed, [...ed.rules, rule]);
   }
 
-  async function removeIgnorePattern(p: string) {
-    ignorePatterns = ignorePatterns.filter((r) => r.pattern !== p);
-    await updateConfig({ ignorePatterns });
-  }
-
-  async function toggleIgnorePattern(p: string) {
-    ignorePatterns = ignorePatterns.map((r) => r.pattern === p ? { ...r, enabled: !r.enabled } : r);
-    await updateConfig({ ignorePatterns });
-  }
-
-  async function toggleIgnorePatternCase(p: string) {
-    ignorePatterns = ignorePatterns.map((r) => r.pattern === p ? { ...r, caseSensitive: !r.caseSensitive || undefined } : r);
-    await updateConfig({ ignorePatterns });
-  }
-
-  async function addIgnoreGroupName() {
-    const v = newIgnoreGroupName.trim();
-    if (!v || ignoreGroupNames.some((r) => r.pattern === v)) return;
-    ignoreGroupNames = [...ignoreGroupNames, {
-      pattern: v, enabled: true,
-      ...(newGroupIsRegex ? { isRegex: true } : {}),
-      ...(newGroupCaseSensitive ? { caseSensitive: true } : {}),
-    }];
-    newIgnoreGroupName = "";
-    newGroupIsRegex = false;
-    newGroupCaseSensitive = false;
-    await updateConfig({ ignoreGroupNames });
-  }
-
-  async function removeIgnoreGroupName(p: string) {
-    ignoreGroupNames = ignoreGroupNames.filter((r) => r.pattern !== p);
-    await updateConfig({ ignoreGroupNames });
-  }
-
-  async function toggleIgnoreGroupName(p: string) {
-    ignoreGroupNames = ignoreGroupNames.map((r) => r.pattern === p ? { ...r, enabled: !r.enabled } : r);
-    await updateConfig({ ignoreGroupNames });
-  }
-
-  async function toggleIgnoreGroupNameCase(p: string) {
-    ignoreGroupNames = ignoreGroupNames.map((r) => r.pattern === p ? { ...r, caseSensitive: !r.caseSensitive || undefined } : r);
-    await updateConfig({ ignoreGroupNames });
-  }
+  const removeRule = (ed: IgnoreEditor, p: string) => save(ed, ed.rules.filter((r) => r.pattern !== p));
+  const toggleRule = (ed: IgnoreEditor, p: string) =>
+    save(ed, ed.rules.map((r) => r.pattern === p ? { ...r, enabled: !r.enabled } : r));
+  const toggleRuleCase = (ed: IgnoreEditor, p: string) =>
+    save(ed, ed.rules.map((r) => r.pattern === p ? { ...r, caseSensitive: !r.caseSensitive || undefined } : r));
 
   async function addCurrentGroupToIgnore() {
     const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!active || active.groupId === -1) return;
     const group = (await chrome.tabGroups.query({})).find((g) => g.id === active.groupId);
     if (!group?.title) return;
-    if (!ignoreGroupNames.some((r) => r.pattern === group.title)) {
-      ignoreGroupNames = [...ignoreGroupNames, { pattern: group.title!, enabled: true }];
-      await updateConfig({ ignoreGroupNames });
+    if (!groupList.rules.some((r) => r.pattern === group.title)) {
+      await save(groupList, [...groupList.rules, { pattern: group.title!, enabled: true }]);
     }
   }
 </script>
+
+{#snippet ignoreEditor(ed: IgnoreEditor, title: string, effect: string, example: string, placeholder: string, onAddCurrent?: () => void)}
+  <div class="p-2 rounded-md bg-surface-hover border border-border">
+    <div class="text-xs text-text font-medium mb-1">{title}</div>
+    <div class="text-[10px] text-text-muted mb-1.5">
+      {effect} Wildcards supported (e.g. <code class="px-0.5 bg-surface rounded">{example}</code>). Use <code class="px-0.5 bg-surface rounded">.*</code> toggle for regex.
+    </div>
+    <div class="flex gap-1 mb-1">
+      <input
+        type="text"
+        class="flex-1 min-w-0 px-1.5 py-1 rounded border border-border bg-surface text-xs text-text placeholder:text-text-muted focus:outline-none focus:border-primary"
+        {placeholder}
+        bind:value={ed.draft}
+        onkeydown={(e) => { if (e.key === "Enter") addRule(ed); }}
+      />
+      <button
+        class="shrink-0 px-1.5 py-1 rounded text-[10px] font-medium border transition-colors {ed.isRegex ? 'bg-accent-cyan/20 text-accent-cyan border-accent-cyan/40' : 'bg-surface text-text-muted border-border hover:text-text'}"
+        onclick={() => ed.isRegex = !ed.isRegex}
+        title={ed.isRegex ? "Regex mode (click for wildcard)" : "Wildcard mode (click for regex)"}
+      >.*</button>
+      <button
+        class="shrink-0 px-1.5 py-1 rounded text-[10px] font-medium border transition-colors {ed.caseSensitive ? 'bg-accent-cyan/20 text-accent-cyan border-accent-cyan/40' : 'bg-surface text-text-muted border-border hover:text-text'}"
+        onclick={() => ed.caseSensitive = !ed.caseSensitive}
+        title={ed.caseSensitive ? "Case sensitive (click for insensitive)" : "Case insensitive (click for sensitive)"}
+      >Aa</button>
+      <button
+        class="shrink-0 px-2 py-1 rounded text-[10px] font-medium bg-primary text-white hover:bg-primary-hover transition-colors disabled:opacity-40"
+        onclick={() => addRule(ed)}
+        disabled={!ed.draft.trim()}
+      >Add</button>
+      {#if onAddCurrent}
+        <button
+          class="shrink-0 px-2 py-1 rounded text-[10px] font-medium bg-accent-cyan/15 text-accent-cyan border border-accent-cyan/30 hover:bg-accent-cyan/25 transition-colors"
+          onclick={onAddCurrent}
+          title="Add the active tab's group name to ignore list"
+        >+ Current</button>
+      {/if}
+    </div>
+    {#if ed.rules.length > 0}
+      <div class="flex flex-wrap gap-1">
+        {#each ed.rules as rule}
+          <span
+            class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] cursor-pointer select-none
+              {ed.selected.has(rule.pattern) ? 'ring-1 ring-primary bg-primary/10 border-primary/40' : rule.enabled ? 'bg-surface border-border text-text' : 'bg-surface/50 border-border/50 text-text-muted line-through'}"
+            role="option"
+            aria-selected={ed.selected.has(rule.pattern)}
+            onclick={(e) => { if (e.shiftKey) ed.selected = toggleSelect(ed.selected, rule.pattern); }}
+            onkeydown={(e) => { if (e.key === " ") { e.preventDefault(); ed.selected = toggleSelect(ed.selected, rule.pattern); } }}
+            tabindex="0"
+            title="Shift+click to select for regex generation"
+          >
+            <button class="w-2 h-2 rounded-full shrink-0 {rule.enabled ? 'bg-accent-green' : 'bg-border'}" onclick={(e) => { e.stopPropagation(); toggleRule(ed, rule.pattern); }} title={rule.enabled ? "Disable" : "Enable"}></button>
+            {#if rule.isRegex}<span class="text-accent-cyan opacity-60" title="Regex">.*</span>{/if}
+            {rule.pattern}
+            <button class="opacity-50 hover:opacity-100 transition-opacity {rule.caseSensitive ? 'text-accent-cyan' : 'text-text-muted'}" onclick={(e) => { e.stopPropagation(); toggleRuleCase(ed, rule.pattern); }} title={rule.caseSensitive ? "Case sensitive" : "Case insensitive"}>Aa</button>
+            <button class="text-text-muted hover:text-accent-red transition-colors" onclick={(e) => { e.stopPropagation(); removeRule(ed, rule.pattern); }} title="Remove">&times;</button>
+          </span>
+        {/each}
+      </div>
+      {#if ed.selected.size > 0}
+        <div class="flex items-center gap-1 mt-1">
+          <button
+            class="px-2 py-0.5 rounded text-[10px] font-medium bg-primary/15 text-primary border border-primary/30 hover:bg-primary/25 transition-colors"
+            onclick={() => applyGenerated(ed, generalizePatterns(ed.rules.filter((r) => ed.selected.has(r.pattern))))}
+            title="Find common pattern across selected rules and generate a generic regex"
+          >Generalize ({ed.selected.size})</button>
+          <button
+            class="px-2 py-0.5 rounded text-[10px] font-medium bg-surface text-text-muted border border-border hover:text-text transition-colors"
+            onclick={() => applyGenerated(ed, combineRegex(ed.rules, ed.selected))}
+            title="Combine selected rules into one regex with alternation (|)"
+          >Combine</button>
+          <button
+            class="px-1.5 py-0.5 rounded text-[10px] text-text-muted hover:text-text transition-colors"
+            onclick={() => ed.selected = new Set()}
+          >Clear</button>
+        </div>
+      {/if}
+      <div class="text-[9px] text-text-muted/60 mt-1">Shift+click rules to select · Generalize finds common pattern · Combine joins with OR</div>
+    {/if}
+  </div>
+{/snippet}
 
 <div class="flex-1 overflow-y-auto px-3 py-2 min-h-0">
   <div class="text-xs font-semibold text-text mb-2">Settings</div>
@@ -157,155 +189,9 @@
   <div class="mb-3">
     <div class="text-[10px] font-semibold text-text-muted uppercase tracking-wider mb-1.5">Ignore Lists</div>
 
-    <!-- Ignore URL patterns -->
-    <div class="p-2 rounded-md bg-surface-hover border border-border mb-2">
-      <div class="text-xs text-text font-medium mb-1">Ignored URL patterns</div>
-      <div class="text-[10px] text-text-muted mb-1.5">
-        Tabs matching these won't be auto-grouped. Wildcards supported (e.g. <code class="px-0.5 bg-surface rounded">localhost:*</code>). Use <code class="px-0.5 bg-surface rounded">.*</code> toggle for regex.
-      </div>
-      <div class="flex gap-1 mb-1">
-        <input
-          type="text"
-          class="flex-1 min-w-0 px-1.5 py-1 rounded border border-border bg-surface text-xs text-text placeholder:text-text-muted focus:outline-none focus:border-primary"
-          placeholder="e.g. localhost:5763"
-          bind:value={newIgnorePattern}
-          onkeydown={(e) => { if (e.key === "Enter") addIgnorePattern(); }}
-        />
-        <button
-          class="shrink-0 px-1.5 py-1 rounded text-[10px] font-medium border transition-colors {newPatternIsRegex ? 'bg-accent-cyan/20 text-accent-cyan border-accent-cyan/40' : 'bg-surface text-text-muted border-border hover:text-text'}"
-          onclick={() => newPatternIsRegex = !newPatternIsRegex}
-          title={newPatternIsRegex ? "Regex mode (click for wildcard)" : "Wildcard mode (click for regex)"}
-        >.*</button>
-        <button
-          class="shrink-0 px-1.5 py-1 rounded text-[10px] font-medium border transition-colors {newPatternCaseSensitive ? 'bg-accent-cyan/20 text-accent-cyan border-accent-cyan/40' : 'bg-surface text-text-muted border-border hover:text-text'}"
-          onclick={() => newPatternCaseSensitive = !newPatternCaseSensitive}
-          title={newPatternCaseSensitive ? "Case sensitive (click for insensitive)" : "Case insensitive (click for sensitive)"}
-        >Aa</button>
-        <button
-          class="shrink-0 px-2 py-1 rounded text-[10px] font-medium bg-primary text-white hover:bg-primary-hover transition-colors disabled:opacity-40"
-          onclick={addIgnorePattern}
-          disabled={!newIgnorePattern.trim()}
-        >Add</button>
-      </div>
-      {#if ignorePatterns.length > 0}
-        <div class="flex flex-wrap gap-1">
-          {#each ignorePatterns as rule}
-            <span
-              class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] cursor-pointer select-none
-                {selectedUrlPatterns.has(rule.pattern) ? 'ring-1 ring-primary bg-primary/10 border-primary/40' : rule.enabled ? 'bg-surface border-border text-text' : 'bg-surface/50 border-border/50 text-text-muted line-through'}"
-              role="option"
-              aria-selected={selectedUrlPatterns.has(rule.pattern)}
-              onclick={(e) => { if (e.shiftKey) selectedUrlPatterns = toggleSelect(selectedUrlPatterns, rule.pattern); }}
-              onkeydown={(e) => { if (e.key === " ") { e.preventDefault(); selectedUrlPatterns = toggleSelect(selectedUrlPatterns, rule.pattern); } }}
-              tabindex="0"
-              title="Shift+click to select for regex generation"
-            >
-              <button class="w-2 h-2 rounded-full shrink-0 {rule.enabled ? 'bg-accent-green' : 'bg-border'}" onclick={(e) => { e.stopPropagation(); toggleIgnorePattern(rule.pattern); }} title={rule.enabled ? "Disable" : "Enable"}></button>
-              {#if rule.isRegex}<span class="text-accent-cyan opacity-60" title="Regex">.*</span>{/if}
-              {rule.pattern}
-              <button class="opacity-50 hover:opacity-100 transition-opacity {rule.caseSensitive ? 'text-accent-cyan' : 'text-text-muted'}" onclick={(e) => { e.stopPropagation(); toggleIgnorePatternCase(rule.pattern); }} title={rule.caseSensitive ? "Case sensitive" : "Case insensitive"}>Aa</button>
-              <button class="text-text-muted hover:text-accent-red transition-colors" onclick={(e) => { e.stopPropagation(); removeIgnorePattern(rule.pattern); }} title="Remove">&times;</button>
-            </span>
-          {/each}
-        </div>
-        {#if selectedUrlPatterns.size > 0}
-          <div class="flex items-center gap-1 mt-1">
-            <button
-              class="px-2 py-0.5 rounded text-[10px] font-medium bg-primary/15 text-primary border border-primary/30 hover:bg-primary/25 transition-colors"
-              onclick={() => applyGenerated("url", generalizePatterns(ignorePatterns.filter((r) => selectedUrlPatterns.has(r.pattern))))}
-              title="Find common pattern across selected rules and generate a generic regex"
-            >Generalize ({selectedUrlPatterns.size})</button>
-            <button
-              class="px-2 py-0.5 rounded text-[10px] font-medium bg-surface text-text-muted border border-border hover:text-text transition-colors"
-              onclick={() => applyGenerated("url", combineRegex(ignorePatterns, selectedUrlPatterns))}
-              title="Combine selected rules into one regex with alternation (|)"
-            >Combine</button>
-            <button
-              class="px-1.5 py-0.5 rounded text-[10px] text-text-muted hover:text-text transition-colors"
-              onclick={() => selectedUrlPatterns = new Set()}
-            >Clear</button>
-          </div>
-        {/if}
-        <div class="text-[9px] text-text-muted/60 mt-1">Shift+click rules to select · Generalize finds common pattern · Combine joins with OR</div>
-      {/if}
-    </div>
-
-    <!-- Ignore group names -->
-    <div class="p-2 rounded-md bg-surface-hover border border-border">
-      <div class="text-xs text-text font-medium mb-1">Ignored group names</div>
-      <div class="text-[10px] text-text-muted mb-1.5">
-        Groups matching these won't be auto-ungrouped. Wildcards supported (e.g. <code class="px-0.5 bg-surface rounded">*Claude*</code>). Use <code class="px-0.5 bg-surface rounded">.*</code> toggle for regex.
-      </div>
-      <div class="flex gap-1 mb-1">
-        <input
-          type="text"
-          class="flex-1 min-w-0 px-1.5 py-1 rounded border border-border bg-surface text-xs text-text placeholder:text-text-muted focus:outline-none focus:border-primary"
-          placeholder="e.g. *Claude* or claude"
-          bind:value={newIgnoreGroupName}
-          onkeydown={(e) => { if (e.key === "Enter") addIgnoreGroupName(); }}
-        />
-        <button
-          class="shrink-0 px-1.5 py-1 rounded text-[10px] font-medium border transition-colors {newGroupIsRegex ? 'bg-accent-cyan/20 text-accent-cyan border-accent-cyan/40' : 'bg-surface text-text-muted border-border hover:text-text'}"
-          onclick={() => newGroupIsRegex = !newGroupIsRegex}
-          title={newGroupIsRegex ? "Regex mode (click for wildcard)" : "Wildcard mode (click for regex)"}
-        >.*</button>
-        <button
-          class="shrink-0 px-1.5 py-1 rounded text-[10px] font-medium border transition-colors {newGroupCaseSensitive ? 'bg-accent-cyan/20 text-accent-cyan border-accent-cyan/40' : 'bg-surface text-text-muted border-border hover:text-text'}"
-          onclick={() => newGroupCaseSensitive = !newGroupCaseSensitive}
-          title={newGroupCaseSensitive ? "Case sensitive (click for insensitive)" : "Case insensitive (click for sensitive)"}
-        >Aa</button>
-        <button
-          class="shrink-0 px-2 py-1 rounded text-[10px] font-medium bg-primary text-white hover:bg-primary-hover transition-colors disabled:opacity-40"
-          onclick={addIgnoreGroupName}
-          disabled={!newIgnoreGroupName.trim()}
-        >Add</button>
-        <button
-          class="shrink-0 px-2 py-1 rounded text-[10px] font-medium bg-accent-cyan/15 text-accent-cyan border border-accent-cyan/30 hover:bg-accent-cyan/25 transition-colors"
-          onclick={addCurrentGroupToIgnore}
-          title="Add the active tab's group name to ignore list"
-        >+ Current</button>
-      </div>
-      {#if ignoreGroupNames.length > 0}
-        <div class="flex flex-wrap gap-1">
-          {#each ignoreGroupNames as rule}
-            <span
-              class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] cursor-pointer select-none
-                {selectedGroupNames.has(rule.pattern) ? 'ring-1 ring-primary bg-primary/10 border-primary/40' : rule.enabled ? 'bg-surface border-border text-text' : 'bg-surface/50 border-border/50 text-text-muted line-through'}"
-              role="option"
-              aria-selected={selectedGroupNames.has(rule.pattern)}
-              onclick={(e) => { if (e.shiftKey) selectedGroupNames = toggleSelect(selectedGroupNames, rule.pattern); }}
-              onkeydown={(e) => { if (e.key === " ") { e.preventDefault(); selectedGroupNames = toggleSelect(selectedGroupNames, rule.pattern); } }}
-              tabindex="0"
-              title="Shift+click to select for regex generation"
-            >
-              <button class="w-2 h-2 rounded-full shrink-0 {rule.enabled ? 'bg-accent-green' : 'bg-border'}" onclick={(e) => { e.stopPropagation(); toggleIgnoreGroupName(rule.pattern); }} title={rule.enabled ? "Disable" : "Enable"}></button>
-              {#if rule.isRegex}<span class="text-accent-cyan opacity-60" title="Regex">.*</span>{/if}
-              {rule.pattern}
-              <button class="opacity-50 hover:opacity-100 transition-opacity {rule.caseSensitive ? 'text-accent-cyan' : 'text-text-muted'}" onclick={(e) => { e.stopPropagation(); toggleIgnoreGroupNameCase(rule.pattern); }} title={rule.caseSensitive ? "Case sensitive" : "Case insensitive"}>Aa</button>
-              <button class="text-text-muted hover:text-accent-red transition-colors" onclick={(e) => { e.stopPropagation(); removeIgnoreGroupName(rule.pattern); }} title="Remove">&times;</button>
-            </span>
-          {/each}
-        </div>
-        {#if selectedGroupNames.size > 0}
-          <div class="flex items-center gap-1 mt-1">
-            <button
-              class="px-2 py-0.5 rounded text-[10px] font-medium bg-primary/15 text-primary border border-primary/30 hover:bg-primary/25 transition-colors"
-              onclick={() => applyGenerated("group", generalizePatterns(ignoreGroupNames.filter((r) => selectedGroupNames.has(r.pattern))))}
-              title="Find common pattern across selected rules and generate a generic regex"
-            >Generalize ({selectedGroupNames.size})</button>
-            <button
-              class="px-2 py-0.5 rounded text-[10px] font-medium bg-surface text-text-muted border border-border hover:text-text transition-colors"
-              onclick={() => applyGenerated("group", combineRegex(ignoreGroupNames, selectedGroupNames))}
-              title="Combine selected rules into one regex with alternation (|)"
-            >Combine</button>
-            <button
-              class="px-1.5 py-0.5 rounded text-[10px] text-text-muted hover:text-text transition-colors"
-              onclick={() => selectedGroupNames = new Set()}
-            >Clear</button>
-          </div>
-        {/if}
-        <div class="text-[9px] text-text-muted/60 mt-1">Shift+click rules to select · Generalize finds common pattern · Combine joins with OR</div>
-      {/if}
+    <div class="grid gap-2">
+      {@render ignoreEditor(urlList, "Ignored URL patterns", "Tabs matching these won't be auto-grouped.", "localhost:*", "e.g. localhost:5763")}
+      {@render ignoreEditor(groupList, "Ignored group names", "Groups matching these won't be auto-ungrouped.", "*Claude*", "e.g. *Claude* or claude", addCurrentGroupToIgnore)}
     </div>
 
     <!-- Pattern tester -->
@@ -376,7 +262,7 @@
         </div>
         <button
           class="mt-1.5 px-2 py-0.5 rounded text-[10px] font-medium bg-surface text-text-muted border border-border hover:text-text transition-colors"
-          onclick={handleClearLog}
+          onclick={clearActionLog}
         >Clear</button>
       {/if}
     </div>

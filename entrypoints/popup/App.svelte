@@ -1188,7 +1188,7 @@
     {/await}
   {:else if activeSection === "settings"}
     {#await loadSettingsPanel() then { default: SettingsPanel }}
-      <SettingsPanel />
+      <SettingsPanel {actionLog} />
     {/await}
   {:else if activeSection === "ai"}
     <div class="flex-1 overflow-y-auto px-3 py-2 min-h-0">
