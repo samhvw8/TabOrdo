@@ -14,14 +14,6 @@ export async function getReadingList(): Promise<ReadingListEntry[]> {
   return chrome.readingList.query({});
 }
 
-export async function removeFromReadingList(url: string): Promise<void> {
-  await chrome.readingList.removeEntry({ url });
-}
-
-export async function markAsRead(url: string): Promise<void> {
-  await chrome.readingList.updateEntry({ url, hasBeenRead: true });
-}
-
 export async function addTabsToReadingList(tabs: { url: string; title: string }[]): Promise<number> {
   const saveable = tabs.filter(
     (tab) => tab.url && !tab.url.startsWith("chrome://") && !tab.url.startsWith("chrome-extension://")

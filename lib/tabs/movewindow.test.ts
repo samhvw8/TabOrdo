@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { installChromeStub, type ChromeStub } from "../testing/chrome-stub.ts";
-import { uniteDomain, isolateDomain, splitByDomain } from "./index.ts";
+import { uniteDomain, isolateDomain, splitByDomain, extractGroupToWindow } from "./index.ts";
 
 let stub: ChromeStub;
 
@@ -63,6 +63,33 @@ describe("isolateDomain", () => {
     expect(stub.groupUpdates).toEqual([
       expect.objectContaining({ title: "Docs", color: "green" }),
     ]);
+  });
+});
+
+describe("extractGroupToWindow", () => {
+  it("moves the group into a new window with its title, colour and collapsed state", async () => {
+    stub.openTabs = [
+      { id: 1, url: "https://a.com", pinned: false, windowId: 1, groupId: 70, index: 0 },
+      { id: 2, url: "https://b.com", pinned: false, windowId: 1, groupId: 70, index: 1 },
+      { id: 3, url: "https://c.com", pinned: false, windowId: 1, groupId: -1, index: 2, active: true },
+    ];
+    stub.groups = [{ id: 70, title: "Read", color: "pink", windowId: 1, collapsed: true }];
+
+    expect(await extractGroupToWindow(70)).toBe(2);
+    const win = stub.openTabs.find((t) => t.id === 1)!.windowId;
+    expect(win).not.toBe(1);
+    expect(stub.openTabs.find((t) => t.id === 2)!.windowId).toBe(win);
+    expect(groupOf(1)).not.toBe(-1);
+    expect(groupOf(1)).toBe(groupOf(2));
+    expect(stub.groupUpdates).toEqual([
+      expect.objectContaining({ title: "Read", color: "pink", collapsed: true }),
+    ]);
+  });
+
+  it("does nothing for a group with no tabs", async () => {
+    stub.openTabs = [{ id: 1, url: "https://a.com", pinned: false, windowId: 1, groupId: -1, index: 0 }];
+    expect(await extractGroupToWindow(70)).toBe(0);
+    expect(stub.windows).toHaveLength(2);
   });
 });
 

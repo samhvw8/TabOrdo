@@ -217,11 +217,6 @@ export function spliceParents(parents: ParentMap, tabIds: number[]): ParentMap |
   return changed ? next : null;
 }
 
-/** Single-tab spliceParents. Kept for the one-at-a-time callers and the shape it documents. */
-export function spliceParent(parents: ParentMap, tabId: number): ParentMap {
-  return spliceParents(parents, [tabId]) ?? parents;
-}
-
 export async function readParents(): Promise<ParentMap> {
   try {
     const data = await chrome.storage.session?.get(TREE_KEY);
