@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
+  import { scrollParent } from "../lib/scroll.ts";
 
   /**
    * Renders its rows only while they are near the viewport; off-screen it stands in as an
@@ -51,14 +52,6 @@
   let placeholderPx = $derived(
     remembered && remembered.rows === rows ? remembered.height : Math.max(1, rows * rowPx)
   );
-
-  function scrollParent(node: HTMLElement): HTMLElement | null {
-    for (let p = node.parentElement; p; p = p.parentElement) {
-      const overflowY = getComputedStyle(p).overflowY;
-      if (overflowY === "auto" || overflowY === "scroll") return p;
-    }
-    return null;
-  }
 
   $effect(() => {
     if (!el) return;

@@ -2,6 +2,7 @@
   import { highlightSegments, type SearchResult } from "../lib/search.ts";
   import { getFullHostname } from "../lib/tabs/index.ts";
   import { groupDotClass } from "../lib/format.ts";
+  import { keepVisible } from "../lib/scroll.ts";
 
   let {
     results,
@@ -41,15 +42,6 @@
     bookmark: "⭐",
     history: "🕐",
   };
-
-  function scrollIntoView(node: HTMLElement, active: boolean) {
-    if (active) node.scrollIntoView({ block: "nearest" });
-    return {
-      update(active: boolean) {
-        if (active) node.scrollIntoView({ block: "nearest" });
-      },
-    };
-  }
 </script>
 
 <div class="flex-1 overflow-y-auto px-1 py-1 min-h-0">
@@ -80,7 +72,7 @@
         role="option"
         aria-selected={i === selectedIndex}
         tabindex="-1"
-        use:scrollIntoView={i === selectedIndex}
+        use:keepVisible={i === selectedIndex}
         class="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left transition-colors group cursor-pointer
           {i === selectedIndex ? 'bg-surface-active' : 'hover:bg-surface-hover'}"
         onclick={() => onselect(item)}
