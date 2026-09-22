@@ -781,20 +781,6 @@
     return () => chrome.storage.onChanged.removeListener(listener);
   });
 
-  $effect(() => {
-    const onKeyDown = (e: KeyboardEvent) => { if (e.key === "Alt") altPressed = true; };
-    const onKeyUp = (e: KeyboardEvent) => { if (e.key === "Alt") altPressed = false; };
-    const onBlur = () => { altPressed = false; };
-    window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("keyup", onKeyUp);
-    window.addEventListener("blur", onBlur);
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("keyup", onKeyUp);
-      window.removeEventListener("blur", onBlur);
-    };
-  });
-
   onMount(async () => {
     // No lock reset here any more. It existed to clear a flag stranded by a popup that
     // closed mid-operation, but it also wiped the background's lock during an AI run —
@@ -848,6 +834,14 @@
     updateResults();
   }
 </script>
+
+<!-- Holding Alt shows each tile's alt-click face. Blur clears it: an Alt released while another
+     window has focus never sends this one a keyup. -->
+<svelte:window
+  onkeydown={(e) => { if (e.key === "Alt") altPressed = true; }}
+  onkeyup={(e) => { if (e.key === "Alt") altPressed = false; }}
+  onblur={() => { altPressed = false; }}
+/>
 
 <div class="{fluid ? 'w-full h-screen' : 'w-[450px] h-[600px]'} flex flex-col overflow-hidden">
   <!-- Search bar — always visible -->
