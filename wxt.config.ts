@@ -11,12 +11,16 @@ export default defineConfig({
     },
     build: {
       sourcemap: process.env.DEV_BUILD === "1" ? "inline" : false,
-      minify: false,
+      minify: process.env.DEV_BUILD !== "1",
     },
   }),
   manifest: {
     name: "TabOrdo - Tab Manager & Organizer",
     description: "Sort, group, deduplicate and manage your tabs with a command palette",
+    // 138 is the first stable release with the global LanguageModel (/aigroup). It also covers
+    // everything older the code used to feature-test: storage getKeys (130), readingList (120),
+    // sidePanel.open (116).
+    minimum_chrome_version: "138",
     icons: {
       16: "assets/icon-16.png",
       32: "assets/icon-32.png",
