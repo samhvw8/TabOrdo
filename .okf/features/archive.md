@@ -4,7 +4,7 @@ title: Tab archive
 description: Archiving records tabs in a capped list in chrome.storage.local and closes them, and a full-page archive view searches, restores and deletes those entries.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/archive.ts
 tags: [archive, storage, tabs]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-17T00:16:05Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-22T05:33:03Z }
 sources:
   - id: archive-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/archive.ts
@@ -13,7 +13,7 @@ sources:
   - id: archive-page
     resource: https://github.com/samhvw8/TabOrdo/blob/main/entrypoints/archive/App.svelte
     title: Archive page
-    last_modified: 2026-08-21
+    last_modified: 2026-09-22
   - id: actions-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/actions.ts
     title: /archive handler
@@ -107,7 +107,9 @@ The `/archive` handler:[^actions-ts]
 - Header stats: tab count, distinct sites, distinct groups; Restore N, Delete N and Clear All buttons.[^archive-page]
 - Plain substring search over title, URL and group name, with a result count.[^archive-page]
 - Entries grouped by day (Today, Yesterday, then a localised weekday date), newest first; each day collapses and has its own select toggle.[^archive-page]
-- Clicking a row toggles selection; each row also has Restore and Delete buttons.[^archive-page]
+- Clicking a row toggles selection; each row also has Restore and Delete buttons. "Select all" selects exactly the entries the search shows.[^archive-page]
+- Restore, Delete and Clear All confirm in a status toast for 3 s. A newer message restarts that timer rather than being cleared by the older one's.[^archive-page]
+- Colours and fonts are the `app.css` design tokens the popup uses: the same surface, text and accent colours and the system font stack. Sizes stay in px, because the root font size of 13px would shrink Tailwind's rem spacing on this page.[^archive-page]
 - Favicons come only from Chrome's local favicon cache, never from the site.[^archive-page][^changelog]
 - `archive` is `$state.raw`, and grouping computes one date key per entry and one label per day.[^archive-page][^commit-6ee12ce]
 
