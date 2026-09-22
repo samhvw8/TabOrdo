@@ -4,7 +4,7 @@ title: Background automation
 description: The service worker's tab listeners (auto-group, auto-ungroup, auto-sort, pin follow, auto-discard, switch-to-existing, context menus), the lib modules that hold their bodies, and the guards that keep them from fighting other extensions or each other.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/entrypoints/background/index.ts
 tags: [background, service-worker, automation, auto-group, coexistence]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-22T14:00:00Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-22T18:00:00Z }
 sources:
   - id: bg-index
     resource: https://github.com/samhvw8/TabOrdo/blob/main/entrypoints/background/index.ts
@@ -82,6 +82,10 @@ sources:
     resource: https://github.com/samhvw8/TabOrdo/blob/main/entrypoints/popup/App.svelte
     title: entrypoints/popup/App.svelte (toggle row, Group and Sort tiles)
     last_modified: 2026-09-22
+  - id: rules-editor
+    resource: https://github.com/samhvw8/TabOrdo/blob/main/components/RulesEditor.svelte
+    title: components/RulesEditor.svelte (auto-group switch)
+    last_modified: 2026-09-22
   - id: settings-panel
     resource: https://github.com/samhvw8/TabOrdo/blob/main/components/SettingsPanel.svelte
     title: components/SettingsPanel.svelte
@@ -127,7 +131,7 @@ sources:
 
 What the worker remembers between events is one `AutomationState`, created when the worker starts and passed to every automation: both self-write ledgers, group creation times, recently created tabs and the auto-ungroup timers. It lives in memory only, so a worker restart starts it empty.[^automation][^bg-index] The lineage listeners stay inline in the worker, because `lib/tabs/tree.ts` assumes the worker is its only writer ([branch lineage](/features/branch-lineage.md)).[^bg-index]
 
-Every automation is off by default and driven by a flag in the shared `rulesConfig` object (see [grouping rules](/features/grouping-rules.md)); the automations read it through the cached `getConfig()` on each event.[^automation] The lock URL sync, which runs on every url, title and status event, reads the equally cached lock list, so a tab no lock tracks costs no storage read ([position locks](/features/position-locks.md)). The popup's toggle row writes the flags.[^popup-app]
+Every automation is off by default and driven by a flag in the shared `rulesConfig` object (see [grouping rules](/features/grouping-rules.md)); the automations read it through the cached `getConfig()` on each event.[^automation] The lock URL sync, which runs on every url, title and status event, reads the equally cached lock list, so a tab no lock tracks costs no storage read ([position locks](/features/position-locks.md)). The popup's toggle row writes the flags. It renders from `AUTOMATION_TOGGLES`, one row per flag with its label and tooltip, over one `automation` record that the storage subscription keeps in step with `rulesConfig`, so a flag switched in the side panel shows in the popup and the other way round.[^popup-app] The Rules editor's auto-group switch reads and flips the same record ([grouping rules](/features/grouping-rules.md)).[^rules-editor]
 
 | Flag | Toggle label | Trigger | Effect |
 |------|--------------|---------|--------|
@@ -225,6 +229,7 @@ The settle window and the self-write ledger came in as a pair: the first general
 [^action-log-test]: lib/actionLog.test.ts
 [^close]: lib/tabs/close.ts
 [^popup-app]: entrypoints/popup/App.svelte
+[^rules-editor]: components/RulesEditor.svelte
 [^settings-panel]: components/SettingsPanel.svelte
 [^commit-untitled]: commit 576f1c4
 [^commit-coexist]: commit ae3793c

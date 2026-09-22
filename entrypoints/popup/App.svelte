@@ -8,7 +8,7 @@
   import { createTabSearch, type TabSearch } from "../../lib/tabsearch.ts";
   import { resolveView, readingListRows, duplicateTabs, firstSelectable, nextSelectable, ACTION_PREFIXES, type ViewContext } from "../../lib/views.ts";
   import { createDebouncer } from "../../lib/debounce.ts";
-  import { updateConfig } from "../../lib/rules.ts";
+  import { updateConfig, type AutomationFlag, type AutomationFlags } from "../../lib/rules.ts";
   import { matchCommands, ALL_COMMANDS, TRIAGE_COMMANDS, type CommandDefinition } from "../../lib/commands.ts";
   import { snapshotBeforeGroup, executeUndo, hasUndo, touchesUndoStack } from "../../lib/undo.ts";
   import { hasSavedWorkspace, loadTabsFromText } from "../../lib/workspace.ts";
@@ -55,13 +55,25 @@
   let showHelp = $state(false);
   let activeSection = $state<SidebarSection>("dashboard");
 
-  let autoGroupEnabled = $state(false);
-  let autoUngroupEnabled = $state(false);
-  let useRulesEnabled = $state(false);
-  let autoSortEnabled = $state(false);
-  let autoPinFollowEnabled = $state(false);
-  let autoDiscardEnabled = $state(false);
-  let switchToExistingEnabled = $state(false);
+  /** The dashboard's automation switches, in two clusters: how tabs get grouped, then the rest. */
+  const AUTOMATION_TOGGLES: { key: AutomationFlag; label: string; tip: string }[][] = [
+    [
+      { key: "useRules", label: "Rules", tip: "Custom rules for grouping" },
+      { key: "autoGroup", label: "Auto", tip: "Auto-group new tabs" },
+      { key: "autoUngroup", label: "Ungroup", tip: "Dissolve a group when only one tab is left. Named groups only — untitled ones are left alone, since another extension may still be filling them." },
+    ],
+    [
+      { key: "autoSort", label: "Sort", tip: "Auto-sort on load" },
+      { key: "autoPinFollow", label: "Pin", tip: "Sync pins across windows" },
+      { key: "autoDiscard", label: "Discard", tip: "Auto-discard 45min+" },
+      { key: "switchToExisting", label: "Switch", tip: "Jump to existing tab instead of duplicate" },
+    ],
+  ];
+
+  // Those flags as rulesConfig holds them: read at mount, then kept current by the storage
+  // subscription, so a switch flipped in the other surface shows here too. RulesEditor's
+  // auto-group switch reads and flips this same record.
+  let automation = $state(Object.fromEntries(AUTOMATION_TOGGLES.flat().map((t) => [t.key, false])) as AutomationFlags);
   let hasWorkspace = $state(false);
   // The panel persists, so grabbing focus on open would yank it off the page the user is reading.
   // `fluid` is fixed per mount — the popup and side-panel entrypoints each pass a literal — so
@@ -83,10 +95,7 @@
   // The toggles below run background daemons that move tabs while the popup is shut. Until now
   // the only record of that was buried in Settings, so "why did my tab move" had no answer
   // anywhere near the switches that caused it.
-  let anyAutomationOn = $derived(
-    useRulesEnabled || autoGroupEnabled || autoUngroupEnabled || autoSortEnabled ||
-    autoPinFollowEnabled || autoDiscardEnabled || switchToExistingEnabled
-  );
+  let anyAutomationOn = $derived(Object.values(automation).some(Boolean));
   let lastAutomation = $derived(actionLog[0] ?? null);
 
   let onboardingDismissed = $state(true);
@@ -740,13 +749,13 @@
 
   function applyConfig(rc: Record<string, unknown> | undefined) {
     if (!rc) return;
-    autoGroupEnabled = rc.autoGroup === true;
-    autoUngroupEnabled = rc.autoUngroup === true;
-    useRulesEnabled = rc.useRules === true;
-    autoSortEnabled = rc.autoSort === true;
-    autoPinFollowEnabled = rc.autoPinFollow === true;
-    autoDiscardEnabled = rc.autoDiscard === true;
-    switchToExistingEnabled = rc.switchToExisting === true;
+    for (const key of Object.keys(automation) as AutomationFlag[]) automation[key] = rc[key] === true;
+  }
+
+  async function toggleAutomation(key: AutomationFlag) {
+    automation[key] = !automation[key];
+    const on = automation[key];
+    await updateConfig((config) => { config[key] = on; });
   }
 
   // Every cross-realm value used to be read once at mount and never again, which is what let
@@ -916,7 +925,7 @@
     />
   {#if activeSection === "rules"}
     {#await loadRulesEditor() then { default: RulesEditor }}
-      <RulesEditor onclose={() => { activeSection = "dashboard"; }} />
+      <RulesEditor {automation} ontoggle={toggleAutomation} onclose={() => { activeSection = "dashboard"; }} />
     {/await}
   {:else if activeSection === "pins"}
     {#await loadPinsPanel() then { default: PinsPanel }}
@@ -1168,25 +1177,17 @@
 
       <!-- Toggles -->
       <div class="flex items-center gap-1 px-3 pb-2 text-[10px]">
-        {#each [{label: "Rules", enabled: useRulesEnabled, toggle: async () => { useRulesEnabled = !useRulesEnabled; await updateConfig({ useRules: useRulesEnabled }); }, tip: "Custom rules for grouping"},
-                {label: "Auto", enabled: autoGroupEnabled, toggle: async () => { autoGroupEnabled = !autoGroupEnabled; await updateConfig({ autoGroup: autoGroupEnabled }); }, tip: "Auto-group new tabs"},
-                {label: "Ungroup", enabled: autoUngroupEnabled, toggle: async () => { autoUngroupEnabled = !autoUngroupEnabled; await updateConfig({ autoUngroup: autoUngroupEnabled }); }, tip: "Dissolve a group when only one tab is left. Named groups only — untitled ones are left alone, since another extension may still be filling them."}] as t}
-          <button
-            class="px-1.5 py-0.5 rounded transition-colors border
-              {t.enabled ? 'bg-primary/15 text-primary border-primary/30 font-medium' : 'bg-surface-hover text-text-muted border-transparent hover:border-border'}"
-            onclick={t.toggle} title={t.tip} aria-pressed={t.enabled}
-          >{t.enabled ? "✓ " : ""}{t.label}</button>
-        {/each}
-        <div class="w-px h-3 bg-border/40 mx-0.5"></div>
-        {#each [{label: "Sort", enabled: autoSortEnabled, toggle: async () => { autoSortEnabled = !autoSortEnabled; await updateConfig({ autoSort: autoSortEnabled }); }, tip: "Auto-sort on load"},
-                {label: "Pin", enabled: autoPinFollowEnabled, toggle: async () => { autoPinFollowEnabled = !autoPinFollowEnabled; await updateConfig({ autoPinFollow: autoPinFollowEnabled }); }, tip: "Sync pins across windows"},
-                {label: "Discard", enabled: autoDiscardEnabled, toggle: async () => { autoDiscardEnabled = !autoDiscardEnabled; await updateConfig({ autoDiscard: autoDiscardEnabled }); }, tip: "Auto-discard 45min+"},
-                {label: "Switch", enabled: switchToExistingEnabled, toggle: async () => { switchToExistingEnabled = !switchToExistingEnabled; await updateConfig({ switchToExisting: switchToExistingEnabled }); }, tip: "Jump to existing tab instead of duplicate"}] as t}
-          <button
-            class="px-1.5 py-0.5 rounded transition-colors border
-              {t.enabled ? 'bg-primary/15 text-primary border-primary/30 font-medium' : 'bg-surface-hover text-text-muted border-transparent hover:border-border'}"
-            onclick={t.toggle} title={t.tip} aria-pressed={t.enabled}
-          >{t.enabled ? "✓ " : ""}{t.label}</button>
+        {#each AUTOMATION_TOGGLES as cluster, ci}
+          {#if ci > 0}
+            <div class="w-px h-3 bg-border/40 mx-0.5"></div>
+          {/if}
+          {#each cluster as t}
+            <button
+              class="px-1.5 py-0.5 rounded transition-colors border
+                {automation[t.key] ? 'bg-primary/15 text-primary border-primary/30 font-medium' : 'bg-surface-hover text-text-muted border-transparent hover:border-border'}"
+              onclick={() => toggleAutomation(t.key)} title={t.tip} aria-pressed={automation[t.key]}
+            >{automation[t.key] ? "✓ " : ""}{t.label}</button>
+          {/each}
         {/each}
       </div>
 

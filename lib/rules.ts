@@ -48,6 +48,12 @@ export interface RulesConfig {
   sortRules: SortRule[];
 }
 
+/** The rulesConfig switches the dashboard's toggle row flips. Each is off by default. */
+export type AutomationFlag =
+  "useRules" | "autoGroup" | "autoUngroup" | "autoSort" | "autoPinFollow" | "autoDiscard" | "switchToExisting";
+
+export type AutomationFlags = Record<AutomationFlag, boolean>;
+
 const CONFIG_KEY = "rulesConfig";
 
 function normalizeIgnoreRules(raw: unknown): IgnoreRule[] {
