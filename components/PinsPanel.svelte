@@ -10,16 +10,10 @@
   let openTabs = $state<chrome.tabs.Tab[]>([]);
   let activeTabId = $state<number | null>(null);
 
-  let dragGroup = $state<string | null>(null);
-  let dragIndex = $state<number | null>(null);
-  let dropIndex = $state<number | null>(null);
-
   let sortRules = $state<SortRule[]>([]);
   let newSortDomain = $state("");
   /** Per-rule text of the "add pattern" box, keyed by rule id. */
   let patternDrafts = $state<Record<string, string>>({});
-  let ruleDragIndex = $state<number | null>(null);
-  let ruleDropIndex = $state<number | null>(null);
 
   // The same function the sort itself uses, so a badge can never disagree with the order the
   // sort produces.
@@ -195,37 +189,63 @@
     await saveSortRules();
   }
 
-  function onRuleDragStart(index: number, e: DragEvent) {
-    ruleDragIndex = index;
+  // --- Drag to reorder ----------------------------------------------------
+  // One drag at a time across the sort rules and every locked group. `list` names the list the
+  // drag started in, so a row only takes a drop from its own list.
+
+  const SORT_LIST = "sort";
+  const lockList = (groupName: string) => `lock:${groupName}`;
+
+  let drag = $state<{ list: string; from: number; over: number | null } | null>(null);
+
+  const isDragged = (list: string, i: number) => drag?.list === list && drag.from === i;
+  const isDropTarget = (list: string, i: number) => drag?.list === list && drag.over === i && drag.from !== i;
+
+  function onDragStart(list: string, index: number, e: DragEvent) {
+    drag = { list, from: index, over: null };
     if (e.dataTransfer) {
       e.dataTransfer.effectAllowed = "move";
       e.dataTransfer.setData("text/plain", "");
     }
   }
 
-  function onRuleDragOver(index: number, e: DragEvent) {
-    if (ruleDragIndex === null) return;
+  function onDragOver(list: string, index: number, e: DragEvent) {
+    if (drag?.list !== list) return;
     e.preventDefault();
     if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
-    ruleDropIndex = index;
+    drag.over = index;
+  }
+
+  function endDrag() {
+    drag = null;
+  }
+
+  /** Ends the drag and returns `items` in their new order, or null when nothing moved. */
+  function takeDrop<T>(list: string, items: T[], e: DragEvent): T[] | null {
+    e.preventDefault();
+    const d = drag;
+    endDrag();
+    if (d?.list !== list || d.over === null || d.over === d.from || d.from >= items.length) return null;
+    const next = [...items];
+    const [moved] = next.splice(d.from, 1);
+    next.splice(d.over, 0, moved);
+    return next;
   }
 
   async function onRuleDrop(e: DragEvent) {
-    e.preventDefault();
-    const from = ruleDragIndex;
-    const to = ruleDropIndex;
-    resetRuleDrag();
-    if (from === null || to === null || from === to) return;
-    const next = [...sortRules];
-    const [moved] = next.splice(from, 1);
-    next.splice(to, 0, moved);
+    const next = takeDrop(SORT_LIST, sortRules, e);
+    if (!next) return;
     sortRules = next;
     await saveSortRules();
   }
 
-  function resetRuleDrag() {
-    ruleDragIndex = null;
-    ruleDropIndex = null;
+  async function onPinDrop(groupName: string, e: DragEvent) {
+    const tabs = groupedPins.find((g) => g.groupName === groupName)?.tabs ?? [];
+    const urls = takeDrop(lockList(groupName), tabs.map((t) => t.url), e);
+    if (!urls) return;
+    await reorderPins(groupName, urls);
+    await load();
+    debouncedApplyPins(groupName);
   }
 
   /** Enter submits, except mid-IME-composition where Enter is picking a candidate. */
@@ -281,45 +301,6 @@
   async function handleUnpinGroup(groupTitle: string) {
     await unpinGroup(groupTitle);
     await load();
-  }
-
-  function onDragStart(groupName: string, index: number, e: DragEvent) {
-    dragGroup = groupName;
-    dragIndex = index;
-    if (e.dataTransfer) {
-      e.dataTransfer.effectAllowed = "move";
-      e.dataTransfer.setData("text/plain", "");
-    }
-  }
-
-  function onDragOver(groupName: string, index: number, e: DragEvent) {
-    if (dragGroup !== groupName) return;
-    e.preventDefault();
-    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
-    dropIndex = index;
-  }
-
-  async function onDrop(groupName: string, e: DragEvent) {
-    e.preventDefault();
-    if (dragGroup !== groupName || dragIndex === null || dropIndex === null || dragIndex === dropIndex) {
-      resetDrag();
-      return;
-    }
-    const group = groupedPins.find((g) => g.groupName === groupName);
-    if (!group) { resetDrag(); return; }
-    const urls = group.tabs.map((t) => t.url);
-    const [moved] = urls.splice(dragIndex, 1);
-    urls.splice(dropIndex, 0, moved);
-    resetDrag();
-    await reorderPins(groupName, urls);
-    await load();
-    debouncedApplyPins(groupName);
-  }
-
-  function resetDrag() {
-    dragGroup = null;
-    dragIndex = null;
-    dropIndex = null;
   }
 
   let applyTimer: ReturnType<typeof setTimeout> | undefined;
@@ -396,8 +377,8 @@
           {@const counts = matchCounts.get(rule.id)}
           <div
             class="rounded-md border border-border bg-surface-hover transition-colors
-              {ruleDragIndex === i ? 'opacity-40' : ''}
-              {ruleDragIndex !== null && ruleDropIndex === i && ruleDragIndex !== i ? 'border-t-2 border-t-primary' : ''}
+              {isDragged(SORT_LIST, i) ? 'opacity-40' : ''}
+              {isDropTarget(SORT_LIST, i) ? 'border-t-2 border-t-primary' : ''}
               {rule.enabled ? '' : 'opacity-50'}"
             role="listitem"
           >
@@ -405,9 +386,9 @@
               <div
                 class="shrink-0 w-4 flex items-center justify-center cursor-grab active:cursor-grabbing text-text-muted hover:text-text select-none"
                 draggable="true"
-                ondragstart={(e) => onRuleDragStart(i, e)}
-                ondragover={(e) => onRuleDragOver(i, e)}
-                ondragend={resetRuleDrag}
+                ondragstart={(e) => onDragStart(SORT_LIST, i, e)}
+                ondragover={(e) => onDragOver(SORT_LIST, i, e)}
+                ondragend={endDrag}
                 title="Drag to reorder"
                 role="button"
                 tabindex="0"
@@ -572,6 +553,7 @@
       <div class="text-[10px] text-text-muted px-2 py-1.5">No pinned tabs. Use /pin to pin a tab position within a group.</div>
     {:else}
       {#each groupedPins as group}
+        {@const list = lockList(group.groupName)}
         <div class="mb-2">
           <div class="flex items-center gap-2 px-2 py-1 rounded-t-md bg-surface-hover border border-b-0 border-border">
             <span class="w-2 h-2 rounded-full bg-accent-cyan shrink-0"></span>
@@ -580,7 +562,7 @@
           </div>
           <div
             class="border border-border rounded-b-md overflow-hidden"
-            ondrop={(e) => onDrop(group.groupName, e)}
+            ondrop={(e) => onPinDrop(group.groupName, e)}
             ondragover={(e) => e.preventDefault()}
             role="list"
           >
@@ -588,12 +570,11 @@
               {@const openTab = findOpenTab(pin.url, pin.tabId)}
               {@const hostname = (() => { try { return new URL(pin.url).hostname; } catch { return pin.url; } })()}
               {@const displayTitle = pin.title || openTab?.title || hostname}
-              {@const isDragOver = dragGroup === group.groupName && dropIndex === i && dragIndex !== i}
               {@const isActive = !!(openTab && openTab.id === activeTabId)}
               <div
                 class="flex items-center border-b border-border last:border-b-0 transition-colors
-                  {dragGroup === group.groupName && dragIndex === i ? 'opacity-40' : ''}
-                  {isDragOver ? 'border-t-2 border-t-primary' : ''}
+                  {isDragged(list, i) ? 'opacity-40' : ''}
+                  {isDropTarget(list, i) ? 'border-t-2 border-t-primary' : ''}
                   {isActive ? 'bg-primary/10 border-l-2 border-l-primary' : ''}"
                 role="listitem"
               >
@@ -601,9 +582,9 @@
                 <div
                   class="shrink-0 w-7 flex items-center justify-center self-stretch cursor-grab active:cursor-grabbing text-text-muted hover:text-text hover:bg-surface-active transition-colors select-none"
                   draggable="true"
-                  ondragstart={(e) => onDragStart(group.groupName, i, e)}
-                  ondragover={(e) => onDragOver(group.groupName, i, e)}
-                  ondragend={resetDrag}
+                  ondragstart={(e) => onDragStart(list, i, e)}
+                  ondragover={(e) => onDragOver(list, i, e)}
+                  ondragend={endDrag}
                   title="Drag to reorder"
                   role="button"
                   tabindex="0"

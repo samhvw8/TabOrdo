@@ -1,6 +1,7 @@
 <script lang="ts">
   import { highlightSegments, type SearchResult } from "../lib/search.ts";
   import { getFullHostname } from "../lib/tabs/index.ts";
+  import { groupDotClass } from "../lib/format.ts";
 
   let {
     results,
@@ -39,18 +40,6 @@
     tab: "🔵",
     bookmark: "⭐",
     history: "🕐",
-  };
-
-  const groupColors: Record<string, string> = {
-    blue: "bg-accent-blue",
-    cyan: "bg-accent-cyan",
-    green: "bg-accent-green",
-    yellow: "bg-accent-yellow",
-    orange: "bg-accent-orange",
-    pink: "bg-accent-pink",
-    purple: "bg-accent-purple",
-    red: "bg-accent-red",
-    grey: "bg-border",
   };
 
   function scrollIntoView(node: HTMLElement, active: boolean) {
@@ -112,7 +101,7 @@
         <div class="flex-1 min-w-0">
           <div class="flex items-center gap-1.5">
             {#if item.groupColor}
-              <span class="w-1.5 h-1.5 rounded-full shrink-0 {groupColors[item.groupColor] || 'bg-border'}"></span>
+              <span class="w-1.5 h-1.5 rounded-full shrink-0 {groupDotClass[item.groupColor] || 'bg-border'}"></span>
             {/if}
             {#if item.pinned}
               <span class="text-[10px] text-accent-yellow shrink-0">📌</span>

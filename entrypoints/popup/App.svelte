@@ -15,6 +15,7 @@
   import { withBulkLock } from "../../lib/bulklock.ts";
   import { checkAIAvailability, getAIProgress, defaultProgress, AI_PROGRESS_KEY, type AIGroupProgress } from "../../lib/ai.ts";
   import { getActionLog, ACTION_LOG_KEY, type ActionLogEntry } from "../../lib/actionLog.ts";
+  import { groupDotClass, relTime } from "../../lib/format.ts";
   import { runAction, mergeStatus, FEEDBACK_URL } from "../../lib/actions.ts";
   import { DASHBOARD_ACTION_POOL, ACTION_POOL_MAP, DEFAULT_DASHBOARD_IDS, ALT_MODE, MORE_SECTIONS,
            UNPIN_ICON, PIN_TOP_ICON, type DashActionDef, type MoreItem } from "../../lib/dashboard.ts";
@@ -89,13 +90,6 @@
     autoPinFollowEnabled || autoDiscardEnabled || switchToExistingEnabled
   );
   let lastAutomation = $derived(actionLog[0] ?? null);
-
-  function relTime(ts: number): string {
-    const diff = Date.now() - ts;
-    if (diff < 60_000) return "just now";
-    if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
-    return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  }
 
   let onboardingDismissed = $state(true);
   let helpFilter = $state("");
@@ -269,11 +263,6 @@
     blue: "bg-accent-blue/5", cyan: "bg-accent-cyan/5", green: "bg-accent-green/5",
     yellow: "bg-accent-yellow/5", orange: "bg-accent-orange/5", pink: "bg-accent-pink/5",
     purple: "bg-accent-purple/5", red: "bg-accent-red/5", grey: "bg-surface-hover",
-  };
-  const dotColors: Record<string, string> = {
-    blue: "bg-accent-blue", cyan: "bg-accent-cyan", green: "bg-accent-green",
-    yellow: "bg-accent-yellow", orange: "bg-accent-orange", pink: "bg-accent-pink",
-    purple: "bg-accent-purple", red: "bg-accent-red", grey: "bg-border",
   };
 
   async function loadTabs() {
@@ -1188,7 +1177,7 @@
     {/await}
   {:else if activeSection === "settings"}
     {#await loadSettingsPanel() then { default: SettingsPanel }}
-      <SettingsPanel />
+      <SettingsPanel {actionLog} />
     {/await}
   {:else if activeSection === "ai"}
     <div class="flex-1 overflow-y-auto px-3 py-2 min-h-0">
@@ -1562,7 +1551,7 @@
                 class="shrink-0 w-3 h-3 rounded accent-primary" title="Select all tabs in this group" />
               <button class="flex items-center gap-2 flex-1 min-w-0 focus-visible:ring-2 focus-visible:ring-primary focus-visible:rounded" aria-expanded={!collapsed} onclick={() => toggleGroupCollapse(groupId)}>
                 <svg class="w-3 h-3 text-text-muted transition-transform shrink-0 {collapsed ? '' : 'rotate-90'}" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
-                <span class="w-2 h-2 rounded-full shrink-0 {dotColors[group.color] || 'bg-border'}"></span>
+                <span class="w-2 h-2 rounded-full shrink-0 {groupDotClass[group.color] || 'bg-border'}"></span>
                 <span class="text-xs font-medium text-text truncate">{group.title}</span>
                 <span class="text-[10px] text-text-muted shrink-0">({group.tabs.length})</span>
               </button>
@@ -1577,9 +1566,6 @@
               <div class="p-1 grid gap-0.5">
                 {#each chunkRows(group.tabs) as rows}
                   <LazyRows rows={rows.length}>
-                    <!-- Keyed: TabCard owns per-instance state (an open volume slider), so an
-                         unkeyed list re-binds that slider to whatever tab lands on the index
-                         after an action reorders things. -->
                     {#each rows as tab (tab.id)}
                       <TabCard {tab} selected={selectedTabs.has(tab.id)}
                         positionPinned={!!getPinForTab(tab.url, group.title, pinnedTabs)}
