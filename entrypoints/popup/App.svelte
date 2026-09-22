@@ -8,7 +8,7 @@
   import { resolveView, readingListRows, duplicateTabs, firstSelectable, nextSelectable, ACTION_PREFIXES, type ViewContext } from "../../lib/views.ts";
   import { createDebouncer } from "../../lib/debounce.ts";
   import { updateConfig } from "../../lib/rules.ts";
-  import { matchCommands, ALL_COMMANDS, TRIAGE_COMMANDS, CATEGORY_STYLES, groupCommands, type CommandDefinition, type CommandCategory } from "../../lib/commands.ts";
+  import { matchCommands, ALL_COMMANDS, TRIAGE_COMMANDS, type CommandDefinition } from "../../lib/commands.ts";
   import { snapshotBeforeGroup, executeUndo, hasUndo, touchesUndoStack } from "../../lib/undo.ts";
   import { hasSavedWorkspace, loadTabsFromText } from "../../lib/workspace.ts";
   import { getReadingList } from "../../lib/readinglist.ts";
@@ -1084,30 +1084,8 @@
         <kbd class="px-1 py-0.5 rounded bg-surface text-[9px] text-center">^Del</kbd><span class="text-[10px] text-text-muted">Close tab</span><span></span>
         <kbd class="px-1 py-0.5 rounded bg-surface text-[9px] text-center">⌘Z</kbd><span class="text-[10px] text-text-muted">Undo</span><span></span>
       </div>
-      {#each (["search", "action", "view"] as CommandCategory[]) as cat}
-        {@const catCmds = filteredCmds.filter(c => c.category === cat)}
-        {#if catCmds.length > 0}
-        <div class="flex items-center gap-2 mb-1 mt-2">
-          <span class="text-[10px] font-semibold uppercase tracking-wider {CATEGORY_STYLES[cat].color}">{CATEGORY_STYLES[cat].label}</span>
-          <div class="flex-1 h-px bg-border/50"></div>
-        </div>
-        {@const buckets = groupCommands(catCmds)}
-        {#each buckets as bucket}
-          {#if bucket.group && buckets.length > 1}
-            <div class="px-2 pt-1.5 pb-0.5 text-[9px] font-medium uppercase tracking-wider text-text-muted/60">{bucket.group}</div>
-          {/if}
-          {#each bucket.commands as cmd}
-            <button
-              class="w-full flex items-center gap-2 px-2 py-1 rounded hover:bg-surface-hover transition-colors text-left focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface"
-              onclick={() => { showHelp = false; helpFilter = ""; setQuery(cmd.prefix.startsWith("@") ? `${cmd.prefix} ` : `/${cmd.prefix} `); }}
-            >
-              <span class="font-mono text-xs font-medium w-16 shrink-0 {cmd.color}">{cmd.label}</span>
-              <span class="text-xs text-text-muted">{cmd.description}</span>
-            </button>
-          {/each}
-        {/each}
-        {/if}
-      {/each}
+      <!-- The palette's command list, with no row highlighted: the help list has no cursor. -->
+      <CommandHints commands={filteredCmds} selectedIndex={-1} onselect={(cmd) => { showHelp = false; helpFilter = ""; handleCommandSelect(cmd); }} />
     </div>
   {:else if showPalette}
     <!-- Command palette mode -->
