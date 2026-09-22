@@ -29,6 +29,27 @@ describe("logAction", () => {
     expect(log[19].detail).toBe("entry 5");
   });
 
+  // Auto-group logs once per tab it groups, and a burst of loads groups several tabs at once.
+  // Each call used to read the log and write it back, so overlapping calls overwrote each other.
+  it("keeps every entry of a burst, in order, and writes once or twice", async () => {
+    const set = chrome.storage.local.set.bind(chrome.storage.local);
+    let writes = 0;
+    (chrome.storage.local.set as unknown) = (items: Record<string, unknown>) => { writes++; return set(items); };
+    await Promise.all(Array.from({ length: 10 }, (_, i) => logAction("Grouped", `tab ${i}`)));
+    const log = await getActionLog();
+    expect(log.map((e) => e.detail)).toEqual(Array.from({ length: 10 }, (_, i) => `tab ${9 - i}`));
+    expect(writes).toBeLessThanOrEqual(2);
+  });
+
+  it("keeps logging after a failed write", async () => {
+    const set = chrome.storage.local.set.bind(chrome.storage.local);
+    (chrome.storage.local.set as unknown) = async () => { throw new Error("quota exceeded"); };
+    await logAction("Grouped", "lost");
+    (chrome.storage.local.set as unknown) = set;
+    await logAction("Grouped", "kept");
+    expect((await getActionLog()).map((e) => e.detail)).toEqual(["kept"]);
+  });
+
   it("never throws even if storage fails", async () => {
     (chrome.storage.local.set as unknown) = async () => {
       throw new Error("quota exceeded");
