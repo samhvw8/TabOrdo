@@ -4,7 +4,7 @@ title: Ranked search
 description: How lib/search.ts ranks tabs for the palette (literal tiers before approximate ones, title over URL, pinned and current-window then recency), plus regex, pinyin, Vietnamese, the non-tab sources, and the caching that keeps typing fast.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/search.ts
 tags: [search, palette, performance, i18n]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-22T05:33:12Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-22T05:34:34Z }
 sources:
   - id: search-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/search.ts
@@ -135,7 +135,7 @@ Keystrokes make no Chrome calls in the prefix views, measured with the chrome st
 | `/b`, `/h` | One lookup per key: 6[^debounce-ts] | 1, 200 ms after typing stops. Meanwhile the list shows "Searching...". Enter flushes the wait, and waits for a lookup already running, before opening the selected row |
 | `/rl`, `/rc` | One full-list read per key: 5 to 6 | 1 per visit. `updateResults` drops it when the query leaves the prefix, so coming back re-reads |
 
-Every new query cancels a pending lookup and clears `loading`, so a plain query typed over `/b foo` never keeps its spinner. The debounced merge drops its result if the query changed meanwhile, and takes the tab rows from `tabSearch.rank`, which remembers its last query: re-ranking there cost 1.1 to 1.6 ms at 1000 tabs to rebuild a list already on screen. A reload creates a new `TabSearch`, so the remembered rows never outlive their tabs.[^popup-app][^tabsearch-ts]
+Every new query cancels a pending lookup and clears `loading`, so a plain query typed over `/b foo` never keeps its spinner. The debounced merge drops its result if the query changed meanwhile, and takes the tab rows from `tabSearch.rank`, which remembers its last query rather than rebuild a list already on screen ([what that saves](#view-cache-and-last-query-memo-measured)). A reload creates a new `TabSearch`, so the remembered rows never outlive their tabs.[^popup-app][^tabsearch-ts]
 
 # Performance decisions
 
@@ -143,8 +143,28 @@ Every new query cancels a pending lookup and clears `loading`, so a plain query 
 - `App.svelte` keeps `allTabs`, `results`, `windows`, `dashboardTabs` and `pinnedTabs` as `$state.raw`, and `tabSearch` (which holds the haystack, recency and priority arrays ranking reads) as a plain `let`. A deep `$state` proxy traps every element read, and ranking does thousands per keystroke inside loops and sort comparators.[^popup-app]
 - Nothing is built before the dashboard paints. `loadTabs` only creates the `TabSearch`; an empty query (the most-recent list the popup opens with) reads just the row count via `recencyOrder`. A `requestIdleCallback` (timeout 1 s) then builds both haystacks and their `prepare()` caches, unless a newer load replaced that search. A key pressed first builds synchronously and gets the same results.[^tabsearch-ts][^popup-app]
 - Measured in Node at 1000 tabs: search work before first paint 3.20 ms to 0.24 ms; the idle warm-up costs 3.04 ms after paint; the first `g` then takes 0.42 ms instead of 3.35 ms. One pass over both haystacks costs 1.65 ms where two builders cost 2.82 ms.[^tabsearch-ts]
-- Views (`@` triage, the bare `@` overview, `/w`, `/p`, `/g`, `/rl`, `/rc`) rank through `tabSearch.rankView(key, rows, query)`, which returns what `rankedSearch(buildSearchHaystack(rows), query)` would. The popup derives a view's rows afresh on each keystroke, so the view's haystack is kept under its key while the rows are the same objects in the same order. Rows the tab search holds are taken from the built full haystack by `subHaystack`, which also copies their `prepare()` entries; other rows (Reading List, recently closed, @b's retitled copies) are built once per change. Before, each keystroke rebuilt the view's haystack and missed `prepare()` because the array was new: `@u github` took about 2.5 ms a key at 1000 tabs (720 ungrouped), now 0.8 to 0.9 ms after the idle warm-up and 1.1 ms before it, with identical results.[^tabsearch-ts][^popup-app]
+- Views (`@` triage, the bare `@` overview, `/w`, `/p`, `/g`, `/rl`, `/rc`) rank through `tabSearch.rankView(key, rows, query)`, which returns what `rankedSearch(buildSearchHaystack(rows), query)` would. The popup derives a view's rows afresh on each keystroke, so the view's haystack is kept under its key while the rows are the same objects in the same order. Rows the tab search holds are taken from the built full haystack by `subHaystack`, which also copies their `prepare()` entries; other rows (Reading List, recently closed, @b's retitled copies) are built once per change. Without it, each keystroke rebuilt the view's haystack, pinyin and diacritic stripping included, and then missed `prepare()` because the array was new ([measured below](#view-cache-and-last-query-memo-measured)).[^tabsearch-ts][^popup-app]
 - Measured per keystroke: `9d70207` took 8.46 ms to 3.27 ms at 1000 tabs,[^commit-9d70207] and `057dc57` took 3.27 ms to 1.69 ms.[^commit-057dc57] CHANGELOG 0.7.0 rounds the pair to 2.4 ms to 0.5 ms at 300 tabs and 8.5 ms to 1.7 ms at 1000.[^changelog]
+
+## View cache and last-query memo, measured
+
+Both stay: without them the worst keystroke or settle runs 11 to 20 ms on a mid-range laptop. The bar is 8 ms on such a laptop, taken as 4× a Node timing (the DevTools 4× CPU throttle).[^tabsearch-ts]
+
+Setup: Node 22 on an Apple M1 Pro, 1000 generated tabs (10% Chinese titles, 15% Vietnamese, the rest GitHub, YouTube, docs, Jira and news style), 28% grouped, 55% discarded. Each run used a new `TabSearch` after the idle warm-up, 300 runs per row, with every keystroke timed on its own. "Without" means `rankedSearch(buildSearchHaystack(rows), q)` per keystroke for views, and a second full `rank` at the settle. The benchmark script is not committed.
+
+| Per keystroke (ms) | With: median / p95 | Without: median / p95 | Without, p95 × 4 |
+|--------------------|--------------------|-----------------------|------------------|
+| `@u github` (721 rows) | 1.33 / 1.54 | 3.00 / 4.26 | 17.1 |
+| `@s github` (557 rows) | 1.08 / 1.22 | 2.50 / 3.62 | 14.5 |
+| `@ github` (overview, 817 rows in 6 sections) | 1.77 / 2.09 | 3.65 / 4.99 | 20.0 |
+| `/w foo` (158 rows) | 0.25 / 0.32 | 0.67 / 1.71 | 6.8 |
+| Settle after `github` (bookmark and history rows arrive) | 0.00 / 0.00 | 1.39 / 1.75 | 7.0 |
+| Settle after `https`, `co` or `com` (broadest queries) | 0.00 / 0.00 | 2.3 to 2.6 / 2.5 to 2.9 | 10.0 to 11.5 |
+| Plain `github`, each key (memo not involved) | 1.57 / 1.90 | same | 7.6 |
+
+- With 60% Chinese titles, pinyin per row doubles the uncached views: `@u github` 6.4 / 7.6 ms (30 ms × 4). The cached view stays at 1.4 / 1.6 ms.
+- Rebuilding a view per keystroke also adds garbage. GC ran about 0.27 ms per key uncached against 0.08 ms cached for `@u`. Those pauses land inside timed keystrokes, so the p95 column counts them. The original commits reported medians only, which leave that tail out.
+- The memo pays off once per pause in typing, not per keystroke, and costs one remembered query. It stays because the settle after a broad query crosses the bar on its own.
 
 # Gotchas
 
