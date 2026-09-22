@@ -12,6 +12,10 @@ export interface StubTab {
   lastAccessed?: number;
   muted?: boolean;
   highlighted?: boolean;
+  audible?: boolean;
+  discarded?: boolean;
+  /** Paused by Chrome (132+): still in memory, unlike a discarded tab. */
+  frozen?: boolean;
   /** Chrome only reports this while the opener is still open — see lib/tabs/tree.ts. */
   openerTabId?: number;
 }

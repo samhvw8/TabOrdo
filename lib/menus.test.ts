@@ -42,6 +42,13 @@ describe("action-icon menu", () => {
     expect(order()).toEqual([1, 2, 3]);
   });
 
+  it("Discard inactive tabs unloads what discardableTabs allows", async () => {
+    stub.openTabs[0].active = true;
+    stub.openTabs[1].audible = true;
+    await runMenuItem("tabOrdo-discard");
+    expect(stub.discardedIds).toEqual([3]);
+  });
+
   it("Remove duplicate tabs leaves an undo entry for what it closed", async () => {
     stub.openTabs.push(tab({ id: 4, url: "https://a.com/1", index: 3 }));
     await runMenuItem("tabOrdo-dedup");

@@ -5,6 +5,7 @@ import { removeDuplicates } from "./tabs/index.ts";
 import { groupAllByDomain, sortWindowByDomain } from "./arrange.ts";
 import { addToReadingList } from "./readinglist.ts";
 import { withBulkLock } from "./bulklock.ts";
+import { discardInactiveTabs } from "./discard.ts";
 
 /** Built from runtime.onInstalled. removeAll first, because an update re-runs it. */
 export function createMenus(): void {
@@ -42,15 +43,9 @@ export async function runMenuItem(menuItemId: string | number): Promise<void> {
         if (tab?.url && tab.title) await addToReadingList(tab.url, tab.title);
         break;
       }
-      case "tabOrdo-discard": {
-        const tabs = await chrome.tabs.query({});
-        for (const tab of tabs) {
-          if (!tab.active && !tab.pinned && !tab.audible && !tab.discarded) {
-            await chrome.tabs.discard(tab.id!).catch(() => {});
-          }
-        }
+      case "tabOrdo-discard":
+        await discardInactiveTabs();
         break;
-      }
       case "tabOrdo-sidepanel":
         await chrome.sidePanel.open({ windowId: (await chrome.windows.getCurrent()).id! });
         break;
