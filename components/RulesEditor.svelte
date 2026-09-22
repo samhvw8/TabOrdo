@@ -1,18 +1,22 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { getConfig, updateConfig, populateFromCurrentGroups, mergeRules, domainMatches, type GroupRule } from "../lib/rules.ts";
+  import { getConfig, updateConfig, populateFromCurrentGroups, mergeRules, domainMatches, type GroupRule, type AutomationFlag, type AutomationFlags } from "../lib/rules.ts";
   import { getFullHostname } from "../lib/tabs/index.ts";
   import { createFlash } from "../lib/flash.ts";
   import { groupDotClass } from "../lib/format.ts";
 
   let {
+    automation,
+    ontoggle,
     onclose,
   }: {
+    /** App's automation switches, which its storage subscription keeps in step with rulesConfig. */
+    automation: AutomationFlags;
+    ontoggle: (key: AutomationFlag) => void;
     onclose: () => void;
   } = $props();
 
   let rules = $state<GroupRule[]>([]);
-  let autoGroup = $state(false);
   let mergeSource = $state<string | null>(null);
   let statusMsg = $state("");
   let newName = $state("");
@@ -24,18 +28,11 @@
   ];
 
   onMount(async () => {
-    const config = await getConfig();
-    rules = config.rules;
-    autoGroup = config.autoGroup;
+    rules = (await getConfig()).rules;
   });
 
   async function save() {
     await updateConfig({ rules });
-  }
-
-  async function toggleAutoGroup() {
-    autoGroup = !autoGroup;
-    await updateConfig({ autoGroup });
   }
 
   function normalizePattern(p: string): string {
@@ -169,11 +166,11 @@
       <div class="text-[10px] text-text-muted">Automatically group tabs matching rules</div>
     </div>
     <button
-      class="w-9 h-5 rounded-full transition-colors relative {autoGroup ? 'bg-primary' : 'bg-border'}"
-      onclick={toggleAutoGroup}
-      title={autoGroup ? "Disable auto-group" : "Enable auto-group"}
+      class="w-9 h-5 rounded-full transition-colors relative {automation.autoGroup ? 'bg-primary' : 'bg-border'}"
+      onclick={() => ontoggle("autoGroup")}
+      title={automation.autoGroup ? "Disable auto-group" : "Enable auto-group"}
     >
-      <span class="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform {autoGroup ? 'left-[18px]' : 'left-0.5'}"></span>
+      <span class="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform {automation.autoGroup ? 'left-[18px]' : 'left-0.5'}"></span>
     </button>
   </div>
 

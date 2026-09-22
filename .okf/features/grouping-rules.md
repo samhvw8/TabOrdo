@@ -4,12 +4,12 @@ title: Grouping rules and ignore lists
 description: How the shared rulesConfig is stored, cached and written; how group rules and ignore patterns match hostnames and group names without backtracking; and the Rules editor that edits them.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/rules.ts
 tags: [rules, config, ignore-lists, pattern-matching, storage]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-22T12:00:00Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-22T18:00:00Z }
 sources:
   - id: rules
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/rules.ts
     title: lib/rules.ts
-    last_modified: 2026-08-05
+    last_modified: 2026-09-22
   - id: rules-test
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/rules.test.ts
     title: lib/rules.test.ts
@@ -21,7 +21,11 @@ sources:
   - id: rules-editor
     resource: https://github.com/samhvw8/TabOrdo/blob/main/components/RulesEditor.svelte
     title: components/RulesEditor.svelte
-    last_modified: 2026-07-29
+    last_modified: 2026-09-22
+  - id: popup-app
+    resource: https://github.com/samhvw8/TabOrdo/blob/main/entrypoints/popup/App.svelte
+    title: entrypoints/popup/App.svelte (automation switches)
+    last_modified: 2026-09-22
   - id: settings-panel
     resource: https://github.com/samhvw8/TabOrdo/blob/main/components/SettingsPanel.svelte
     title: components/SettingsPanel.svelte
@@ -61,7 +65,7 @@ sources:
 | Field | Type | Notes |
 |-------|------|-------|
 | `rules` | `GroupRule[]` = `{ id, name, color, patterns[] }` | Order matters: first match wins |
-| `autoGroup`, `autoUngroup`, `useRules`, `autoSort`, `autoPinFollow`, `autoDiscard`, `switchToExisting` | boolean | Default `false`; see [background automation](/features/background-automation.md) |
+| `autoGroup`, `autoUngroup`, `useRules`, `autoSort`, `autoPinFollow`, `autoDiscard`, `switchToExisting` | boolean | Default `false`; the type `AutomationFlag` names these seven. See [background automation](/features/background-automation.md) |
 | `useAI` | boolean | Read and written, never consulted (see Gotchas) |
 | `ignorePatterns`, `ignoreGroupNames` | `IgnoreRule[]` = `{ pattern, enabled, caseSensitive?, isRegex? }` | Bare strings from older data are normalised to `{ pattern, enabled: true }` |
 | `sortRules` | `SortRule[]` | See [sort priority](/features/sort-priority.md) |
@@ -98,7 +102,7 @@ On the very first read, `getConfig()` writes the all-false default. Normalisatio
 
 # Rules editor (`components/RulesEditor.svelte`)
 
-This is the sidebar's Rules section. It has an auto-group toggle, "Import from groups" (`populateFromCurrentGroups`: one rule per titled group that has no rule yet, patterns = its tabs' hostnames), "+ Current tab", per-rule colour, name, patterns, "+Tab", Merge (B's patterns folded into A, then B deleted) and Del. Pasted URLs are reduced to hostnames. A rule tester reports the winning rule and pattern, plus later rules that also match but can never fire.[^rules-editor] The ignore lists, with their own tester and regex generation, are in the Settings panel.[^settings-panel]
+This is the sidebar's Rules section. Its auto-group switch shares the dashboard's state: App passes in its `automation` record, which its `storage.onChanged` subscription keeps in step with `rulesConfig`, and the toggle function the dashboard's Auto switch uses. The switch therefore follows a change made on the dashboard or in the other surface; it used to read the flag once at mount.[^rules-editor][^popup-app] The section also has "Import from groups" (`populateFromCurrentGroups`: one rule per titled group that has no rule yet, patterns = its tabs' hostnames), "+ Current tab", per-rule colour, name, patterns, "+Tab", Merge (B's patterns folded into A, then B deleted) and Del. Pasted URLs are reduced to hostnames. A rule tester reports the winning rule and pattern, plus later rules that also match but can never fire.[^rules-editor] The ignore lists, with their own tester and regex generation, are in the Settings panel.[^settings-panel]
 
 # Gotchas
 
@@ -121,6 +125,7 @@ This is the sidebar's Rules section. It has an auto-group toggle, "Import from g
 [^rules-test]: lib/rules.test.ts
 [^rules-cache-test]: lib/rules-cache.test.ts
 [^rules-editor]: components/RulesEditor.svelte
+[^popup-app]: entrypoints/popup/App.svelte
 [^settings-panel]: components/SettingsPanel.svelte
 [^group]: lib/tabs/group.ts
 [^group-test]: lib/tabs/group.test.ts
