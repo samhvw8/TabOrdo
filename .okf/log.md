@@ -1,5 +1,16 @@
 # Update Log
 
+## 2026-09-22
+* **Update**: Review pass. `/aigroup` sends its instructions through `initialPrompts` with a response schema and caps the tab list to the model's context — [AI grouping](/features/ai-grouping.md).
+* **Update**: Group locks are laid by one placement rule, fixing the two recorded placement bugs; the replayed lock pass and its recorded end state are gone — [position locks](/features/position-locks.md), [sort priority](/features/sort-priority.md).
+* **Update**: The background worker is wiring only; its listener bodies are lib modules with tests. Locks are re-matched to tabs after a restart, icon-menu Group/Sort take an undo snapshot, and one discard rule serves every path — [background automation](/features/background-automation.md), [position locks](/features/position-locks.md), [Chrome stub](/testing/chrome-stub.md), [overview](/architecture/overview.md).
+* **Update**: Session-storage migrations, pre-138 feature checks and the undo metadata mirror are removed; rules settings go through `getConfig`/`updateConfig` — [undo stack](/architecture/undo-stack.md), [bulk lock](/architecture/bulk-lock.md), [grouping rules](/features/grouping-rules.md), [overview](/architecture/overview.md).
+* **Update**: One action table drives the palette, the tiles and the More panel, and every tile runs its command's handler; prefix views live in `lib/views.ts` — [command palette](/features/command-palette.md), [overview](/architecture/overview.md), [undo stack](/architecture/undo-stack.md).
+* **Update**: The dupes badge and `@d` share `/dedup`'s grouping rule — [dedup](/features/dedup.md).
+* **Update**: Search keeps only `regexSearch` beside the ranked search; the view cache and last-query memo stay, with the measurements that justify them — [search](/features/search.md).
+* **Update**: The dashboard volume slider is removed and the archive page uses the design tokens — [no host permissions](/decisions/no-host-permissions.md), [archive](/features/archive.md).
+* **Update**: CI takes Node from `mise.toml`, and the release page states the two open setup items that `TODO.md` held — [release](/processes/release.md).
+
 ## 2026-09-17
 * **Update**: Caught up the pages the batch work did not reach: realm caches and undo metadata keys in the overview, the undo index entry, why `/unfocus` and `/load` stay sequential, and Group's collapse and single-fetch behaviour — [overview](/architecture/overview.md), [focus workspaces](/features/focus-workspaces.md), [grouping rules](/features/grouping-rules.md).
 * **Update**: Performance pass. Auto-sort skips an already sorted window and places locked groups directly; lock lists are cached; lineage records are batched — [background automation](/features/background-automation.md), [sort priority](/features/sort-priority.md), [position locks](/features/position-locks.md), [branch lineage](/features/branch-lineage.md), [Chrome stub](/testing/chrome-stub.md).

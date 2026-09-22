@@ -11,6 +11,7 @@
 - **Dashboard tiles say what they did** — a tile now runs the same action as its slash command and shows the same message, so Sort says "Sorted tabs by domain" rather than "Sorted", and Dedup says "Removed 2 duplicates" rather than "2 removed". The More panel follows the palette's sections and uses the tile names, so it says Lock Tab where it still said Pin Tab
 - **The archive page matches the rest of TabOrdo** — it uses the same colours and font as the popup and the side panel
 - **Extracting a group to a new window keeps it collapsed** if it was
+- **The Help panel lists commands the way the palette does**, with the same rows and category labels
 
 ### Performance
 
@@ -31,7 +32,8 @@
 - **Locks find their tabs again after a browser restart** — until you opened the Locks panel, a locked tab that went to another page left its lock behind and showed no 📌. Locks are now matched to the restored tabs at startup and as they load, preferring the copy inside the locked group
 - **More actions can be undone** — "Group tabs by domain" and "Sort tabs by domain" from the toolbar icon menu, and Sort and Extract on a group's header, now save an undo step. Ctrl+Z after them used to undo whatever came before
 - **The dupes badge agrees with /dedup** — the "N dupes" badge and `@d` now ignore tracking parameters like `utm_source` and skip `chrome://` pages, as `/dedup` does, so the badge no longer counts copies `/dedup` will not close
-- **The palette forgets closed tabs** — after an action such as `/close foo`, the "Back to" hint and Enter could point at a tab that was just closed. Opening a result that fails now shows the error instead of doing nothing
+- **The palette forgets closed tabs** — after an action such as `/close foo`, the "Back to" hint and Enter could point at a tab that was just closed. Opening a result that fails now shows the error and drops the dead row instead of doing nothing, and a second Enter after `/aigroup` no longer puts the command back in the search box
+- **The Rules editor's auto-group switch stays current** — it now follows changes made on the dashboard, or in the popup while the side panel is open, and the other way round
 - **Locking a tab while another is being followed no longer gets lost** — a lock toggled on one tab while TabOrdo was updating another could be dropped
 - **Status messages stay up for their full time** in the Rules editor and on the archive page — a new message was cleared early by the previous one's timer
 
