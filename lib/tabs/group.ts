@@ -12,7 +12,7 @@ export async function groupTabsByDomain(
   const domainOf = await getDomainMapper();
   const nameOf = await getGroupNameMapper();
   // One config read for the whole run: rules, useRules and both ignore lists come from the
-  // same object, and getRules/getUseRules were two round-trips for one of its fields.
+  // same object.
   const config = await getConfig();
   const rules = config.useRules ? config.rules : [];
   const allTabs = await chrome.tabs.query({});
