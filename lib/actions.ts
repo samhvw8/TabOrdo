@@ -14,7 +14,7 @@ import {
   closeOldTabs, shuffleTabs, uniteDomain, isolateDomain, splitWindow, splitByDomain,
   stackWindows, collapseAllGroups, moveCurrentTab, moveGroup, pinCurrentTab, unpinCurrentTab,
   pinCurrentGroup, unpinCurrentGroup, collectBranch, groupBranch, branchUpRoot, parentOf,
-  switchToTab, type MoveGroupsResult,
+  switchToTab, sortTabsInGroup, extractGroupToWindow, type MoveGroupsResult,
 } from "./tabs/index.ts";
 import { archiveTabs, isArchivable } from "./archive.ts";
 import { discardInactiveTabs } from "./discard.ts";
@@ -483,6 +483,22 @@ ACTION_HANDLERS.lock = ACTION_HANDLERS.pin;
 ACTION_HANDLERS.unlock = ACTION_HANDLERS.unpin;
 ACTION_HANDLERS.lockgroup = ACTION_HANDLERS.pingroup;
 ACTION_HANDLERS.unlockgroup = ACTION_HANDLERS.unpingroup;
+
+/**
+ * The dashboard's group-header Sort and Extract. A group id picks the tabs rather than a query,
+ * so these sit outside ACTION_HANDLERS, but they rearrange the strip like the handlers do and
+ * snapshot first for the same reason: without an entry, Ctrl+Z pops whatever came before.
+ */
+export async function sortGroup(groupId: number, title: string): Promise<string> {
+  await snapshotBeforeGroup();
+  await sortTabsInGroup(groupId);
+  return `Sorted "${title}"`;
+}
+
+export async function extractGroup(groupId: number): Promise<string> {
+  await snapshotBeforeGroup();
+  return `Extracted ${await extractGroupToWindow(groupId)} tab(s)`;
+}
 
 /** Returns null for a prefix with no handler (e.g. /aigroup, run by the caller instead). */
 export async function runAction(prefix: string, ctx: ActionContext): Promise<ActionResult | null> {

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { installChromeStub, type ChromeStub } from "./testing/chrome-stub.ts";
 import { hasUndo, peekUndoEntry, executeUndo } from "./undo.ts";
 import { getArchive } from "./archive.ts";
-import { runAction, ACTION_HANDLERS, mergeStatus, type ActionContext } from "./actions.ts";
+import { runAction, ACTION_HANDLERS, mergeStatus, sortGroup, extractGroup, type ActionContext } from "./actions.ts";
 import { ACTION_COMMANDS } from "./commands.ts";
 import type { SearchResult } from "./search.ts";
 
@@ -705,6 +705,43 @@ describe("/branch and /branchup", () => {
     const r = await ACTION_HANDLERS.branch(ctx());
     expect(stub.openTabs.find((t) => t.id === 3)!.groupId).toBe(60);
     expect(r.message).toMatch(/left in protected group/);
+  });
+});
+
+// The group header's Sort and Extract called the tab functions straight from the component,
+// with no snapshot, so Ctrl+Z after either popped whatever older entry was on the stack.
+describe("group header Sort and Extract", () => {
+  const readingGroup = () => {
+    stub.windows = [{ id: 1 }];
+    stub.openTabs = [
+      { id: 1, url: "https://c.com", title: "C", pinned: false, windowId: 1, groupId: 5, index: 0 },
+      { id: 2, url: "https://a.com", title: "A", pinned: false, windowId: 1, groupId: 5, index: 1 },
+      { id: 3, url: "https://b.com", title: "B", pinned: false, windowId: 1, groupId: 5, index: 2 },
+      { id: 4, url: "https://z.com", title: "Z", pinned: false, windowId: 1, groupId: -1, index: 3, active: true },
+    ];
+    stub.groups = [{ id: 5, title: "Reading", windowId: 1 }];
+  };
+  const strip = () => [...stub.openTabs].sort((a, b) => (a.index ?? 0) - (b.index ?? 0)).map((t) => t.id);
+
+  it("undoes a group Sort rather than the entry beneath it", async () => {
+    readingGroup();
+    expect(await sortGroup(5, "Reading")).toBe('Sorted "Reading"');
+    expect(strip()).toEqual([2, 3, 1, 4]);
+
+    await executeUndo();
+    expect(strip()).toEqual([1, 2, 3, 4]);
+    expect(await hasUndo()).toBe(false);
+  });
+
+  it("undoes a group Extract, bringing the tabs back to their window", async () => {
+    readingGroup();
+    expect(await extractGroup(5)).toBe("Extracted 3 tab(s)");
+    expect(stub.openTabs.filter((t) => t.windowId === 1).map((t) => t.id)).toEqual([4]);
+
+    await executeUndo();
+    expect(stub.openTabs.every((t) => t.windowId === 1)).toBe(true);
+    expect(strip()).toEqual([1, 2, 3, 4]);
+    expect(await hasUndo()).toBe(false);
   });
 });
 

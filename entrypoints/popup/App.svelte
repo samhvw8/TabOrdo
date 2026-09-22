@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { getAllTabs, switchToTab, closeTabs, sortTabsInGroup, groupTabsByDomain, ungroupAll, removeDuplicates, mergeAllWindows, extractGroupToWindow, discardTabs, closeTabsToLeft, closeTabsToRight, closeTabsSameSite, closeOldTabs, shuffleTabs, uniteDomain, isolateDomain, splitWindow, splitByDomain, stackWindows, pinCurrentTab, unpinCurrentTab, outlineBranch, type TabInfo } from "../../lib/tabs/index.ts";
+  import { getAllTabs, switchToTab, closeTabs, groupTabsByDomain, ungroupAll, removeDuplicates, mergeAllWindows, discardTabs, closeTabsToLeft, closeTabsToRight, closeTabsSameSite, closeOldTabs, shuffleTabs, uniteDomain, isolateDomain, splitWindow, splitByDomain, stackWindows, pinCurrentTab, unpinCurrentTab, outlineBranch, type TabInfo } from "../../lib/tabs/index.ts";
   import { getPinnedTabs, getPinForTab, type PinnedTabEntry } from "../../lib/pin.ts";
   import { getArchiveCount } from "../../lib/archive.ts";
   import { regexSearch, tabsToSearchItems, searchBookmarks, searchHistory, parseCommand, type SearchResult } from "../../lib/search.ts";
@@ -17,7 +17,7 @@
   import { checkAIAvailability, getAIProgress, defaultProgress, AI_PROGRESS_KEY, type AIGroupProgress } from "../../lib/ai.ts";
   import { getActionLog, ACTION_LOG_KEY, type ActionLogEntry } from "../../lib/actionLog.ts";
   import { groupDotClass, relTime } from "../../lib/format.ts";
-  import { runAction, mergeStatus, FEEDBACK_URL } from "../../lib/actions.ts";
+  import { runAction, mergeStatus, FEEDBACK_URL, sortGroup, extractGroup } from "../../lib/actions.ts";
   import { DASHBOARD_ACTION_POOL, ACTION_POOL_MAP, DEFAULT_DASHBOARD_IDS, ALT_MODE, MORE_SECTIONS,
            UNPIN_ICON, PIN_TOP_ICON, type DashActionDef, type MoreItem } from "../../lib/dashboard.ts";
   import SearchInput from "../../components/SearchInput.svelte";
@@ -1556,12 +1556,10 @@
                 <span class="text-xs font-medium text-text truncate">{group.title}</span>
                 <span class="text-[10px] text-text-muted shrink-0">({group.tabs.length})</span>
               </button>
-              <span class="text-[10px] text-text-muted hover:text-text transition-colors shrink-0 cursor-pointer"
-                onclick={(e) => { e.stopPropagation(); dashAction(async () => { const n = await extractGroupToWindow(groupId); return `Extracted ${n} tab(s)`; }); }}
-                role="button" tabindex="0" onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); dashAction(async () => { const n = await extractGroupToWindow(groupId); return `Extracted ${n} tab(s)`; }); } }}>Extract</span>
-              <span class="text-[10px] text-text-muted hover:text-text transition-colors shrink-0 cursor-pointer"
-                onclick={(e) => { e.stopPropagation(); dashAction(async () => { await sortTabsInGroup(groupId); return `Sorted "${group.title}"`; }); }}
-                role="button" tabindex="0" onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); dashAction(async () => { await sortTabsInGroup(groupId); return `Sorted "${group.title}"`; }); } }}>Sort</span>
+              <button class="text-[10px] text-text-muted hover:text-text transition-colors shrink-0 focus-visible:ring-2 focus-visible:ring-primary focus-visible:rounded"
+                onclick={() => dashAction(() => extractGroup(groupId))}>Extract</button>
+              <button class="text-[10px] text-text-muted hover:text-text transition-colors shrink-0 focus-visible:ring-2 focus-visible:ring-primary focus-visible:rounded"
+                onclick={() => dashAction(() => sortGroup(groupId, group.title))}>Sort</button>
             </div>
             {#if !collapsed}
               <div class="p-1 grid gap-0.5">
