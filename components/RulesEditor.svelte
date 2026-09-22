@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { getConfig, updateConfig, populateFromCurrentGroups, mergeRules, domainMatches, type GroupRule } from "../lib/rules.ts";
   import { getFullHostname } from "../lib/tabs/index.ts";
+  import { createFlash } from "../lib/flash.ts";
 
   let {
     onclose,
@@ -134,10 +135,7 @@
     newColor = "blue";
   }
 
-  function flash(msg: string) {
-    statusMsg = msg;
-    setTimeout(() => { statusMsg = ""; }, 2500);
-  }
+  const flash = createFlash((msg) => { statusMsg = msg; }, 2500);
 
   let testerOpen = $state(false);
   let testerInput = $state("");

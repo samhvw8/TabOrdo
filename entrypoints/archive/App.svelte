@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { getArchive, restoreFromArchive, deleteFromArchive, clearArchive, type ArchivedTab } from "../../lib/archive.ts";
   import { faviconCacheUrl } from "../../lib/favicon.ts";
+  import { createFlash } from "../../lib/flash.ts";
 
   // .raw: the list is replaced wholesale on every load, never edited in place, and `filtered`
   // and `grouped` below walk every entry on each search keystroke — through a deep proxy that
@@ -93,10 +94,7 @@
     await reload();
   }
 
-  function showStatus(msg: string) {
-    statusMessage = msg;
-    setTimeout(() => { statusMessage = ""; }, 3000);
-  }
+  const showStatus = createFlash((msg) => { statusMessage = msg; }, 3000);
 
   function toggleSelect(id: string) {
     const next = new Set(selectedIds);
