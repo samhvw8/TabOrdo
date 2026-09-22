@@ -1,42 +1,12 @@
 // Suppresses the background auto-group / auto-sort / auto-ungroup listeners while a bulk
 // operation rearranges tabs.
 //
-// This used to be a bare `bulkOpInProgress: true|false` in chrome.storage.session with no
-// notion of who held it, written from three places across two realms (the popup and the
-// side panel are the same component, so popup writers exist twice over). Any popup bulk
-// action finishing — or merely reopening the popup, which reset the flag on mount — cleared
-// a lock the service worker was still holding for a multi-second AI grouping run.
-//
-// A refcount cannot fix that: chrome.storage.session has no compare-and-swap, so two realms
-// doing read-increment-write both read the same value and both write the same result.
-//
-// A SINGLE owner token plus an expiry was the next attempt, and it was still wrong in two
-// ways that a code review caught before either bit a user:
-//
-//  1. A losing acquire wrote nothing, so the loser had no lease of its own — and when the
-//     incumbent finished first it removed the key, leaving the loser's operation running
-//     completely unsuppressed. The old header claimed suppression "covers the union of both
-//     operations"; it covers the union only when the first acquirer happens to finish last.
-//     That is exactly backwards for the case that matters: a quick popup action taken just
-//     before a ten-minute AI run.
-//  2. Release was mistimed regardless of ownership. Chrome dispatches the onUpdated echoes of
-//     a bulk operation AFTER the call that caused them resolves, and scheduleAutoUngroup
-//     debounces 150ms before it checks — by which point a release-on-completion lock is
-//     already gone. Background-originated writes were covered by the separate selfWrites
-//     ledger; popup-originated ones were covered by nothing.
-//
-// A SET of leases in one shared map fixed both, but left one lost-update race standing:
-// acquire and release each rewrote the whole map, so a release whose read predated a
-// concurrent acquire wrote the map back without the new lease — silently dropping, say, the
-// AI run's ten-minute lease at the exact popup→background hand-off, leaving the run
-// unsuppressed for its full duration. (The old header claimed every race "fails toward
-// suppressing slightly too long"; that interleaving failed the other way.)
-//
-// So: one lease PER OWNER, each in its own storage key, and release DECAYS its own entry to
-// a short grace window rather than deleting it. Acquire always succeeds, so no operation can
-// end up unsuppressed — and since no writer ever touches another owner's key, there is no
-// shared map to lose an update on. Expired keys are swept opportunistically, and only once
-// they are stale by a wide margin, so a sweep can never race a live renewal.
+// One lease per owner, each under its own session key, because chrome.storage.session has no
+// compare-and-swap: a writer that touches only its own key has no shared value to lose an
+// update on, and an acquire that always succeeds leaves no operation unsuppressed. Release
+// decays the lease to a short grace window instead of deleting it, to cover Chrome's trailing
+// onUpdated echoes. The designs this replaced, and the bug each one had, are in
+// .okf/architecture/bulk-lock.md.
 
 const LOCK_PREFIX = "bulkOpLock:";
 /** Sweep a key only once it has been expired at least this long — no live flow renews or

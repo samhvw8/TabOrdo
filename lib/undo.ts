@@ -194,7 +194,7 @@ export async function executeUndo(): Promise<string> {
       // one Chrome refused mid-drag, or the whole batch when the worker died in between.
       // Recreating those would put a second copy beside the one still open. Tab ids are unique
       // for the life of the browser session, and so is this stack (session storage), so "still
-      // open" is a set lookup. A failed query falls back to restoring everything, as before.
+      // open" is a set lookup. A failed query falls back to restoring everything.
       let liveIds = new Set<number>();
       try {
         liveIds = new Set((await chrome.tabs.query({})).map((t) => t.id!));
@@ -278,14 +278,12 @@ export async function executeUndo(): Promise<string> {
       const windowFor = (a: GroupAssignment): number | undefined =>
         openWindows.has(a.windowId) ? a.windowId : byTabId.get(a.tabId)?.windowId;
 
-      // Groups the action never touched keep their id and collapsed state. Undo used to dissolve
-      // and rebuild every group the snapshot named: after a /group that changed 8 of 63 groups
-      // it rebuilt all 63, and every one came back expanded.
+      // Groups the action never touched are left standing, so they keep their id and collapsed
+      // state.
       const intact = findIntactGroups(assignments, currentTabs, windowFor);
 
-      // Only tabs the snapshot actually covers. Ungrouping everything currently grouped also
-      // dissolved groups the user built *after* the snapshot, in windows this undo never
-      // touched — an undo that destroys unrelated state isn't an undo.
+      // Only tabs the snapshot covers: a group the user built after the snapshot is not this
+      // undo's to dissolve.
       const toUngroup = currentTabs.filter(
         (t) => t.groupId !== -1 && snapshotIds.has(t.id!) && !intact.has(t.groupId)
       );
@@ -324,8 +322,8 @@ export async function executeUndo(): Promise<string> {
           failed++;
         }
       }
-      // A group left standing may still have been renamed (/branch, /aigroup). Rebuilding it
-      // used to restore the name as a side effect; now that it isn't rebuilt, restore it here.
+      // A group left standing may still have been renamed (/branch, /aigroup), and nothing
+      // above gives it its name back.
       if (intact.size > 0) {
         const liveGroups = new Map((await chrome.tabGroups.query({}).catch(() => [])).map((g) => [g.id, g]));
         for (const [gid, [a]] of intact) {
@@ -357,9 +355,8 @@ interface GroupBucket {
   tabIds: number[];
 }
 
-// Keyed by window as well as title and colour: keying on title and colour alone folded two
-// same-named groups in different windows into one bucket, and the cross-window
-// chrome.tabs.group call that followed threw, taking the whole undo with it.
+// Keyed by window as well as title and colour: two same-named groups in different windows are
+// different groups, and chrome.tabs.group throws on ids that span windows.
 function bucketByGroup(
   tabs: { tabId: number; windowId?: number; title?: string; color?: string }[]
 ): GroupBucket[] {
@@ -418,10 +415,10 @@ function findIntactGroups(
 
 // Restoring the strip order.
 //
-// This used to be one awaited tabs.move per displaced tab: 971 round-trips to undo a /shuffle at
-// 1000 tabs, three seconds at a couple of milliseconds each. It is now planned against a model of
-// the strip, and each window gets whichever of two plans needs fewer calls. What the plans may
-// ask of Chrome is set by how Chromium actually moves tabs:
+// Planned against a model of the strip rather than moved tab by tab, so a /shuffle comes back in
+// one call per window; each window gets whichever of two plans needs fewer calls. The
+// measurements are in .okf/architecture/undo-stack.md. What the plans may ask of Chrome is set
+// by how Chromium actually moves tabs:
 //
 //  - tabs.move places an id list "one after another" (TabsMoveFunction::MoveTab): each tab goes
 //    to `index`, then index+1. A batch is only exact when every tab arrives from the right of
