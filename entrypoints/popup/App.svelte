@@ -16,7 +16,7 @@
   import { withBulkLock } from "../../lib/bulklock.ts";
   import { getAIProgress, defaultProgress, AI_PROGRESS_KEY, type AIGroupProgress } from "../../lib/ai.ts";
   import { getActionLog, ACTION_LOG_KEY, type ActionLogEntry } from "../../lib/actionLog.ts";
-  import { groupDotClass, relTime } from "../../lib/format.ts";
+  import { groupDotClass, groupBorderClass, groupBgClass, relTime } from "../../lib/format.ts";
   import { runAction, runTile, sortGroup, extractGroup, type ActionContext, type ActionResult } from "../../lib/actions.ts";
   import { TILE_BY_ID, DEFAULT_DASHBOARD_IDS, MORE_SECTIONS, UNLOCK_FACE, type Tile, type TileFace } from "../../lib/dashboard.ts";
   import SearchInput from "../../components/SearchInput.svelte";
@@ -237,17 +237,6 @@
       ? `${RESULTS_LISTBOX_ID}-option-${selectedIndex}`
       : undefined
   );
-
-  const groupColors: Record<string, string> = {
-    blue: "border-accent-blue/40", cyan: "border-accent-cyan/40", green: "border-accent-green/40",
-    yellow: "border-accent-yellow/40", orange: "border-accent-orange/40", pink: "border-accent-pink/40",
-    purple: "border-accent-purple/40", red: "border-accent-red/40", grey: "border-border",
-  };
-  const groupBg: Record<string, string> = {
-    blue: "bg-accent-blue/5", cyan: "bg-accent-cyan/5", green: "bg-accent-green/5",
-    yellow: "bg-accent-yellow/5", orange: "bg-accent-orange/5", pink: "bg-accent-pink/5",
-    purple: "bg-accent-purple/5", red: "bg-accent-red/5", grey: "bg-surface-hover",
-  };
 
   async function loadTabs() {
     // Three independent reads; serialising them cost three round-trips for no ordering reason.
@@ -1316,9 +1305,9 @@
           {@const collapsed = collapsedGroups.has(groupId)}
           {@const allSelected = group.tabs.every((t) => selectedTabs.has(t.id))}
           {@const someSelected = group.tabs.some((t) => selectedTabs.has(t.id))}
-          <div class="mx-3 mb-2 border rounded-lg overflow-hidden {groupColors[group.color] || 'border-border'} {groupBg[group.color] || 'bg-surface-hover'}">
+          <div class="mx-3 mb-2 border rounded-lg overflow-hidden {groupBorderClass[group.color] || 'border-border'} {groupBgClass[group.color] || 'bg-surface-hover'}">
             <div class="w-full flex items-center gap-2 px-2.5 py-1.5 text-left transition-colors hover:brightness-110 cursor-pointer
-              {collapsed ? '' : 'border-b'} {groupColors[group.color] || 'border-border'}">
+              {collapsed ? '' : 'border-b'} {groupBorderClass[group.color] || 'border-border'}">
               <input type="checkbox" checked={allSelected} indeterminate={someSelected && !allSelected}
                 onchange={() => toggleSelectGroup(group.tabs.map(t => t.id))} onclick={(e) => e.stopPropagation()}
                 class="shrink-0 w-3 h-3 rounded accent-primary" title="Select all tabs in this group" />
