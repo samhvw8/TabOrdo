@@ -4,7 +4,7 @@ title: Undo stack
 description: lib/undo.ts keeps a 20-entry close/group undo stack in chrome.storage.session, one key per entry plus a metadata key, with durable pushes shared across the popup, side panel and background realms.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/undo.ts
 tags: [undo, storage, realms, performance]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-17T09:58:53Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-22T12:00:00Z }
 sources:
   - id: undo-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/undo.ts
@@ -57,16 +57,14 @@ Measured at 1000 tabs with a full stack of 20 group snapshots, using the chrome 
 | Popup open (`loadUndoStack`) | reads 1.25 MB | reads 1.3 KB of metadata |
 | Pop | reads 1.25 MB, writes 1.19 MB | reads 63 KB (the top entry) |
 
-`tabOrdo_undoStack`, the single-array key of earlier versions, is migrated to per-entry keys and removed if a refresh finds it. Chrome clears the session area when an extension updates or reloads, so this should never fire. Detecting it costs nothing, because it is a name in a listing the refresh makes anyway.[^undo-ts][^undo-test]
-
 # Entry types
 
 | `type` | Written by | `data` |
 |---|---|---|
-| `close` | `snapshotBeforeClose(tabIds)`, called only by [`closeTabs`](/architecture/tab-closing.md) | `ClosedTabData[]`: `url`, `pinned`, `windowId`, plus optional `id`, `index`, `groupId`, `groupTitle`, `groupColor` |
-| `group` | `snapshotBeforeGroup()`, called by the group, ungroup, branch, sort, merge, shuffle and split handlers, their dashboard tiles, and `startAIGroup` | `GroupAssignment[]` for every unpinned tab: `tabId`, `groupId`, `groupTitle`, `groupColor`, plus optional `windowId` and `index` |
+| `close` | `snapshotBeforeClose(tabIds)`, called only by [`closeTabs`](/architecture/tab-closing.md) | `ClosedTabData[]`: `url`, `pinned`, `windowId`, `id`, `index`, `groupId`, plus `groupTitle` and `groupColor` when the tab's group has them |
+| `group` | `snapshotBeforeGroup()`, called by the group, ungroup, branch, sort, merge, shuffle and split handlers, their dashboard tiles, and `startAIGroup` | `GroupAssignment[]` for every unpinned tab: `tabId`, `groupId`, `windowId`, `index`, plus `groupTitle` and `groupColor` when the tab's group has them |
 
-The optional fields exist because entries persisted by older versions lack them, and restore code must tolerate their absence.[^undo-ts] `executeUndo` returns `"Unknown undo type"` for any other type.[^undo-test]
+Chrome clears the session area when the extension updates, reloads or is disabled, and when the browser restarts, so every entry on the stack was written by the running version. Restore code reads no older entry shape, and there is no migration.[^undo-ts] `executeUndo` returns `"Unknown undo type"` for any other type.[^undo-test]
 
 # API
 
@@ -91,7 +89,7 @@ The optional fields exist because entries persisted by older versions lack them,
 # executeUndo: close
 
 1. Collect open window ids and live tab ids. If the live-tab query fails, every record is restored, as before ids were recorded. If the window query fails, restored tabs land in the focused window.[^undo-ts]
-2. For each record, skip it when `url` is empty or `chrome://newtab/`, or when `id` is set and that id is still open. That last check is how a close Chrome refused avoids coming back as a second copy. Tab ids are unique for the browser session, and so is this stack. Legacy records without `id` are restored.[^undo-ts][^undo-test][^commit-54b3787]
+2. For each record, skip it when `url` is empty or `chrome://newtab/`, or when `id` is set and that id is still open. That last check is how a close Chrome refused avoids coming back as a second copy. Tab ids are unique for the browser session, and so is this stack.[^undo-ts][^undo-test][^commit-54b3787]
 3. `chrome.tabs.create({ url, pinned, active: false })`. `windowId` and `index` are passed only when the original window still exists, because an index means nothing in another window.[^undo-ts][^undo-test]
 4. Regroup restored tabs, bucketed by window + title + colour. Rejoin a live group with the same window, title and colour when one exists, since closing one tab leaves its group standing. Otherwise create a group and set its title and colour. A regroup failure is logged and does not fail the reopen.[^undo-ts][^undo-test]
 5. Return `Reopened N tab(s)`.
@@ -100,7 +98,7 @@ The optional fields exist because entries persisted by older versions lack them,
 
 1. Find **intact** groups (`findIntactGroups`): the live group with the snapshot's id holds exactly the snapshot's still-open members, in the same order, in the snapshot's window, in one contiguous block. Intact groups are never ungrouped or rebuilt, so they keep their id and collapsed state. A tab that joined the group since makes it not intact.[^undo-ts][^undo-test]
 2. Ungroup the covered tabs that sit in any group that is not intact. Groups the user built after the snapshot, holding no covered tab, are left alone. If anything was ungrouped, query the tabs again, because Chrome moves an ungrouped tab to the edge of its old group.[^undo-ts][^undo-test]
-3. Restore order per window (`restoreOrder`), for tabs whose snapshotted window still exists and that are not pinned now. Legacy entries without `windowId` are not relocated. `/aigroup` moves tabs across windows, and `chrome.tabs.group` rejects ids that span windows, so this has to happen before regrouping.[^undo-ts][^undo-test]
+3. Restore order per window (`restoreOrder`), for tabs whose snapshotted window still exists and that are not pinned now. `/aigroup` moves tabs across windows, and `chrome.tabs.group` rejects ids that span windows, so this has to happen before regrouping.[^undo-ts][^undo-test]
 4. Rebuild the groups that are not intact, bucketed by window + title + colour. Same-titled groups in one window merge. Same-titled groups in different windows stay apart. One group Chrome refuses does not abort the rest, and the status reports `N group(s) could not be rebuilt`.[^undo-ts][^undo-test]
 5. Restore the title and colour of an intact group that was only renamed, with one `tabGroups.update`.[^undo-ts][^undo-test]
 
@@ -139,7 +137,7 @@ What remains after a shuffle is regrouping: a group whose tabs a shuffle scatter
 
 # Tests that guard it
 
-`lib/undo.test.ts` covers the cap, the per-entry layout, cross-realm pickup through a second module instance (`vi.resetModules`), two realms pushing onto a nearly full stack at once, a pop the other realm already took, storage cost (a push and a load read no payload, a pop reads only the top one), the `getKeys` fallback, legacy migration, push durability, overlapping pushes, close restore (window, index, group rejoin and rebuild, still-open skip, legacy entries) and group restore (scoping, relocation, window-separated buckets, partial failure). The order-restore tests cover a shuffle undone in at most one move per window with a tab opened since kept, a `/group` whose untouched groups get no ungroup, group or update call, an untouched group moved whole with `tabGroups.move`, a rename-only group restored without a rebuild, and tabs sent back rightward one call each around groups left in place.[^undo-test] `lib/tabs/close.test.ts` covers undo after a refused close.
+`lib/undo.test.ts` covers the cap, the per-entry layout, cross-realm pickup through a second module instance (`vi.resetModules`), two realms pushing onto a nearly full stack at once, a pop the other realm already took, storage cost (a push and a load read no payload, a pop reads only the top one), the `getKeys` fallback, push durability, overlapping pushes, close restore (window, index, group rejoin and rebuild, still-open skip) and group restore (scoping, relocation, window-separated buckets, partial failure). The order-restore tests cover a shuffle undone in at most one move per window with a tab opened since kept, a `/group` whose untouched groups get no ungroup, group or update call, an untouched group moved whole with `tabGroups.move`, a rename-only group restored without a rebuild, and tabs sent back rightward one call each around groups left in place.[^undo-test] `lib/tabs/close.test.ts` covers undo after a refused close.
 
 # Related
 

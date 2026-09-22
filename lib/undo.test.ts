@@ -121,7 +121,6 @@ describe("cross-realm stack", () => {
 
   it("recognises the keys a push or pop changes, and nothing else", () => {
     expect(touchesUndoStack({ "tabOrdo_undoMeta:0001-a": {} })).toBe(true);
-    expect(touchesUndoStack({ tabOrdo_undoStack: {} })).toBe(true);
     expect(touchesUndoStack({ tabParents: {}, "bulkOpLock:x": {} })).toBe(false);
   });
 });
@@ -176,31 +175,6 @@ describe("storage cost", () => {
   });
 });
 
-// The layout before per-entry keys. Chrome clears the session area on an extension update, so
-// this should never be found — but a stack left in it must not be lost or left behind.
-describe("legacy single-array stack", () => {
-  it("is moved onto per-entry keys under anything pushed since, and the old key removed", async () => {
-    stub.sessionData.tabOrdo_undoStack = [entry("close", "old-1"), entry("group", "old-2")];
-    await loadUndoStack();
-    expect(stub.sessionData.tabOrdo_undoStack).toBeUndefined();
-    expect(undoStackSize()).toBe(2);
-    expect(peekUndo()?.type).toBe("group");
-
-    await pushUndo(entry("close", "new"));
-    const popped: unknown[] = [];
-    let e;
-    while ((e = await popUndo())) popped.push(e.data);
-    expect(popped).toEqual(["new", "old-2", "old-1"]);
-  });
-
-  it("is found by a push as well as by a load", async () => {
-    stub.sessionData.tabOrdo_undoStack = [entry("close", "old")];
-    await pushUndo(entry("close", "new"));
-    expect(stub.sessionData.tabOrdo_undoStack).toBeUndefined();
-    expect(undoStackSize()).toBe(2);
-  });
-});
-
 describe("executeUndo — close", () => {
   it("returns a message when there is nothing to undo", async () => {
     expect(await executeUndo()).toBe("Nothing to undo");
@@ -247,19 +221,6 @@ describe("executeUndo — close", () => {
 
     expect(await executeUndo()).toBe("Reopened 1 tab(s)");
     expect(stub.created.map((c) => c.url)).toEqual(["https://b.com"]);
-  });
-
-  // Entries written by versions before the id was recorded: nothing to compare, restore as before.
-  it("restores a legacy entry that recorded no ids", async () => {
-    stub.openTabs = [{ id: 1, url: "https://a.com", pinned: false, windowId: 1, groupId: -1 }];
-    await pushUndo({
-      type: "close",
-      label: "Closed 1 tab(s)",
-      timestamp: 1,
-      data: [{ url: "https://a.com", pinned: false, windowId: 1 }],
-    });
-
-    expect(await executeUndo()).toBe("Reopened 1 tab(s)");
   });
 
   it("returns a message for unknown entry types", async () => {
@@ -477,15 +438,6 @@ describe("executeUndo — group", () => {
     stub.openTabs[0].groupId = -1;
     stub.failGroup = true;
     expect(await executeUndo()).toBe("Restored previous group state — 1 group(s) could not be rebuilt");
-  });
-
-  it("does not relocate for legacy entries that recorded no window", async () => {
-    stub.windows = [{ id: 1 }, { id: 2 }];
-    stub.openTabs = [{ id: 1, url: "https://a.com", pinned: false, windowId: 2, groupId: -1, index: 0 }];
-    await pushUndo({ type: "group", label: "Group change", timestamp: 1, data: [{ tabId: 1, groupId: -1 }] });
-
-    await executeUndo();
-    expect(stub.moves).toEqual([]);
   });
 });
 

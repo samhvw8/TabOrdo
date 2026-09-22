@@ -172,16 +172,6 @@ describe("bulk lock", () => {
     await Promise.resolve();
     expect(Object.keys(stub.sessionData)).toHaveLength(0);
   });
-
-  it("honours a lease left behind in the previous single-owner shape", async () => {
-    vi.useFakeTimers();
-    const stub = installChromeStub();
-    stub.sessionData["bulkOpLock"] = { owner: "legacy", expiresAt: Date.now() + 30_000 };
-
-    expect(await isBulkLocked()).toBe(true);
-    vi.advanceTimersByTime(30_001);
-    expect(await isBulkLocked()).toBe(false);
-  });
 });
 
 describe("lease reads stay off the rest of the session area", () => {
@@ -189,10 +179,12 @@ describe("lease reads stay off the rest of the session area", () => {
   // read the whole session area, which also holds the undo stack — up to twenty snapshots of
   // every unpinned tab — so every page load structured-cloned all of it to find a lock key.
   const crowdedArea = () => {
-    stub.sessionData.tabOrdo_undoStack = [...Array(20)].map(() => ({
-      type: "group", label: "Group change", timestamp: 1,
-      data: [...Array(200)].map((_, i) => ({ tabId: i, groupId: -1, windowId: 1, index: i })),
-    }));
+    for (let n = 0; n < 20; n++) {
+      stub.sessionData[`tabOrdo_undo:${n}`] = {
+        type: "group", label: "Group change", timestamp: 1,
+        data: [...Array(200)].map((_, i) => ({ tabId: i, groupId: -1, windowId: 1, index: i })),
+      };
+    }
     stub.sessionData.tabParents = Object.fromEntries([...Array(300)].map((_, i) => [i + 2, 1]));
   };
 

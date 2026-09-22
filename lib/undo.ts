@@ -10,13 +10,12 @@ interface ClosedTabData {
   pinned: boolean;
   windowId: number;
   // The tab's id at snapshot time, so executeUndo can tell a tab the close removed from one
-  // it failed to remove. Optional: entries persisted by older versions have none.
-  id?: number;
-  // Optional: entries persisted by older versions have none. Without them a restore dropped
-  // the tab at the end of the strip and outside whatever group it was closed from — the
-  // group snapshot has always recorded index, and a close is no less a position change.
-  index?: number;
-  groupId?: number;
+  // it failed to remove.
+  id: number;
+  // Where the tab sat, so a restore puts it back in place and in its group rather than at the
+  // end of the strip.
+  index: number;
+  groupId: number;
   groupTitle?: string;
   groupColor?: string;
 }
@@ -26,10 +25,10 @@ interface GroupAssignment {
   groupId: number;
   groupTitle?: string;
   groupColor?: string;
-  // Optional: entries persisted by older versions have neither. /aigroup moves tabs across
-  // windows, so restoring group membership alone left them stranded where the AI put them.
-  windowId?: number;
-  index?: number;
+  // /aigroup moves tabs across windows, so restoring group membership alone would leave them
+  // stranded where the AI put them.
+  windowId: number;
+  index: number;
 }
 
 // Storage layout: one key per entry, and a small metadata key beside it.
@@ -53,8 +52,6 @@ interface GroupAssignment {
 // every write to (mostly) prevent.
 const ENTRY_PREFIX = "tabOrdo_undo:";
 const META_PREFIX = "tabOrdo_undoMeta:";
-/** The single-array layout described above. Only ever read to migrate it. */
-const LEGACY_KEY = "tabOrdo_undoStack";
 const MAX_STACK = 20;
 
 /** An entry without its snapshot: enough for `canUndo`, and a few hundred bytes for all twenty. */
@@ -92,36 +89,9 @@ async function listSession(): Promise<{ names: string[]; values: Record<string, 
   return { names: await getKeys.call(area), values: null };
 }
 
-/**
- * Move a stack left by the single-array layout onto per-entry keys, then delete it. Chrome clears
- * the session area when an extension updates or reloads, so in practice there is nothing to find,
- * and looking costs nothing: it is one name in a listing every refresh makes anyway. The ids are
- * fixed by position and sort before any timestamped id, so two realms migrating at once write the
- * same keys, and the old stack stays under everything pushed since.
- */
-async function migrateLegacy(values: Record<string, unknown> | null): Promise<void> {
-  const area = chrome.storage.session;
-  const legacy = values ? values[LEGACY_KEY] : (await area.get(LEGACY_KEY))[LEGACY_KEY];
-  const items: Record<string, unknown> = {};
-  if (Array.isArray(legacy)) {
-    legacy.slice(-MAX_STACK).forEach((entry: UndoEntry, i) => {
-      if (!entry || typeof entry !== "object") return;
-      const id = `${String(i).padStart(16, "0")}-legacy`;
-      items[ENTRY_PREFIX + id] = entry;
-      items[META_PREFIX + id] = { type: entry.type, label: entry.label, timestamp: entry.timestamp };
-    });
-  }
-  if (Object.keys(items).length > 0) await area.set(items);
-  await area.remove(LEGACY_KEY);
-}
-
 /** Rebuild the mirror from key names, reading only metadata this realm has not seen yet. */
 async function refreshMirror(): Promise<void> {
-  let { names, values } = await listSession();
-  if (names.includes(LEGACY_KEY)) {
-    await migrateLegacy(values);
-    ({ names, values } = await listSession());
-  }
+  const { names, values } = await listSession();
   const ids = names
     .filter((k) => k.startsWith(META_PREFIX))
     .map((k) => k.slice(META_PREFIX.length))
@@ -218,7 +188,7 @@ export function undoStackSize(): number {
 
 /** Whether a storage.onChanged batch touched the undo stack, so a surface should reload its mirror. */
 export function touchesUndoStack(changes: Record<string, unknown>): boolean {
-  return Object.keys(changes).some((k) => k.startsWith(META_PREFIX) || k === LEGACY_KEY);
+  return Object.keys(changes).some((k) => k.startsWith(META_PREFIX));
 }
 
 /**
@@ -239,7 +209,7 @@ export async function snapshotBeforeClose(tabIds: number[]): Promise<void> {
   const data: ClosedTabData[] = toClose.map((t) => {
     const g = groupMap.get(t.groupId);
     return {
-      id: t.id,
+      id: t.id!,
       url: t.url || "",
       pinned: t.pinned,
       windowId: t.windowId,
@@ -310,7 +280,7 @@ export async function executeUndo(): Promise<string> {
       const regrouped: { tabId: number; data: ClosedTabData }[] = [];
       for (const t of tabs) {
         if (!t.url || t.url === "chrome://newtab/") continue;
-        if (t.id !== undefined && liveIds.has(t.id)) continue;
+        if (liveIds.has(t.id)) continue;
         const sameWindow = openWindows.has(t.windowId);
         try {
           // The recorded index only means anything in the window it was recorded from; a tab
@@ -319,11 +289,10 @@ export async function executeUndo(): Promise<string> {
             url: t.url,
             pinned: t.pinned,
             active: false,
-            ...(sameWindow ? { windowId: t.windowId } : {}),
-            ...(sameWindow && t.index !== undefined ? { index: t.index } : {}),
+            ...(sameWindow ? { windowId: t.windowId, index: t.index } : {}),
           });
           reopened++;
-          if (created?.id !== undefined && t.groupId !== undefined && t.groupId !== -1) {
+          if (created?.id !== undefined && t.groupId !== -1) {
             regrouped.push({ tabId: created.id, data: t });
           }
         } catch {}
@@ -381,11 +350,8 @@ export async function executeUndo(): Promise<string> {
       return `Reopened ${reopened} tab(s)`;
     }
     case "group": {
-      // Snapshot order. Within one window that is strip order; entries from before indexes were
-      // recorded keep the order they were recorded in (the sort is stable).
-      const assignments = (entry.data as GroupAssignment[])
-        .slice()
-        .sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+      // Snapshot order. Within one window that is strip order.
+      const assignments = (entry.data as GroupAssignment[]).slice().sort((a, b) => a.index - b.index);
       let currentTabs = await chrome.tabs.query({});
       let byTabId = new Map(currentTabs.map((t) => [t.id!, t]));
       const snapshotIds = new Set(assignments.map((a) => a.tabId));
@@ -398,12 +364,10 @@ export async function executeUndo(): Promise<string> {
 
       // Bucket by window as well as title/color. Keying on title:color alone folded two
       // same-named groups living in different windows into one bucket, and the resulting
-      // cross-window chrome.tabs.group call throws — taking the whole undo with it.
-      // Legacy entries carry no windowId, so fall back to where the tab sits now.
+      // cross-window chrome.tabs.group call throws — taking the whole undo with it. A tab whose
+      // window has closed since is bucketed where it sits now.
       const windowFor = (a: GroupAssignment): number | undefined =>
-        a.windowId !== undefined && openWindows.has(a.windowId)
-          ? a.windowId
-          : byTabId.get(a.tabId)?.windowId;
+        openWindows.has(a.windowId) ? a.windowId : byTabId.get(a.tabId)?.windowId;
 
       // Groups the action never touched keep their id and collapsed state. Undo used to dissolve
       // and rebuild every group the snapshot named: after a /group that changed 8 of 63 groups
@@ -708,14 +672,14 @@ async function restoreOrder(
   openWindows: Set<number>
 ): Promise<void> {
   const live = new Map(tabs.map((t) => [t.id!, t]));
-  // The pieces each window should hold, in snapshot order. Entries from before windows were
-  // recorded aren't relocated, a tab whose window has closed stays where it is, and a tab
-  // pinned since belongs to the pinned block, where Chrome won't let an unpinned order reach.
+  // The pieces each window should hold, in snapshot order. A tab whose window has closed stays
+  // where it is, and a tab pinned since belongs to the pinned block, where Chrome won't let an
+  // unpinned order reach.
   const targets = new Map<number, Unit[]>();
   const placed = new Set<number>();
   for (const a of assignments) {
     const t = live.get(a.tabId);
-    if (a.windowId === undefined || !openWindows.has(a.windowId) || !t || t.pinned) continue;
+    if (!openWindows.has(a.windowId) || !t || t.pinned) continue;
     let units = targets.get(a.windowId);
     if (!units) targets.set(a.windowId, (units = []));
     const group = intact.get(a.groupId);

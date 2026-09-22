@@ -4,7 +4,7 @@ title: Bulk lock
 description: lib/bulklock.ts suppresses the background auto-group, auto-sort, auto-ungroup and switch-to-existing listeners while a bulk operation runs, using one expiring lease per owner in chrome.storage.session.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/bulklock.ts
 tags: [concurrency, storage, automation, realms]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-17T00:16:05Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-22T12:00:00Z }
 sources:
   - id: bulklock-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/bulklock.ts
@@ -67,7 +67,7 @@ While TabOrdo rearranges tabs in bulk, the background automations would otherwis
 | `newLockOwner()` | `crypto.randomUUID()`, with a timestamp+random fallback.[^bulklock-ts] |
 | `acquireBulkLock(owner, ttlMs)` | Writes `max(existing, now + ttlMs)` to the owner's key. **Always succeeds** and never shortens this owner's lease. Touches no other key.[^bulklock-ts] |
 | `releaseBulkLock(owner)` | Decays the owner's lease to `min(existing, now + ECHO_GRACE_MS)` instead of deleting it. A no-op for an owner with no lease.[^bulklock-ts] |
-| `isBulkLocked()` | Reads only the lock keys and returns true if any lease is live. Opportunistically removes keys that expired more than `SWEEP_SLACK_MS` ago. Still honours the legacy single `bulkOpLock` key, in both its single-owner and owner-map shapes.[^bulklock-ts] |
+| `isBulkLocked()` | Reads only the lock keys and returns true if any lease is live. Opportunistically removes keys that expired more than `SWEEP_SLACK_MS` ago. Earlier lease shapes are not read: Chrome clears the session area on an extension update or reload, so no lease outlives the version that wrote it.[^bulklock-ts] |
 | `withBulkLock(fn, ttlMs = UI_LEASE_MS)` | Fresh owner, acquire, `await fn()`, release in `finally`, which drops only this call's lease.[^bulklock-ts] |
 
 # Lease timings
@@ -114,7 +114,7 @@ Each of these fires on the tab events a bulk operation generates. Unchecked, the
 
 # Tests that guard it
 
-`lib/bulklock.test.ts` uses fake timers for the grace window, a short holder acquiring first, a release from a non-holder, expiry, never shortening a lease, release on throw, a nested quick op, a concurrent release against a fresh acquire, sweep slack and the legacy shape. It also checks, through the stub's `storageReads`, that only lock keys are deserialised, including on a build without `getKeys`.[^bulklock-test]
+`lib/bulklock.test.ts` uses fake timers for the grace window, a short holder acquiring first, a release from a non-holder, expiry, never shortening a lease, release on throw, a nested quick op, a concurrent release against a fresh acquire, and sweep slack. It also checks, through the stub's `storageReads`, that only lock keys are deserialised, including on a build without `getKeys`.[^bulklock-test]
 
 # Related
 

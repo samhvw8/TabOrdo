@@ -39,9 +39,6 @@
 // they are stale by a wide margin, so a sweep can never race a live renewal.
 
 const LOCK_PREFIX = "bulkOpLock:";
-/** The pre-per-owner-key shape (single owner or owner→expiry map) under one shared key.
- *  Still honoured on read so a lease from before an extension reload keeps suppressing. */
-const LEGACY_LOCK_KEY = "bulkOpLock";
 /** Sweep a key only once it has been expired at least this long — no live flow renews or
  *  releases a lease this stale, so sweeping can't clobber a concurrent write. */
 const SWEEP_SLACK_MS = 60 * 1000;
@@ -80,9 +77,7 @@ async function readLockEntries(): Promise<Record<string, unknown>> {
   const area = chrome.storage.session;
   const getKeys = (area as { getKeys?: () => Promise<string[]> }).getKeys;
   if (typeof getKeys !== "function") return area.get(null);
-  const names = (await getKeys.call(area)).filter(
-    (k) => k.startsWith(LOCK_PREFIX) || k === LEGACY_LOCK_KEY
-  );
+  const names = (await getKeys.call(area)).filter((k) => k.startsWith(LOCK_PREFIX));
   return names.length > 0 ? area.get(names) : {};
 }
 
@@ -94,28 +89,12 @@ async function readAllLeases(): Promise<{ leases: Leases; staleKeys: string[] }>
     const staleKeys: string[] = [];
     const staleCutoff = Date.now() - SWEEP_SLACK_MS;
     for (const [key, value] of Object.entries(all)) {
-      if (key.startsWith(LOCK_PREFIX)) {
-        if (typeof value === "number") {
-          leases[key.slice(LOCK_PREFIX.length)] = value;
-          if (value < staleCutoff) staleKeys.push(key);
-        } else {
-          staleKeys.push(key);
-        }
-      } else if (key === LEGACY_LOCK_KEY && value && typeof value === "object" && !Array.isArray(value)) {
-        const raw = value as Record<string, unknown>;
-        let allStale = true;
-        if (typeof raw.owner === "string" && typeof raw.expiresAt === "number") {
-          leases[raw.owner] = raw.expiresAt;
-          allStale = raw.expiresAt < staleCutoff;
-        } else {
-          for (const [owner, expiresAt] of Object.entries(raw)) {
-            if (typeof expiresAt === "number") {
-              leases[owner] = expiresAt;
-              if (expiresAt >= staleCutoff) allStale = false;
-            }
-          }
-        }
-        if (allStale) staleKeys.push(key);
+      if (!key.startsWith(LOCK_PREFIX)) continue;
+      if (typeof value === "number") {
+        leases[key.slice(LOCK_PREFIX.length)] = value;
+        if (value < staleCutoff) staleKeys.push(key);
+      } else {
+        staleKeys.push(key);
       }
     }
     return { leases, staleKeys };
