@@ -18,6 +18,7 @@
   import { getAIProgress, defaultProgress, AI_PROGRESS_KEY, type AIGroupProgress } from "../../lib/ai.ts";
   import { getActionLog, ACTION_LOG_KEY, type ActionLogEntry } from "../../lib/actionLog.ts";
   import { groupDotClass, groupBorderClass, groupBgClass, relTime } from "../../lib/format.ts";
+  import { createFlash } from "../../lib/flash.ts";
   import { runAction, runTile, sortGroup, extractGroup, type ActionContext, type ActionResult } from "../../lib/actions.ts";
   import { TILE_BY_ID, DEFAULT_DASHBOARD_IDS, MORE_SECTIONS, UNLOCK_FACE, type Tile, type TileFace } from "../../lib/dashboard.ts";
   import SearchInput from "../../components/SearchInput.svelte";
@@ -135,28 +136,26 @@
     await chrome.storage.local.set({ dashboardActionIds: [...dashboardActionIds] });
   }
 
-  function confirmAction(id: string, action: () => void) {
+  /**
+   * The two-click guard on buttons that close tabs or scatter the window. The first click arms
+   * `id` for 3 s and returns false; a second click on the same id inside that window disarms it
+   * and returns true.
+   */
+  function confirmed(id: string): boolean {
+    clearTimeout(confirmTimer);
     if (pendingConfirm === id) {
-      clearTimeout(confirmTimer);
       pendingConfirm = null;
-      action();
-    } else {
-      pendingConfirm = id;
-      clearTimeout(confirmTimer);
-      confirmTimer = setTimeout(() => { pendingConfirm = null; }, 3000);
+      return true;
     }
+    pendingConfirm = id;
+    confirmTimer = setTimeout(() => { pendingConfirm = null; }, 3000);
+    return false;
   }
 
   // Every status message goes through here so none can strand on screen. The triage views
   // used to set statusMessage with no timer of their own, leaving "Reading List is empty"
   // pinned under the search bar until an unrelated action happened to overwrite it.
-  let statusTimer: ReturnType<typeof setTimeout> | undefined;
-
-  function flashStatus(msg: string, ms = 3000) {
-    statusMessage = msg;
-    clearTimeout(statusTimer);
-    statusTimer = setTimeout(() => { statusMessage = ""; }, ms);
-  }
+  const flashStatus = createFlash((msg) => { statusMessage = msg; }, 3000);
 
   // hasUndo lists key names only, so it is cheap to ask after every action and storage change.
   // Only the newest answer lands: an older one resolving late would light or dim the button for
@@ -532,17 +531,7 @@
   }
 
   async function handleOverflowAction(action: string) {
-    if (needsConfirm(action)) {
-      if (pendingConfirm === action) {
-        clearTimeout(confirmTimer);
-        pendingConfirm = null;
-      } else {
-        pendingConfirm = action;
-        clearTimeout(confirmTimer);
-        confirmTimer = setTimeout(() => { pendingConfirm = null; }, 3000);
-        return;
-      }
-    }
+    if (needsConfirm(action) && !confirmed(action)) return;
     const goBack = () => { activeSection = "dashboard"; };
     // Every tile runs its handler from the action table unless it needs something only the
     // component has: workspace or lock state, the palette, or the AI hand-off before the lock.
@@ -1171,7 +1160,7 @@
         <div class="flex items-center gap-1.5 px-3 pb-2">
           <span class="text-[10px] text-text-muted">{selectedTabs.size} sel:</span>
           <button class="px-2 py-0.5 rounded text-[10px] font-medium bg-accent-red/10 text-accent-red border border-accent-red/20 hover:bg-accent-red/20 transition-colors"
-            onclick={() => confirmAction("closeSel", () => dashCommand("close", "", dashboardTabs.filter((t) => selectedTabs.has(t.id))))}>
+            onclick={() => { if (confirmed("closeSel")) dashCommand("close", "", dashboardTabs.filter((t) => selectedTabs.has(t.id))); }}>
             {pendingConfirm === "closeSel" ? "Confirm" : "Close"}
           </button>
           <!-- Through the /archive handler, not a copy of it: this copy closed every selected
