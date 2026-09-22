@@ -31,80 +31,24 @@ interface GroupAssignment {
   index: number;
 }
 
-// Storage layout: one key per entry, and a small metadata key beside it.
-//
-// The stack used to be ONE array under `tabOrdo_undoStack`, and every push was a
-// read-modify-write of all of it. A group snapshot covers every unpinned tab, so with twenty of
-// them at a thousand tabs each push read 1.2 MB, wrote 1.2 MB, and storage.onChanged handed old
-// AND new — 2.4 MB — to the service worker and every open popup and side panel. A single-tab
-// close still paid ~600 KB each way, and every popup open read the whole stack just to decide
-// whether to light the Undo button.
-//
-// So each entry has its own pair of keys, written together in one set():
-//   tabOrdo_undo:<id>      the entry, snapshot and all. Read only by popUndo, and only the top one.
-//   tabOrdo_undoMeta:<id>  { type, label, timestamp }. All the UI's mirror ever holds.
-// `<id>` leads with a zero-padded timestamp, so key order is stack order. A realm always pushes
-// above the newest entry it has seen; two surfaces pushing in the same millisecond order
-// arbitrarily, and both entries survive. Entries are found by name with getKeys, which returns
-// no values, and evicted with remove. As bulklock.ts found for its leases, writers that only add
-// or remove their own keys have no shared value to lose an update on: two surfaces pushing back
-// to back can no longer drop each other's entry, which the old layout needed a re-read before
-// every write to (mostly) prevent.
+// One key per entry, `tabOrdo_undo:<id>`, so a push or a pop reads and writes one snapshot rather
+// than the whole stack, and writers that only add or remove their own keys have no shared value
+// to lose an update on. `<id>` leads with a zero-padded timestamp, so key order is stack order.
+// Entries are found by name with getKeys, which returns no values. The measurements behind this
+// layout are in .okf/architecture/undo-stack.md.
 const ENTRY_PREFIX = "tabOrdo_undo:";
-const META_PREFIX = "tabOrdo_undoMeta:";
 const MAX_STACK = 20;
 
-/** An entry without its snapshot: enough for `canUndo`, and a few hundred bytes for all twenty. */
-export interface UndoMeta {
-  /** Storage id. Ids sort oldest first. */
-  id: string;
-  type: string;
-  label: string;
-  timestamp: number;
-}
-
-// Metadata of the persisted stack, oldest first, so peekUndo can stay synchronous for the UI's
-// `canUndo` binding. The popup and the side panel are the same component in two realms, each
-// with its own mirror over one persisted stack, so every mutation refreshes it first.
-let mirror: UndoMeta[] = [];
-
-function newEntryId(): string {
-  // Above the newest entry this realm knows of, so a push lands on top even within the same
-  // millisecond as the last one, or after the clock has stepped back.
-  const newest = mirror.length > 0 ? Number(mirror[mirror.length - 1].id.slice(0, 16)) || 0 : 0;
-  const stamp = Math.max(Date.now(), newest + 1);
-  return `${String(stamp).padStart(16, "0")}-${Math.random().toString(36).slice(2, 10)}`;
-}
-
-/** Rebuild the mirror from key names, reading only metadata this realm has not seen yet. */
-async function refreshMirror(): Promise<void> {
-  const names = await chrome.storage.session.getKeys();
-  const ids = names
-    .filter((k) => k.startsWith(META_PREFIX))
-    .map((k) => k.slice(META_PREFIX.length))
+/** Entry ids in the session area, oldest first. Names only: no snapshot is read. */
+async function entryIds(): Promise<string[]> {
+  return (await chrome.storage.session.getKeys())
+    .filter((k) => k.startsWith(ENTRY_PREFIX))
+    .map((k) => k.slice(ENTRY_PREFIX.length))
     .sort();
-  const known = new Map(mirror.map((m) => [m.id, m]));
-  const unseen = ids.filter((id) => !known.has(id));
-  if (unseen.length > 0) {
-    const got = await chrome.storage.session.get(unseen.map((id) => META_PREFIX + id));
-    for (const id of unseen) {
-      const m = got[META_PREFIX + id] as Omit<UndoMeta, "id"> | undefined;
-      if (m) known.set(id, { id, type: m.type, label: m.label, timestamp: m.timestamp });
-    }
-  }
-  mirror = ids.flatMap((id) => known.get(id) ?? []);
 }
 
-// Pushes, pops and reloads in one realm run one at a time. Storage writes no longer race — each
-// entry has its own keys — but mirror refreshes still could: a slow one landing after a newer
-// one would roll `canUndo` back to a stack that no longer exists.
-let writeChain: Promise<unknown> = Promise.resolve();
-
-export async function loadUndoStack(): Promise<void> {
-  const run = writeChain.then(refreshMirror).catch(() => {});
-  writeChain = run;
-  return run;
-}
+/** The stamp of this realm's last push, so two pushes that overlap still stack in call order. */
+let lastStamp = 0;
 
 /**
  * Await this before doing the thing being undone. The write has to be durable while the
@@ -113,69 +57,58 @@ export async function loadUndoStack(): Promise<void> {
  * A failed write rejects — do NOT close anything you could not snapshot.
  */
 export async function pushUndo(entry: UndoEntry): Promise<void> {
-  const run = writeChain.then(async () => {
-    const id = newEntryId();
-    const meta = { type: entry.type, label: entry.label, timestamp: entry.timestamp };
-    // One set() for both keys, so no surface ever lists an entry whose snapshot is not there.
-    await chrome.storage.session?.set({ [ENTRY_PREFIX + id]: entry, [META_PREFIX + id]: meta });
-    mirror = [...mirror, { id, ...meta }];
-    // The snapshot is durable from here on. Eviction is housekeeping, and failing it must not
-    // fail the push a caller is waiting on before it closes anything.
-    try {
-      await refreshMirror();
-      const evicted = mirror.slice(0, Math.max(0, mirror.length - MAX_STACK));
-      if (evicted.length > 0) {
-        await chrome.storage.session.remove(evicted.flatMap((m) => [ENTRY_PREFIX + m.id, META_PREFIX + m.id]));
-        mirror = mirror.slice(evicted.length);
-      }
-    } catch {}
-  });
-  writeChain = run.catch(() => {});
-  return run;
+  // Above the newest entry listed, so the push lands on top even within the same millisecond as
+  // the last one, or after the clock has stepped back.
+  const ids = await entryIds();
+  const newest = ids.length > 0 ? Number(ids[ids.length - 1].slice(0, 16)) || 0 : 0;
+  const stamp = (lastStamp = Math.max(Date.now(), newest + 1, lastStamp + 1));
+  const id = `${String(stamp).padStart(16, "0")}-${Math.random().toString(36).slice(2, 10)}`;
+  await chrome.storage.session.set({ [ENTRY_PREFIX + id]: entry });
+  // The snapshot is durable from here on. Eviction is housekeeping, and failing it must not fail
+  // the push a caller is waiting on before it closes anything. It lists again so that a push
+  // another surface made meanwhile counts toward the cap: both are newer than anything evicted.
+  try {
+    const all = await entryIds();
+    const evicted = all.slice(0, Math.max(0, all.length - MAX_STACK));
+    if (evicted.length > 0) await chrome.storage.session.remove(evicted.map((e) => ENTRY_PREFIX + e));
+  } catch {}
 }
 
-/** The top entry's metadata. Synchronous, from the mirror; the snapshot itself stays in storage. */
-export function peekUndo(): UndoMeta | null {
-  return mirror.length > 0 ? mirror[mirror.length - 1] : null;
+/** Whether there is anything to undo. Lists key names only, so it reads no snapshot. */
+export async function hasUndo(): Promise<boolean> {
+  return (await chrome.storage.session.getKeys()).some((k) => k.startsWith(ENTRY_PREFIX));
 }
 
 /** The top entry with its snapshot. Reads that one payload. */
 export async function peekUndoEntry(): Promise<UndoEntry | null> {
-  await loadUndoStack();
-  const top = peekUndo();
-  if (!top) return null;
-  const key = ENTRY_PREFIX + top.id;
+  const ids = await entryIds();
+  if (ids.length === 0) return null;
+  const key = ENTRY_PREFIX + ids[ids.length - 1];
   return ((await chrome.storage.session.get(key))[key] as UndoEntry | undefined) ?? null;
 }
 
+/**
+ * Take the top entry off the stack. Nothing serialises pops: two that overlap, in one surface or
+ * two, can both read the top entry before either removes it. The popup's `busy` flag is what
+ * keeps a surface from overlapping itself.
+ */
 export async function popUndo(): Promise<UndoEntry | null> {
-  const run = writeChain.then(async () => {
-    await refreshMirror().catch(() => {});
-    while (mirror.length > 0) {
-      const top = mirror[mirror.length - 1];
-      const key = ENTRY_PREFIX + top.id;
-      const entry = (await chrome.storage.session.get(key))[key] as UndoEntry | undefined;
-      mirror = mirror.slice(0, -1);
-      // Survivable here, unlike on push: the entry is already out of the mirror and the undo it
-      // drives runs either way. Failing the pop would only cost the user their undo.
-      await chrome.storage.session.remove([key, META_PREFIX + top.id]).catch(() => {});
-      // Missing means the other surface popped it between our listing and this read: take the
-      // one under it rather than report an empty stack.
-      if (entry) return entry;
-    }
-    return null;
-  });
-  writeChain = run.catch(() => {});
-  return run;
+  for (const id of (await entryIds()).reverse()) {
+    const key = ENTRY_PREFIX + id;
+    const entry = (await chrome.storage.session.get(key))[key] as UndoEntry | undefined;
+    // Survivable here, unlike on push: the undo this entry drives runs either way, and failing
+    // the pop would only cost the user their undo.
+    await chrome.storage.session.remove(key).catch(() => {});
+    // Missing means another surface popped it between our listing and this read: take the one
+    // under it rather than report an empty stack.
+    if (entry) return entry;
+  }
+  return null;
 }
 
-export function undoStackSize(): number {
-  return mirror.length;
-}
-
-/** Whether a storage.onChanged batch touched the undo stack, so a surface should reload its mirror. */
+/** Whether a storage.onChanged batch pushed or popped an undo entry, so a surface should re-check hasUndo. */
 export function touchesUndoStack(changes: Record<string, unknown>): boolean {
-  return Object.keys(changes).some((k) => k.startsWith(META_PREFIX));
+  return Object.keys(changes).some((k) => k.startsWith(ENTRY_PREFIX));
 }
 
 /**

@@ -3,7 +3,7 @@ type: Architecture
 title: Architecture overview
 description: How TabOrdo's MV3 entrypoints, lib modules, command dispatch and storage areas fit together, and which realm owns what.
 tags: [architecture, mv3, storage, realms]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-17T10:30:06Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-22T12:00:00Z }
 sources:
   - id: wxt-config
     resource: https://github.com/samhvw8/TabOrdo/blob/main/wxt.config.ts
@@ -87,17 +87,17 @@ Every background listener is registered through `register()`, so one throwing re
 | Area | Keys | Why this area |
 |---|---|---|
 | `chrome.storage.local` | `rulesConfig`, `pinnedTabs`, `pinnedGroups`, `tabOrdo_archive`, `tabOrdo_archiveCount`, `tabOrdo_actionLog`, `tabOrdo_workspaces`, and popup prefs `collapsedGroups`, `dashboardActionIds`, `onboardingDismissed` | User data and settings that must survive a browser restart. |
-| `chrome.storage.session` | `tabOrdo_undo:<id>` and `tabOrdo_undoMeta:<id>`, `bulkOpLock:<owner>`, `tabParents`, `tabOrdo_aiGroupProgress`, `openMode` | State keyed to tab ids or to live runs. Tab ids are per browser session, and the next session reuses the same small range, so a map that outlived the session would point at unrelated tabs.[^tree-ts][^undo-ts] |
+| `chrome.storage.session` | `tabOrdo_undo:<id>`, `bulkOpLock:<owner>`, `tabParents`, `tabOrdo_aiGroupProgress`, `openMode` | State keyed to tab ids or to live runs. Tab ids are per browser session, and the next session reuses the same small range, so a map that outlived the session would point at unrelated tabs.[^tree-ts][^undo-ts] |
 
 Pins are the exception: they sit in `local` with a `tabId`, so the background's `runtime.onStartup` clears those ids and URL matching backfills fresh ones.[^background]
 
 # Realms share storage, not memory
 
-The popup and the side panel are the same component in two realms. Each has its own module instances (the undo mirror, write chains, the config and lock-list caches) over one shared storage area.[^undo-ts][^pin-ts] So:
+The popup and the side panel are the same component in two realms. Each has its own module instances (write chains, the config and lock-list caches) over one shared storage area.[^undo-ts][^pin-ts] So:
 
-- Any module-level cache of shared state must re-read before it mutates. The undo stack refreshes its mirror first (`refreshMirror`, see [undo stack](/architecture/undo-stack.md)), and every lock or config setter reads with `fresh` past its cache ([position locks](/features/position-locks.md), [grouping rules](/features/grouping-rules.md)).[^undo-ts][^pin-ts]
+- Any module-level cache of shared state must re-read before it mutates. The undo stack keeps no copy and lists storage each time (see [undo stack](/architecture/undo-stack.md)), and every lock or config setter reads with `fresh` past its cache ([position locks](/features/position-locks.md), [grouping rules](/features/grouping-rules.md)).[^undo-ts][^pin-ts]
 - `chrome.storage.session` has no compare-and-swap. A lock cannot be a refcount or a shared map, which is why the [bulk lock](/architecture/bulk-lock.md) uses one key per owner.
-- The component subscribes to `chrome.storage.onChanged` for `rulesConfig`, the action log, AI progress and the undo stack's metadata keys (`touchesUndoStack`), so a side panel left open stays current.[^popup-app][^undo-ts]
+- The component subscribes to `chrome.storage.onChanged` for `rulesConfig`, the action log, AI progress and the undo stack's entry keys (`touchesUndoStack`), so a side panel left open stays current.[^popup-app][^undo-ts]
 - The background also writes the undo stack: the context-menu dedup calls `closeTabs`, which snapshots.[^background]
 
 # Related

@@ -8,7 +8,7 @@
   import { createDebouncer } from "../../lib/debounce.ts";
   import { getAutoGroup, setAutoGroup, getAutoUngroup, setAutoUngroup, getUseRules, setUseRules, getAutoSort, setAutoSort, getAutoPinFollow, setAutoPinFollow, getAutoDiscard, setAutoDiscard, setSwitchToExisting } from "../../lib/rules.ts";
   import { matchCommands, ALL_COMMANDS, ACTION_COMMANDS, TRIAGE_COMMANDS, CATEGORY_STYLES, groupCommands, type CommandDefinition, type CommandCategory } from "../../lib/commands.ts";
-  import { snapshotBeforeGroup, executeUndo, peekUndo, loadUndoStack, touchesUndoStack } from "../../lib/undo.ts";
+  import { snapshotBeforeGroup, executeUndo, hasUndo, touchesUndoStack } from "../../lib/undo.ts";
   import { focusMode, unfocusMode, hasSavedWorkspace, exportTabsToFile, loadTabsFromText } from "../../lib/workspace.ts";
   import { addTabsToReadingList, getReadingList } from "../../lib/readinglist.ts";
   import { getRecentlyClosed } from "../../lib/sessions.ts";
@@ -179,6 +179,15 @@
     statusTimer = setTimeout(() => { statusMessage = ""; }, ms);
   }
 
+  // hasUndo lists key names only, so it is cheap to ask after every action and storage change.
+  // Only the newest answer lands: an older one resolving late would light or dim the button for
+  // a stack that has changed since.
+  let undoCheck = 0;
+  function refreshCanUndo(): void {
+    const seq = ++undoCheck;
+    void hasUndo().then((v) => { if (seq === undoCheck) canUndo = v; }, () => {});
+  }
+
   async function handleUndo() {
     if (busy) return;
     busy = true;
@@ -191,7 +200,7 @@
       // message, no undo, and an unhandled rejection in the console.
       flashStatus(`Undo failed: ${e instanceof Error ? e.message : "unknown error"}`, 5000);
     } finally {
-      canUndo = !!peekUndo();
+      refreshCanUndo();
       busy = false;
     }
   }
@@ -655,7 +664,7 @@
       flashStatus("Could not save an undo point — AI grouping cancelled", 5000);
       return;
     }
-    canUndo = !!peekUndo();
+    refreshCanUndo();
 
     activeSection = "ai";
     aiProgress = { ...defaultProgress(), status: "checking" };
@@ -806,7 +815,7 @@
 
         if (outcome.acted) {
           query = "";
-          canUndo = !!peekUndo();
+          refreshCanUndo();
           await loadTabs();
         }
       });
@@ -909,7 +918,7 @@
     } finally {
       // Refresh on failure too: a bulk close that Chrome refused one tab of has still closed
       // the others and pushed an undo entry, and the strip on screen has to say so.
-      canUndo = !!peekUndo();
+      refreshCanUndo();
       await loadTabs().catch(() => {});
       busy = false;
     }
@@ -1017,12 +1026,8 @@
           if (p.status === "done") loadTabs();
         }
       }
-      // Another surface pushed or popped. The reload lists key names and reads only metadata
-      // this realm hasn't seen, never a snapshot. The mirror has to follow, not just the button:
-      // every other `canUndo = !!peekUndo()` in this file reads it.
-      if (touchesUndoStack(changes)) {
-        void loadUndoStack().then(() => { canUndo = !!peekUndo(); });
-      }
+      // Another surface pushed or popped.
+      if (touchesUndoStack(changes)) refreshCanUndo();
     };
     chrome.storage.onChanged.addListener(listener);
     return () => chrome.storage.onChanged.removeListener(listener);
@@ -1065,7 +1070,7 @@
       chrome.storage.session.get("openMode").catch(() => ({}) as Record<string, unknown>),
     ]);
 
-    void loadUndoStack().then(() => { canUndo = !!peekUndo(); });
+    refreshCanUndo();
     void hasSavedWorkspace().then((v) => { hasWorkspace = v; });
     void getArchiveCount().then((v) => { archiveCount = v; });
     void getActionLog().then((v) => { actionLog = v; });

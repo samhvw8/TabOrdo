@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { installChromeStub, type ChromeStub } from "./testing/chrome-stub.ts";
-import { popUndo, peekUndo, peekUndoEntry, executeUndo } from "./undo.ts";
+import { hasUndo, peekUndoEntry, executeUndo } from "./undo.ts";
 import { getArchive } from "./archive.ts";
 import { runAction, ACTION_HANDLERS, mergeStatus, type ActionContext } from "./actions.ts";
 import { ACTION_COMMANDS } from "./commands.ts";
@@ -12,14 +12,11 @@ import type { SearchResult } from "./search.ts";
 let stub: ChromeStub;
 let filePickerOpened: number;
 
-beforeEach(async () => {
+beforeEach(() => {
   stub = installChromeStub();
   stub.currentWindowId = 1;
   stub.windows = [{ id: 1 }, { id: 2 }];
   filePickerOpened = 0;
-  while (await popUndo()) {
-    /* drain the module-level undo stack between tests */
-  }
 });
 
 const asResult = (t: { id: number; url?: string; title?: string; groupTitle?: string }): SearchResult =>
@@ -83,14 +80,14 @@ describe("/close", () => {
     const r = await runAction("close", ctx({ matchingTabs: [asResult({ id: 2, url: "https://b.com" })] }));
     expect(r).toEqual({ message: "Closed 1 tab(s)", acted: true });
     expect(stub.removedIds).toEqual([2]);
-    expect(peekUndo()?.type).toBe("close");
+    expect((await peekUndoEntry())?.type).toBe("close");
   });
 
   it("does nothing, and reports nothing, when the query matched no tabs", async () => {
     const r = await runAction("close", ctx({ query: "zzz" }));
     expect(r).toEqual({ acted: false });
     expect(stub.removedIds).toEqual([]);
-    expect(peekUndo()).toBeNull();
+    expect(await hasUndo()).toBe(false);
   });
 });
 
@@ -530,11 +527,12 @@ describe("/branch and /branchup", () => {
     it("says so and touches nothing when the branch is already whole", async () => {
       gathered();
       stub.openTabs.find((t) => t.id === 4)!.groupId = 50;
-      const before = peekUndo();
+      const undoKeys = () => Object.keys(stub.sessionData).filter((k) => k.startsWith("tabOrdo_undo:"));
+      const before = undoKeys();
       const r = await ACTION_HANDLERS.branch(ctx());
       expect(r.acted).toBe(false);
       expect(r.message).toMatch(/already gathered in "Morning read"/);
-      expect(peekUndo()).toBe(before);
+      expect(undoKeys()).toEqual(before);
       expect(stub.moves).toEqual([]);
     });
 
