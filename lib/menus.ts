@@ -7,7 +7,6 @@ import { withBulkLock } from "./bulklock.ts";
 
 /** Built from runtime.onInstalled. removeAll first, because an update re-runs it. */
 export function createMenus(): void {
-  if (!chrome.contextMenus) return;
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({ id: "tabOrdo-group-domain", title: "Group tabs by domain", contexts: ["action"] });
     chrome.contextMenus.create({ id: "tabOrdo-dedup", title: "Remove duplicate tabs", contexts: ["action"] });
@@ -15,10 +14,8 @@ export function createMenus(): void {
     chrome.contextMenus.create({ type: "separator", id: "tabOrdo-sep1", contexts: ["action"] });
     chrome.contextMenus.create({ id: "tabOrdo-readlater", title: "Save to Reading List", contexts: ["action"] });
     chrome.contextMenus.create({ id: "tabOrdo-discard", title: "Discard inactive tabs", contexts: ["action"] });
-    if (chrome.sidePanel) {
-      chrome.contextMenus.create({ type: "separator", id: "tabOrdo-sep2", contexts: ["action"] });
-      chrome.contextMenus.create({ id: "tabOrdo-sidepanel", title: "Open in Side Panel", contexts: ["action"] });
-    }
+    chrome.contextMenus.create({ type: "separator", id: "tabOrdo-sep2", contexts: ["action"] });
+    chrome.contextMenus.create({ id: "tabOrdo-sidepanel", title: "Open in Side Panel", contexts: ["action"] });
   });
 }
 
@@ -54,9 +51,7 @@ export async function runMenuItem(menuItemId: string | number): Promise<void> {
         break;
       }
       case "tabOrdo-sidepanel":
-        if (chrome.sidePanel) {
-          await chrome.sidePanel.open({ windowId: (await chrome.windows.getCurrent()).id! });
-        }
+        await chrome.sidePanel.open({ windowId: (await chrome.windows.getCurrent()).id! });
         break;
     }
   } catch (e) {
@@ -65,9 +60,9 @@ export async function runMenuItem(menuItemId: string | number): Promise<void> {
 }
 
 export async function openDashboard(): Promise<void> {
-  // The flag is consumed by the popup on mount. If openPopup fails (it needs Chrome 127+,
-  // and rejects when no window is focused) a stale flag would sit in session storage and
-  // silently steal search autofocus from the *next* ordinary Cmd+E open.
+  // The flag is consumed by the popup on mount. If openPopup fails (it rejects when no window
+  // is focused) a stale flag would sit in session storage and silently steal search autofocus
+  // from the *next* ordinary Cmd+E open.
   await chrome.storage.session.set({ openMode: "dashboard" });
   try {
     await chrome.action.openPopup();

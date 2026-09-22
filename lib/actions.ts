@@ -452,7 +452,6 @@ export const ACTION_HANDLERS: Record<string, ActionHandler> = {
   },
 
   sidepanel: async (ctx) => {
-    if (!chrome.sidePanel) return { message: "Side Panel not available (Chrome 114+)", acted: true };
     await chrome.sidePanel.open({ windowId: ctx.currentWindowId });
     return { message: "Opened Side Panel", acted: true };
   },

@@ -120,11 +120,9 @@ export default defineBackground(() => {
     });
   });
 
-  if (chrome.contextMenus) {
-    register("contextMenus.onClicked", () => {
-      chrome.contextMenus.onClicked.addListener((info) => runMenuItem(info.menuItemId));
-    });
-  }
+  register("contextMenus.onClicked", () => {
+    chrome.contextMenus.onClicked.addListener((info) => runMenuItem(info.menuItemId));
+  });
 
   // The popup reads AI progress straight from session storage, so there is no status message
   // to answer here — only the start request.

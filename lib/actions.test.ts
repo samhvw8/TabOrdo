@@ -402,13 +402,6 @@ describe("/restore", () => {
 });
 
 describe("/sidepanel", () => {
-  it("explains itself when the API is missing", async () => {
-    expect(await runAction("sidepanel", ctx())).toEqual({
-      message: "Side Panel not available (Chrome 114+)",
-      acted: true,
-    });
-  });
-
   it("opens against the current window", async () => {
     const open = vi.fn(async () => {});
     (globalThis.chrome as any).sidePanel = { open };
