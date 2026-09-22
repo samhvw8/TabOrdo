@@ -4,7 +4,7 @@ title: Command palette and dashboard actions
 description: How slash commands, @ triage views and dashboard tiles are registered, dispatched to one handler per command, confirmed, and extended.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/actions.ts
 tags: [command-palette, dashboard, actions, triage]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-17T09:50:38Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-22T06:05:00Z }
 sources:
   - id: commands-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/commands.ts
@@ -22,6 +22,14 @@ sources:
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/search.ts
     title: parseCommand
     last_modified: 2026-08-21
+  - id: views-ts
+    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/views.ts
+    title: Prefix views
+    last_modified: 2026-09-22
+  - id: views-test
+    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/views.test.ts
+    title: Prefix view tests
+    last_modified: 2026-09-22
   - id: popup-app
     resource: https://github.com/samhvw8/TabOrdo/blob/main/entrypoints/popup/App.svelte
     title: Popup and side panel component
@@ -103,14 +111,18 @@ Handler conventions:
 | View | Shows | In bare `@` overview |
 |------|-------|----------------------|
 | `@a` / `@m` | Audible / muted tabs | Yes |
-| `@d` | Tabs sharing an exact URL | Yes |
+| `@d` | Every copy of a page `/dedup` would close, by its URL rule ([dedup](/features/dedup.md)) | Yes |
 | `@r` | Most recently active (20; 15 in the overview) | Yes |
 | `@s` / `@f` | Discarded ("Unloaded") / frozen by Chrome ("Paused by Chrome") | Yes |
 | `@u` | Ungrouped tabs | No |
 | `@b` | Active tab's branch as an outline ([branch lineage](/features/branch-lineage.md)) | No |
-| `@shared` | Tabs in shared groups | No |
+| `@shared` | Tabs in groups Chrome marks shared | No |
 
-All are rows in one `TRIAGE_CATEGORIES` table; text after a view re-ranks its tabs through `tabSearch.rankView`, which keeps the view's haystack until its rows change ([search](/features/search.md)). With no text a view lists every row, uncapped, as `/rl` and `/rc` do; only `/w`, `/p` and `/g` stop at 50. The lookup is a `Map` because an object literal would resolve `/constructor` to `Object.prototype`.[^popup-app]
+The views are pure functions in `lib/views.ts`. `resolveView(prefix, q, ctx)` returns `{ rows, empty }` for every prefix the palette ranks locally: the triage views and the bare `@` overview, `/w`, `/p`, `/g`, `/re`, `/rl`, `/rc`, and the target preview under an action command.[^views-ts] `ctx` is what the popup already holds (its `TabSearch`, the current window, the active tab's group) plus the one Chrome read a view needs, which the popup makes for that view alone: the Reading List or recently closed list (once per visit, through `sourceOnce`), `@b`'s branch outline, or the tab groups for `@shared`.[^views-ts][^popup-app] `/b` and `/h` are not views; the popup looks them up in Chrome on a debounce ([search](/features/search.md)).
+
+All triage views are rows in one `TRIAGE_CATEGORIES` table; text after a view re-ranks its tabs through `tabSearch.rankView`, which keeps the view's haystack until its rows change ([search](/features/search.md)). With no text a view lists every row, uncapped, as `/rl` and `/rc` do; only `/w`, `/p` and `/g` stop at 50. A dedicated view sets `empty` only when it has no rows at all, not when the text matched none of them; the bare `@` overview says "No triage matches" instead. The popup flashes `empty` as the status line. The lookup is a `Map` because an object literal would resolve `/constructor` to `Object.prototype`.[^views-ts]
+
+`firstSelectable` and `nextSelectable` keep the highlight off the divider rows that the overview and the bookmark/history tail interleave.[^views-ts] `lib/views.test.ts` covers each view's rows and empty line, `@shared` and `@afoo` through `parseCommand`, the overview's order, labels and caps, prefixes named like `Object.prototype` members, and selection over dividers.[^views-test]
 
 ## Dashboard tiles, alt-click and confirmations
 
@@ -167,6 +179,8 @@ All are rows in one `TRIAGE_CATEGORIES` table; text after a view re-ranks its ta
 [^actions-ts]: lib/actions.ts
 [^dashboard-ts]: lib/dashboard.ts
 [^search-ts]: lib/search.ts
+[^views-ts]: lib/views.ts
+[^views-test]: lib/views.test.ts
 [^popup-app]: entrypoints/popup/App.svelte
 [^actions-test]: lib/actions.test.ts
 [^dashboard-test]: lib/dashboard.test.ts

@@ -4,7 +4,7 @@ title: Ranked search
 description: How lib/search.ts ranks tabs for the palette (literal tiers before approximate ones, title over URL, pinned and current-window then recency), plus regex, pinyin, Vietnamese, the non-tab sources, and the caching that keeps typing fast.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/search.ts
 tags: [search, palette, performance, i18n]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-22T05:34:34Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-22T06:05:00Z }
 sources:
   - id: search-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/search.ts
@@ -45,6 +45,10 @@ sources:
   - id: popup-app
     resource: https://github.com/samhvw8/TabOrdo/blob/main/entrypoints/popup/App.svelte
     title: Popup search wiring
+    last_modified: 2026-09-22
+  - id: views-ts
+    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/views.ts
+    title: Prefix views
     last_modified: 2026-09-22
   - id: search-test
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/search.test.ts
@@ -122,9 +126,9 @@ Group titles sit in both haystacks, so a group-name hit ranks as a title hit, an
 |--------|-----------|---------|
 | Bookmarks | Plain query of 2+ chars: 5 results after a 200 ms debounce, appended under a divider. `/b`: up to 20, on the same 200 ms debounce | Chrome's `bookmarks.search` order[^popup-app][^search-ts] |
 | History | Same, via `history.search`. `/h`: up to 20, debounced like `/b` | Chrome's order[^popup-app] |
-| Reading List (`/rl`) | `readingList.query({})` once per visit to the prefix; read items prefixed `✓ ` | `rankView`: `rankedSearch`, no recency[^popup-app][^readinglist-ts] |
+| Reading List (`/rl`) | `readingList.query({})` once per visit to the prefix; read items prefixed `✓ ` | `rankView`: `rankedSearch`, no recency[^popup-app][^views-ts][^readinglist-ts] |
 | Recently closed (`/rc`, `/recent`) | `sessions.getRecentlyClosed` (25), window sessions flattened; `/rc` reads it once per visit | `rankView`[^sessions-ts][^popup-app] |
-| `/w`, `/p`, `/g` | Current window, Chrome-pinned, active tab's group (or ungrouped), all filtered from the tabs the popup loaded | `rankView`: `rankedSearch`, no recency or priority; an empty query lists the first 50[^popup-app][^tabsearch-ts] |
+| `/w`, `/p`, `/g` | Current window, Chrome-pinned, active tab's group (or ungrouped), all filtered from the tabs the popup loaded | `rankView`: `rankedSearch`, no recency or priority; an empty query lists the first 50[^views-ts][^tabsearch-ts] |
 
 Keystrokes make no Chrome calls in the prefix views, measured with the chrome stub over a 6-letter word at 1000 tabs:[^popup-app]
 
@@ -141,7 +145,7 @@ Every new query cancels a pending lookup and clears `loading`, so a plain query 
 
 - `prepare()` caches lower-cased entries and their word splits in a `WeakMap` keyed by the haystack **array**. The first search per load pays; later keystrokes hit. Contract: replace a haystack, never mutate it in place.[^search-ts]
 - `App.svelte` keeps `allTabs`, `results`, `windows`, `dashboardTabs` and `pinnedTabs` as `$state.raw`, and `tabSearch` (which holds the haystack, recency and priority arrays ranking reads) as a plain `let`. A deep `$state` proxy traps every element read, and ranking does thousands per keystroke inside loops and sort comparators.[^popup-app]
-- Nothing is built before the dashboard paints. `loadTabs` only creates the `TabSearch`; an empty query (the most-recent list the popup opens with) reads just the row count via `recencyOrder`. A `requestIdleCallback` (timeout 1 s) then builds both haystacks and their `prepare()` caches, unless a newer load replaced that search. A key pressed first builds synchronously and gets the same results.[^tabsearch-ts][^popup-app]
+- Nothing is built before the dashboard paints. `loadTabs` creates the `TabSearch` and, when the query is empty, ranks it straight away, so the "Back to" hint and Enter never point at a tab an action just closed; an empty query (the most-recent list the popup opens with) reads just the row count via `recencyOrder`. A `requestIdleCallback` (timeout 1 s) then builds both haystacks and their `prepare()` caches, unless a newer load replaced that search. A key pressed first builds synchronously and gets the same results.[^tabsearch-ts][^popup-app]
 - Measured in Node at 1000 tabs: search work before first paint 3.20 ms to 0.24 ms; the idle warm-up costs 3.04 ms after paint; the first `g` then takes 0.42 ms instead of 3.35 ms. One pass over both haystacks costs 1.65 ms where two builders cost 2.82 ms.[^tabsearch-ts]
 - Views (`@` triage, the bare `@` overview, `/w`, `/p`, `/g`, `/rl`, `/rc`) rank through `tabSearch.rankView(key, rows, query)`, which returns what `rankedSearch(buildSearchHaystack(rows), query)` would. The popup derives a view's rows afresh on each keystroke, so the view's haystack is kept under its key while the rows are the same objects in the same order. Rows the tab search holds are taken from the built full haystack by `subHaystack`, which also copies their `prepare()` entries; other rows (Reading List, recently closed, @b's retitled copies) are built once per change. Without it, each keystroke rebuilt the view's haystack, pinyin and diacritic stripping included, and then missed `prepare()` because the array was new ([measured below](#view-cache-and-last-query-memo-measured)).[^tabsearch-ts][^popup-app]
 - Measured per keystroke: `9d70207` took 8.46 ms to 3.27 ms at 1000 tabs,[^commit-9d70207] and `057dc57` took 3.27 ms to 1.69 ms.[^commit-057dc57] CHANGELOG 0.7.0 rounds the pair to 2.4 ms to 0.5 ms at 300 tabs and 8.5 ms to 1.7 ms at 1000.[^changelog]
@@ -201,6 +205,7 @@ Setup: Node 22 on an Apple M1 Pro, 1000 generated tabs (10% Chinese titles, 15% 
 [^sessions-ts]: lib/sessions.ts
 [^readinglist-ts]: lib/readinglist.ts
 [^popup-app]: entrypoints/popup/App.svelte
+[^views-ts]: lib/views.ts
 [^search-test]: lib/search.test.ts
 [^pinyin-test]: lib/pinyin.test.ts
 [^highlight-test]: lib/highlight.test.ts
