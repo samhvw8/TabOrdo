@@ -4,20 +4,20 @@ title: Command palette and dashboard actions
 description: How slash commands, @ triage views and dashboard tiles are registered, dispatched to one handler per command, confirmed, and extended.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/actions.ts
 tags: [command-palette, dashboard, actions, triage]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-22T06:05:00Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-22T06:20:00Z }
 sources:
   - id: commands-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/commands.ts
-    title: Command registry
-    last_modified: 2026-08-21
+    title: The action table and the palette's command lists
+    last_modified: 2026-09-22
   - id: actions-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/actions.ts
-    title: Action handlers
-    last_modified: 2026-09-17
+    title: Action and tile handlers
+    last_modified: 2026-09-22
   - id: dashboard-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/dashboard.ts
-    title: Dashboard tile catalogue
-    last_modified: 2026-08-15
+    title: Tiles derived from the action table
+    last_modified: 2026-09-22
   - id: search-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/search.ts
     title: parseCommand
@@ -33,19 +33,19 @@ sources:
   - id: popup-app
     resource: https://github.com/samhvw8/TabOrdo/blob/main/entrypoints/popup/App.svelte
     title: Popup and side panel component
-    last_modified: 2026-09-17
+    last_modified: 2026-09-22
   - id: actions-test
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/actions.test.ts
     title: Action handler tests
-    last_modified: 2026-08-21
+    last_modified: 2026-09-22
   - id: dashboard-test
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/dashboard.test.ts
-    title: Dashboard consistency tests
-    last_modified: 2026-07-29
+    title: Dashboard derivation tests
+    last_modified: 2026-09-22
   - id: commands-test
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/commands.test.ts
     title: Command matching tests
-    last_modified: 2026-07-27
+    last_modified: 2026-09-22
   - id: changelog
     resource: https://github.com/samhvw8/TabOrdo/blob/main/CHANGELOG.md
     title: CHANGELOG
@@ -66,15 +66,20 @@ sources:
 
 # Overview
 
-The palette (the `Cmd+E` popup, and the same component mounted in the side panel) takes plain text for [ranked search](/features/search.md), `/command [text]` for actions and searches, and `@view [text]` for triage. The dashboard beneath it exposes a subset of the same actions as tiles. Three registries drive it:
+The palette (the `Cmd+E` popup, and the same component mounted in the side panel) takes plain text for [ranked search](/features/search.md), `/command [text]` for actions and searches, and `@view [text]` for triage. The dashboard beneath it exposes many of the same actions as tiles. One table drives both:
 
-| Registry | File | Holds |
-|----------|------|-------|
-| `SEARCH_COMMANDS`, `ACTION_COMMANDS`, `VIEW_COMMANDS`, `TRIAGE_COMMANDS`, `ACTION_GROUPS` | `lib/commands.ts` | Prefix, label, description, category, colour, `hidden` flag, browse clusters[^commands-ts] |
-| `ACTION_HANDLERS`, `runAction` | `lib/actions.ts` | One async handler per action prefix[^actions-ts] |
-| `DASHBOARD_ACTION_POOL`, `MORE_SECTIONS`, `ALT_MODE`, `DEFAULT_DASHBOARD_IDS`, `DASHBOARD_ONLY_ACTIONS` | `lib/dashboard.ts` | Tiles, the More panel list, alt-click modes[^dashboard-ts] |
+| What | File | Holds |
+|------|------|-------|
+| `ACTIONS`, the action table | `lib/commands.ts` | One row per slash command and per tile: `id`, `description`, browse cluster (`group`), colour, `hidden`, `aliasOf`, and optionally a `tile` (label, icon, tooltip, `confirm`, `own`) and an `alt` mode[^commands-ts] |
+| `ACTION_COMMANDS`, `ALL_COMMANDS`, `groupCommands`, `matchCommands` | `lib/commands.ts` | The palette's list and browse clusters, derived from the table, beside the hand-written `SEARCH_COMMANDS`, `VIEW_COMMANDS` and `TRIAGE_COMMANDS`[^commands-ts] |
+| `TILES`, `TILE_BY_ID`, `MORE_SECTIONS`, `UNLOCK_FACE`, `DEFAULT_DASHBOARD_IDS` | `lib/dashboard.ts` | Tiles, their alt faces and the More panel list, all derived from the table except the defaults[^dashboard-ts] |
+| `ACTION_HANDLERS`, `TILE_HANDLERS`, `runAction`, `runTile` | `lib/actions.ts` | One async handler per command, and one per tile that does something of its own[^actions-ts] |
 
-The triage views and the tile click dispatcher (`handleOverflowAction`) still live in `App.svelte`.[^popup-app]
+Every label is derived from what you type (`/close`, `@a`), and an alias's description, cluster and colour come from its target. A tile's label defaults to its id capitalised and its tooltip to the row's description.[^commands-ts][^dashboard-ts]
+
+The handlers are not in the rows because `lib/commands.ts` must stay a leaf. `lib/search.ts` imports it for `parseCommand`, and the handlers import `lib/tabs`, the workspace and session stores and `lib/search.ts` itself (`/recent` ranks with `rankedSearch`). Rows holding handlers would make commands → actions → search → commands a cycle, and `search.ts` reads `TRIAGE_COMMANDS` while it loads. Instead the two handler records are typed `Record<HandledCommand, ActionHandler>` and `Record<OwnTile, ActionHandler>`, with both key types derived from the table, so a row without a handler, or a handler without a row, fails `npm run check`.[^commands-ts][^actions-ts]
+
+The triage views still live in `App.svelte`, and so does the tile click dispatcher, `handleOverflowAction`, for the few tiles that need component state.[^popup-app]
 
 # Behaviour
 
@@ -126,18 +131,25 @@ All triage views are rows in one `TRIAGE_CATEGORIES` table; text after a view re
 
 ## Dashboard tiles, alt-click and confirmations
 
-- The grid renders `dashboardActionIds` from `chrome.storage.local` (defaults `sort`, `group`, `dedup`, `merge`, `pin`); the ★ in the More panel toggles a tile.[^dashboard-ts][^popup-app]
-- `dashButtonClick`: `pin` has its own lock/unlock toggle. With Alt or Ctrl held, `ALT_MODE[id]` applies: a mode with a `query` re-runs the handler with that argument, otherwise its `action` is dispatched instead.[^popup-app]
-- Swap pairs are symmetric, so either tile reaches both modes: Close Left/Right, Split V/H, Save/Load, Unite/Isolate, Branch/Branch Up. Mute alt-clicks to Unmute, and Lock Group to a lock at the first position.[^dashboard-ts][^readme]
-- `handleOverflowAction` either calls `dashCommand(prefix)`, which runs the same `ACTION_HANDLERS` entry as the typed command, or inlines lib calls with shorter status text.[^popup-app]
-- `DASHBOARD_ONLY_ACTIONS` (`regroup`, `aigroup`, `archive`, `group`, `ungroup`, `sort`, `pin`) are tiles that deliberately differ from the same-named command: Group+ groups by domain while `/group` groups the matches, and the Archive tile opens the archive page.[^dashboard-ts]
-- Selection bar: Close and Archive run the `/close` and `/archive` handlers on the ticked tabs; that is how the Archive button, which used to close with no undo snapshot, got one.[^popup-app][^commit-54b3787]
-- `CONFIRM_ACTIONS` = `merge`, `dedup`, `closeleft`, `closeright`, `closeold`, `closesite`, and `focus` only while no workspace is saved. The first click arms (label "Confirm"), a second within 3 s runs. Selection Close confirms too; selection Archive does not.[^popup-app] Typed commands never confirm: typing is already deliberate.[^changelog]
+- The grid renders `dashboardActionIds` from `chrome.storage.local` (defaults `sort`, `group`, `dedup`, `merge`, `pin`); the ★ in the More panel toggles a tile. A tile's id is its row's id, and stored ids must keep resolving, which is why the two lock tiles still carry the old ids `pin` and `pingroup`, on the alias rows.[^dashboard-ts][^popup-app]
+- `handleOverflowAction` is one switch with a `default: goBack(); dashTile(action)`. `dashTile` wraps `dashAction` around `runTile(id, ctx)`, which runs `TILE_HANDLERS[id]` when the row's tile is marked `own` and the bare command's handler otherwise. So a tile and its slash command share one handler and report the same status text.[^popup-app][^actions-ts]
+- `TILE_HANDLERS` covers the tiles whose id names a command that does something else: Group+ (`group`) groups every loose tab by domain through `lib/arrange.ts` while `/group` groups the matches; Ungroup (`ungroup`) ungroups everything while bare `/ungroup` takes the active tab; Regroup (`regroup`) is a tile-only row with no slash command. Each takes the undo snapshot.[^actions-ts][^commands-ts]
+- The Sort tile runs bare `/sort`, whose domain sort is `sortWindowByDomain` from `lib/arrange.ts`, the function the action-icon menu's Sort also calls.[^actions-ts]
+- Only the tiles that need something the component owns keep a `case`: Focus runs `/unfocus` instead while a workspace is saved; Lock Tab toggles on the active tab's lock state (`handlePinCurrent`); AI Group hands off to the background before the lock; Recent fills the palette with `/recent`'s list; Archive opens the archive page.[^popup-app]
+- `dashButtonClick`: `pin` has its own lock/unlock toggle. With Alt or Ctrl held, the tile's `alt` applies: a mode with a `query` runs `dashCommand(action, query)`, otherwise `action` goes through `handleOverflowAction`, confirmation included.[^popup-app]
+- An `alt` names a target row (`to`) and optionally a `query`. Its face defaults to the target tile's label, icon and tooltip, so a swap pair states nothing twice. Swap pairs are symmetric: Close Left/Right, Split V/H, Save/Load, Unite/Isolate, Branch/Branch Up. Mute alt-clicks to Unmute, which has no tile and so supplies its own face; Lock Tab and Lock Group alt-click to a lock at `^`.[^commands-ts][^dashboard-ts][^readme]
+- `tileFace` in the component gives the grid and the More panel the same face: the Lock Tab tile's state (`UNLOCK_FACE` while held), Focus's Unfocus face, and the alt face while Alt is held. The More panel adds the archive size as the Archive row's subtitle.[^popup-app]
+- The More panel lists every tile under the palette's browse clusters, in `ACTION_GROUP_ORDER` and table order.[^dashboard-ts]
+- Selection bar: Close, Archive and Discard run the `/close`, `/archive` and `/discard` handlers on the ticked tabs; that is how the Archive button, which used to close with no undo snapshot, got one.[^popup-app][^commit-54b3787]
+- A group header's Sort and Extract run `sortGroup` and `extractGroup` from `lib/actions.ts`, which snapshot first like the handlers.[^actions-ts]
+- Tiles with `confirm` in the table (`merge`, `dedup`, `closeleft`, `closeright`, `closeold`, `closesite`, and `focus` only while no workspace is saved) arm on the first click (label "Confirm") and run on a second within 3 s. Selection Close confirms too; selection Archive does not.[^commands-ts][^popup-app] Typed commands never confirm: typing is already deliberate.[^changelog]
 
 # Invariants
 
-- Every `ACTION_COMMANDS` prefix except `aigroup` has a handler, and every handler key is listed in `ACTION_COMMANDS`, hidden aliases included.[^actions-test]
-- Pool and More panel agree both ways; defaults exist in the pool; alt targets exist and swap pairs are symmetric; each pool id has a handler unless dashboard-only; the dispatcher has a `case` for every pool id and alt target except `pin`.[^dashboard-test]
+- Every slash command except `/aigroup` and the aliases has an `ACTION_HANDLERS` entry, every `own` tile a `TILE_HANDLERS` entry, and neither record has a key the table lacks. The compiler enforces this, not a test.[^actions-ts][^commands-ts]
+- Aliases run their target's handler; tile-only rows are not slash commands; an id resolves through a `Map`, never through `Object.prototype`.[^actions-test]
+- Row ids are unique, every tile id a user may have stored still resolves, and swap pairs are symmetric.[^commands-test][^dashboard-test]
+- An `alt` whose target is not in the table, or has no tile to borrow a face from and supplies none, throws when `lib/dashboard.ts` loads, so any test importing it fails.[^dashboard-ts]
 - The preview under a typed action command is ranked with the same arguments as `rankTabs`, so the list shown is the list acted on.[^popup-app]
 
 # Why it is this way
@@ -145,6 +157,7 @@ All triage views are rows in one `TRIAGE_CATEGORIES` table; text after a view re
 - Handlers were a ~300-line switch in `App.svelte`, reachable only by mounting the component, so none were tested; `7e3e91a` moved them to `lib/actions.ts`.[^commit-7e3e91a]
 - Tile data were four hand-maintained lists in `App.svelte`; `/collapse` shipped missing from three of them.[^changelog]
 - Buttons route through `dashCommand` so a button and its command cannot drift into reporting different things.[^popup-app]
+- The tile data then still lived in six lists keyed by the same id (`ACTION_COMMANDS`, `ACTION_GROUPS`, `ACTION_HANDLERS`, the tile pool, `MORE_SECTIONS`, `ALT_MODE`), with about 16 tests there only to keep them agreeing, one of which string-split `App.svelte`. Drift shipped anyway: the More panel still said "Pin Tab" for the Lock Tab tile, and about 20 tiles re-implemented a handler with their own status text. They are one table now, and the tiles run the handlers.[^commands-ts][^popup-app]
 
 # Gotchas
 
@@ -152,23 +165,23 @@ All triage views are rows in one `TRIAGE_CATEGORIES` table; text after a view re
 - Handlers that ignore `ctx` (`/dedup`, `/closeold`, `/merge`, …) still show a filtered preview when text follows, then act globally.[^actions-ts][^popup-app]
 - Alt-clicking a tile that confirms arms the *alt* action's id, so the clicked tile never relabels to "Confirm"; a second alt-click still runs it. Ctrl-click also triggers alt modes, but the relabel follows only the Alt key.[^popup-app]
 - Load from File refuses in the popup (the picker steals focus and Chrome closes the popup); it works in the side panel.[^popup-app]
-- The dispatcher test finds cases by splitting `App.svelte` on `async function handleOverflowAction`; renaming it fails "found the dispatcher".[^dashboard-test]
+- The Load and Side Panel tiles run inside the bulk lock, like their typed commands, so the file picker and `chrome.sidePanel.open` start a few storage round-trips after the click. Both need the click's user activation to still hold by then.[^popup-app][^actions-ts]
 
 # Adding a command end to end
 
-1. `lib/commands.ts`: add a `CommandDefinition` to `ACTION_COMMANDS` and its prefix to an `ACTION_GROUPS` cluster.
-2. `lib/actions.ts`: add the handler to `ACTION_HANDLERS`; close only through `closeTabs`, call `snapshotBeforeGroup()` before regrouping or moving, and set `acted` when the popup should clear the query and reload.
-3. `lib/actions.test.ts`: cover it against the [chrome stub](/testing/chrome-stub.md); the registry tests fail until steps 1 and 2 agree.
-4. For a tile: a pool entry in `DASHBOARD_ACTION_POOL`, a `MORE_SECTIONS` row, a `case` in `handleOverflowAction` (usually `goBack(); dashCommand("id")`), optionally a symmetric `ALT_MODE` pair, and `CONFIRM_ACTIONS` if it closes tabs. `lib/dashboard.test.ts` checks all of these except the confirmation list.
+1. `lib/commands.ts`: add a row to `ACTIONS` with its `id`, `description`, `group` and `color`. Its position sets its place in the palette and the More panel.
+2. `lib/actions.ts`: add the handler to `ACTION_HANDLERS`; `npm run check` fails until you do. Close only through `closeTabs`, call `snapshotBeforeGroup()` before regrouping or moving, and set `acted` when the popup should clear the query and reload.
+3. `lib/actions.test.ts`: cover it against the [chrome stub](/testing/chrome-stub.md).
+4. For a tile: give the row a `tile` (an icon at least; `confirm` if it closes tabs or scatters the window), and optionally an `alt`. It appears in the More panel and runs its handler with no change to `App.svelte`. If the tile should do something other than the bare command, mark it `own` and add a `TILE_HANDLERS` entry.
 5. Add a row to README's command table and a CHANGELOG entry ([release](/processes/release.md)).
 
 # Tests that guard it
 
 | File | Guards |
 |------|--------|
-| `lib/actions.test.ts` | Dispatch, aliases, registry agreement, per-handler behaviour[^actions-test] |
-| `lib/dashboard.test.ts` | Catalogue, alt modes, registry mapping, dispatcher cases[^dashboard-test] |
-| `lib/commands.test.ts` | `matchCommands` browse, aliases, fuzzy[^commands-test] |
+| `lib/actions.test.ts` | Dispatch, aliases, `runTile`, per-handler behaviour, the group-header snapshot[^actions-test] |
+| `lib/dashboard.test.ts` | Stored tile ids still resolve, tile faces, alt symmetry[^dashboard-test] |
+| `lib/commands.test.ts` | `matchCommands` browse, aliases, fuzzy; unique row ids[^commands-test] |
 
 # Related
 

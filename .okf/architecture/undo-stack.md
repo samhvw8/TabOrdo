@@ -4,11 +4,15 @@ title: Undo stack
 description: lib/undo.ts keeps a 20-entry close/group undo stack in chrome.storage.session, one key per entry, with durable pushes shared across the popup, side panel and background realms.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/undo.ts
 tags: [undo, storage, realms, performance]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-22T14:00:00Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-22T06:04:00Z }
 sources:
   - id: arrange
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/arrange.ts
     title: lib/arrange.ts (Group and Sort for the tiles and the action-icon menu)
+    last_modified: 2026-09-22
+  - id: actions-ts
+    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/actions.ts
+    title: lib/actions.ts (action handlers and the group-header actions)
     last_modified: 2026-09-22
   - id: undo-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/undo.ts
@@ -67,7 +71,7 @@ The per-entry column was measured with a metadata key beside each entry, which t
 | `type` | Written by | `data` |
 |---|---|---|
 | `close` | `snapshotBeforeClose(tabIds)`, called only by [`closeTabs`](/architecture/tab-closing.md) | `ClosedTabData[]`: `url`, `pinned`, `windowId`, `id`, `index`, `groupId`, plus `groupTitle` and `groupColor` when the tab's group has them |
-| `group` | `snapshotBeforeGroup()`, called by the group, ungroup, branch, sort, merge, shuffle and split handlers, their dashboard tiles, the action-icon menu's Group and Sort (through `lib/arrange.ts`, shared with their tiles), and `startAIGroup` | `GroupAssignment[]` for every unpinned tab: `tabId`, `groupId`, `windowId`, `index`, plus `groupTitle` and `groupColor` when the tab's group has them |
+| `group` | `snapshotBeforeGroup()`, called by the group, ungroup, branch, sort, merge, shuffle and split handlers, their dashboard tiles, the action-icon menu's Group and Sort (through `lib/arrange.ts`, shared with their tiles), a group header's Sort and Extract (`sortGroup` and `extractGroup`), and `startAIGroup`[^actions-ts] | `GroupAssignment[]` for every unpinned tab: `tabId`, `groupId`, `windowId`, `index`, plus `groupTitle` and `groupColor` when the tab's group has them |
 
 Chrome clears the session area when the extension updates, reloads or is disabled, and when the browser restarts, so every entry on the stack was written by the running version. Restore code reads no older entry shape, and there is no migration.[^undo-ts] `executeUndo` returns `"Unknown undo type"` for any other type.[^undo-test]
 
@@ -151,6 +155,7 @@ What remains after a shuffle is regrouping: a group whose tabs a shuffle scatter
 
 [^undo-ts]: lib/undo.ts
 [^arrange]: lib/arrange.ts
+[^actions-ts]: lib/actions.ts
 [^undo-test]: lib/undo.test.ts
 [^popup-app]: entrypoints/popup/App.svelte
 [^background]: entrypoints/background/index.ts

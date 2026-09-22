@@ -3,7 +3,7 @@ type: Architecture
 title: Architecture overview
 description: How TabOrdo's MV3 entrypoints, lib modules, command dispatch and storage areas fit together, and which realm owns what.
 tags: [architecture, mv3, storage, realms]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-22T14:00:00Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-22T06:20:00Z }
 sources:
   - id: wxt-config
     resource: https://github.com/samhvw8/TabOrdo/blob/main/wxt.config.ts
@@ -36,7 +36,7 @@ sources:
   - id: popup-app
     resource: https://github.com/samhvw8/TabOrdo/blob/main/entrypoints/popup/App.svelte
     title: Popup and side panel component
-    last_modified: 2026-09-17
+    last_modified: 2026-09-22
   - id: sidepanel-main
     resource: https://github.com/samhvw8/TabOrdo/blob/main/entrypoints/sidepanel/main.ts
     title: Side panel mount
@@ -47,8 +47,8 @@ sources:
     last_modified: 2026-08-15
   - id: actions-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/actions.ts
-    title: Palette action handlers
-    last_modified: 2026-09-17
+    title: Action and tile handlers
+    last_modified: 2026-09-22
   - id: search-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/search.ts
     title: Search and parseCommand
@@ -110,9 +110,9 @@ Every background listener is registered through `register()`, so one throwing re
 1. **Palette.** On Enter, `parseCommand(query)` splits `/prefix rest` (or a known `@` triage prefix) into `{ prefix, query }`.[^search-ts] If the prefix is in `ACTION_PREFIXES` (built from `ACTION_COMMANDS`), `handleActionCommand` runs. Other prefixes are searches handled by `handlePrefixSearch`.[^popup-app]
 2. `handleActionCommand` returns early while `busy` is set. It sends `/aigroup` to `startAIGroup()` **before** taking the lock. Everything else sets `busy` and runs `runAction(prefix, ctx)` inside `withBulkLock`.[^popup-app] `runAction` looks up `ACTION_HANDLERS[prefix]` and returns `null` when no handler exists.[^actions-ts]
 3. The handler returns an `ActionResult`: `message`, `acted`, `workspaceChanged`, `results` or `closePopup`. The component turns that into a status flash, an undo-button refresh and a tab reload.[^actions-ts][^popup-app]
-4. **Dashboard tiles** go through `dashAction(fn)`, which uses the same `busy` guard and `withBulkLock`. It refreshes `canUndo` and the tab list even when `fn` throws, because a partial close is a real outcome.[^popup-app] `dashCommand(prefix, query, tabs)` wraps `dashAction` around `runAction`, so a tile and its slash command share one handler. Only some tiles use it (the selection Close and Archive buttons, collapse, extract, branch and others). Several tiles, such as closeleft and dedup, still call `lib` functions inline in `handleOverflowAction`.[^popup-app]
+4. **Dashboard tiles** go through `dashAction(fn)`, which uses the same `busy` guard and `withBulkLock`. It refreshes `canUndo` and the tab list even when `fn` throws, because a partial close is a real outcome.[^popup-app] A tile click falls through `handleOverflowAction` to `dashTile(id)`, which runs `runTile(id, ctx)`: the tile's own handler from `TILE_HANDLERS` when the action table marks it `own` (Group+, Ungroup, Regroup), else the same `ACTION_HANDLERS` entry as the slash command, so the two share one handler and one status text.[^popup-app][^actions-ts] `dashCommand(prefix, query, tabs)` runs a command's handler directly, for the selection bar's Close, Archive and Discard and for alt-clicks that carry an argument. Only Focus, Lock Tab, AI Group, Recent and Archive keep a `case`, because each needs component state or leaves the dashboard.[^popup-app]
 5. **Context menus** are served by the worker (`lib/menus.ts`). Group by domain, dedup and sort run inside `withBulkLock`, the same suppression the palette takes. Without it the automations react to the very mutations those entries make. Group and Sort call the same `lib/arrange.ts` functions as the dashboard tiles.[^menus-ts][^arrange-ts]
-6. **`/aigroup`** is a `chrome.runtime.sendMessage({ type: "aigroup-start" })` to the background. `runAIGroup` (`lib/aigroup.ts`), run by the worker, holds and renews its own lease.[^aigroup-ts][^background]
+6. **`/aigroup`** is a `chrome.runtime.sendMessage({ type: "aigroup-start" })` to the background. `runAIGroup` (`lib/aigroup.ts`), run by the worker, holds and renews its own lease.[^aigroup-ts][^background] The AI Group tile takes the same path, also before the lock.[^popup-app]
 
 # Storage: local vs session
 
