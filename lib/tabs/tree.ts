@@ -219,8 +219,8 @@ export function spliceParents(parents: ParentMap, tabIds: number[]): ParentMap |
 
 export async function readParents(): Promise<ParentMap> {
   try {
-    const data = await chrome.storage.session?.get(TREE_KEY);
-    return (data?.[TREE_KEY] as ParentMap | undefined) ?? {};
+    const data = await chrome.storage.session.get(TREE_KEY);
+    return (data[TREE_KEY] as ParentMap | undefined) ?? {};
   } catch (e) {
     console.warn("[TabOrdo] tab lineage read failed:", e);
     return {};
@@ -246,7 +246,7 @@ function mutate(
       if (opts.stillNeeded && !opts.stillNeeded()) return;
       const next = fn(await readParents());
       // null means the mutation was a no-op — skip the write rather than rewrite the same map.
-      if (next !== null) await chrome.storage.session?.set({ [TREE_KEY]: next });
+      if (next !== null) await chrome.storage.session.set({ [TREE_KEY]: next });
     })
     .catch((e) => {
       console.warn("[TabOrdo] tab lineage write failed:", e);

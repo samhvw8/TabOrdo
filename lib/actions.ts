@@ -17,6 +17,7 @@ import {
   switchToTab, type MoveGroupsResult,
 } from "./tabs/index.ts";
 import { archiveTabs, isArchivable } from "./archive.ts";
+import { discardInactiveTabs } from "./discard.ts";
 import { snapshotBeforeGroup } from "./undo.ts";
 import { focusMode, unfocusMode, exportTabsToFile } from "./workspace.ts";
 import { addTabsToReadingList } from "./readinglist.ts";
@@ -452,7 +453,6 @@ export const ACTION_HANDLERS: Record<string, ActionHandler> = {
   },
 
   sidepanel: async (ctx) => {
-    if (!chrome.sidePanel) return { message: "Side Panel not available (Chrome 114+)", acted: true };
     await chrome.sidePanel.open({ windowId: ctx.currentWindowId });
     return { message: "Opened Side Panel", acted: true };
   },
@@ -472,11 +472,9 @@ export const ACTION_HANDLERS: Record<string, ActionHandler> = {
       return { message: `Unloaded ${ctx.tabIds.length} tab(s)`, acted: true };
     }
     if (ctx.query) return NOTHING;
-    const inactive = (await chrome.tabs.query({}))
-      .filter((t) => !t.active && !t.pinned && !t.audible && !t.discarded);
-    if (inactive.length === 0) return { message: "No tabs to unload", acted: true };
-    await discardTabs(inactive.map((t) => t.id!));
-    return { message: `Unloaded ${inactive.length} inactive tab(s)`, acted: true };
+    const unloaded = await discardInactiveTabs();
+    if (unloaded === 0) return { message: "No tabs to unload", acted: true };
+    return { message: `Unloaded ${unloaded} inactive tab(s)`, acted: true };
   },
 };
 

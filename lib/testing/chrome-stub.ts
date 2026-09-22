@@ -12,6 +12,10 @@ export interface StubTab {
   lastAccessed?: number;
   muted?: boolean;
   highlighted?: boolean;
+  audible?: boolean;
+  discarded?: boolean;
+  /** Paused by Chrome (132+): still in memory, unlike a discarded tab. */
+  frozen?: boolean;
   /** Chrome only reports this while the opener is still open — see lib/tabs/tree.ts. */
   openerTabId?: number;
 }
@@ -46,6 +50,8 @@ export interface ChromeStub {
   /** Every storage.get, in order, with the keys it asked for. */
   storageReads: { area: string; keys: string[] }[];
   changeListeners: ((changes: Record<string, unknown>, area: string) => void)[];
+  /** tabs.onUpdated listeners. tabs.update calls them for a pin change, as Chrome does. */
+  tabUpdatedListeners: ((tabId: number, changeInfo: chrome.tabs.TabChangeInfo, tab: StubTab) => void)[];
   /** Make every storage.set reject, to exercise failed-write paths. */
   failWrites: boolean;
   /** Make chrome.tabs.group reject, to exercise group-restore failure. */
@@ -112,6 +118,7 @@ export function installChromeStub(): ChromeStub {
     failCreateUrls: new Set(),
     storageReads: [],
     changeListeners: [],
+    tabUpdatedListeners: [],
     failWrites: false,
     failGroup: false,
     failScriptingIds: new Set(),
@@ -180,6 +187,18 @@ export function installChromeStub(): ChromeStub {
       },
     },
     tabs: {
+      // Rejects an id it does not know, with the wording tabs.remove uses. Returning undefined
+      // instead would let a caller that forgot the catch pass here and throw in the browser.
+      get: async (id: number) => {
+        const t = stub.openTabs.find((x) => x.id === id);
+        if (!t) throw new Error(`No tab with id: ${id}.`);
+        return t;
+      },
+      onUpdated: {
+        addListener: (fn: ChromeStub["tabUpdatedListeners"][number]) => {
+          stub.tabUpdatedListeners.push(fn);
+        },
+      },
       query: async (
         q: {
           windowId?: number; groupId?: number; currentWindow?: boolean; lastFocusedWindow?: boolean;
@@ -260,6 +279,13 @@ export function installChromeStub(): ChromeStub {
         stub.tabUpdates.push({ id, ...props });
         const t = stub.openTabs.find((x) => x.id === id);
         if (!t) return undefined;
+        // Chrome reports a pin change through onUpdated once the call has resolved, and only when
+        // the state actually changed. Pin follow reacts to exactly these echoes of its own writes.
+        if (props.pinned !== undefined && props.pinned !== t.pinned) {
+          for (const fn of stub.tabUpdatedListeners) {
+            void Promise.resolve().then(() => fn(id, { pinned: props.pinned }, t));
+          }
+        }
         if (props.pinned !== undefined) t.pinned = props.pinned;
         if (props.url !== undefined) t.url = props.url;
         if (props.highlighted !== undefined) t.highlighted = props.highlighted;

@@ -4,7 +4,7 @@ title: AI grouping (/aigroup)
 description: On-device Gemini Nano topic grouping run by the background service worker; covers the availability check, the prompt contract (system message plus response schema), the context-window cap, the progress record that doubles as the run's mutex, the renewed bulk-lock lease, why the popup starts it outside its own lock, and the feature's removal and return.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/ai.ts
 tags: [ai, gemini-nano, prompt-api, background, bulk-lock, progress]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-22T04:47:31Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-22T14:00:00Z }
 sources:
   - id: ai
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/ai.ts
@@ -14,9 +14,13 @@ sources:
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/ai.test.ts
     title: lib/ai.test.ts
     last_modified: 2026-09-22
-  - id: bg-index
-    resource: https://github.com/samhvw8/TabOrdo/blob/main/entrypoints/background/index.ts
-    title: entrypoints/background/index.ts (runAIGroup)
+  - id: aigroup
+    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/aigroup.ts
+    title: lib/aigroup.ts (runAIGroup, run by the service worker)
+    last_modified: 2026-09-22
+  - id: aigroup-test
+    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/aigroup.test.ts
+    title: lib/aigroup.test.ts
     last_modified: 2026-09-22
   - id: prompt-api-docs
     resource: https://developer.chrome.com/docs/ai/prompt-api
@@ -87,13 +91,13 @@ sources:
 # Flow
 
 1. **Popup `startAIGroup()`.** If the progress record looks in flight, it shows that run instead. Otherwise it takes an undo snapshot (`snapshotBeforeGroup`), and a failed snapshot cancels the run. Then it sends `{ type: "aigroup-start" }`.[^popup-app]
-2. **Background `runAIGroup()`.** It refuses when the progress status is `checking`, `prompting` or `grouping`.[^bg-index]
-3. It takes its own bulk-lock lease (`AI_LEASE_MS` = 10 min) **before** anything that can reject, and renews it every 60 s while the run lives. The lease used to be taken after the availability check and tab query, whose rejections skipped the release and left the whole profile suppressed for ten minutes. A single fixed lease used to lapse during a first-use model download.[^bg-index][^bulklock]
+2. **`runAIGroup()` in the worker** (`lib/aigroup.ts`, called from the worker's `runtime.onMessage`). It refuses when the progress status is `checking`, `prompting` or `grouping`.[^aigroup]
+3. It takes its own bulk-lock lease (`AI_LEASE_MS` = 10 min) **before** anything that can reject, and renews it every 60 s while the run lives. The lease used to be taken after the availability check and tab query, whose rejections skipped the release and left the whole profile suppressed for ten minutes. A single fixed lease used to lapse during a first-use model download.[^aigroup][^bulklock]
 4. `checking` → `checkAIAvailability()`.
 5. It collects tabs that are ungrouped, not Chrome-pinned, and not `chrome://`, across **all windows**. It needs at least 2.
 6. `prompting` → `suggestGroups()`: one session, one prompt listing as many tabs as fit the context window as `i. title | url`. See [prompt contract](#prompt-contract).[^ai]
-7. `grouping`: for each suggestion, strays are moved into the window holding most of the group's tabs (`chrome.tabs.group` rejects cross-window ids). The tabs are marked as self-writes, grouped, and titled with `safeGroupUpdate`.[^bg-index]
-8. `done` or `error`. The `done` message says how many tabs were left out when not all of them fit. Any failure inside `suggestGroups` ends in `error` with its message. In `finally` it clears the renew timer, **awaits any in-flight renewal**, and then releases the lease. Otherwise a late renewal could write a full lease back after the release.[^bg-index]
+7. `grouping`: for each suggestion, strays are moved into the window holding most of the group's tabs (`chrome.tabs.group` rejects cross-window ids). The tabs are marked as self-writes, grouped, and titled with `safeGroupUpdate`.[^aigroup]
+8. `done` or `error`. The `done` message says how many tabs were left out when not all of them fit. Any failure inside `suggestGroups` ends in `error` with its message. In `finally` it clears the renew timer, **awaits any in-flight renewal**, and then releases the lease. Otherwise a late renewal could write a full lease back after the release.[^aigroup]
 
 # Availability check
 
@@ -114,7 +118,7 @@ sources:
 
 # Context-window cap
 
-`suggestGroups` lists tabs from the front of the list until the prompt, measured with `measureContextUsage` (schema included), fills what is left of `contextWindow` after the system message (`contextUsage`). It returns `{ suggestions, omitted }`, and `runAIGroup` appends "N tab(s) didn't fit the on-device model and were left as they are" to its result.[^ai][^bg-index]
+`suggestGroups` lists tabs from the front of the list until the prompt, measured with `measureContextUsage` (schema included), fills what is left of `contextWindow` after the system message (`contextUsage`). It returns `{ suggestions, omitted }`, and `runAIGroup` appends "N tab(s) didn't fit the on-device model and were left as they are" to its result.[^ai][^aigroup]
 
 - The explainer renamed `inputQuota`/`inputUsage`/`measureInputUsage` to `contextWindow`/`contextUsage`/`measureContextUsage`. Extensions keep the old names as deprecated aliases, and older Chrome only has the old names, so the code reads the new name first and falls back to the old one.[^ai][^prompt-api-explainer]
 - The prompt may use the whole reported window. Chromium already holds back 1024 tokens (by default) of the model's limit for the answer, and a prompt past the window rejects instead of answering.[^chromium-language-model]
@@ -144,9 +148,9 @@ Every popup path (the typed command, the dashboard/overflow action, the panel's 
 
 # Gotchas
 
-- An `[]` answer ends `done` with "AI found no groups to suggest". A failed prompt, an unreadable answer or a context too small for two tabs ends `error` with the reason.[^ai][^bg-index]
-- There is no chunking. Tabs past the context window are left out of the run and counted in the result message.[^ai][^bg-index] The run writes nothing to the automation action log.[^bg-index]
-- A tab the model puts in two groups ends up in the last one, and `grouped` counts it twice. The parser does not de-duplicate indices.[^ai][^bg-index]
+- An `[]` answer ends `done` with "AI found no groups to suggest". A failed prompt, an unreadable answer or a context too small for two tabs ends `error` with the reason.[^ai][^aigroup]
+- There is no chunking. Tabs past the context window are left out of the run and counted in the result message.[^ai][^aigroup] The run writes nothing to the automation action log.[^aigroup]
+- A tab the model puts in two groups ends up in the last one, and `grouped` counts it twice. The parser does not de-duplicate indices.[^ai][^aigroup]
 - Undo has to move tabs back across windows. Group snapshots record window and index for exactly this reason.[^undo-test][^changelog]
 - Dead code: the popup imports `checkAIAvailability` without calling it, and `rulesConfig.useAI` is a leftover from June.[^popup-app]
 
@@ -155,7 +159,7 @@ Every popup path (the typed command, the dashboard/overflow action, the panel's 
 - `lib/ai.test.ts`, against a stubbed global `LanguageModel`: `create()` gets a system message in `initialPrompts` and no `systemPrompt`, `prompt()` gets a `responseConstraint` schema, indices map back to tab ids, a non-array answer and a failed prompt reject (and the session is still destroyed), the tab list is capped to the window left after the system message, the `input*` fallback names, the two-tab floor, clipping of long fields, and `availability()` asked about the same session options. It also covers the missing-API and `downloading` reasons.[^ai-test]
 - `lib/bulklock.test.ts`: "a short holder acquiring FIRST cannot cut a long holder short", "a concurrent release cannot drop another owner's fresh lease".[^bulklock-test]
 - `lib/undo.test.ts`: "moves tabs back to their snapshotted window before regrouping".[^undo-test]
-- `runAIGroup` itself has no test; nothing imports the background entrypoint.
+- `lib/aigroup.test.ts` runs `runAIGroup` against the stub with a stubbed model: a suggestion spanning two windows is grouped in the window holding most of it, titled and coloured, with its tabs marked as self-writes; the lease is released at the end; a run in flight refuses a second; fewer than two loose tabs is an error.[^aigroup-test]
 
 # Related
 
@@ -163,7 +167,8 @@ Every popup path (the typed command, the dashboard/overflow action, the panel's 
 
 [^ai]: lib/ai.ts
 [^ai-test]: lib/ai.test.ts
-[^bg-index]: entrypoints/background/index.ts
+[^aigroup]: lib/aigroup.ts
+[^aigroup-test]: lib/aigroup.test.ts
 [^popup-app]: entrypoints/popup/App.svelte
 [^bulklock]: lib/bulklock.ts
 [^bulklock-test]: lib/bulklock.test.ts
