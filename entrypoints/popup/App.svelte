@@ -1,13 +1,14 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { getAllTabs, switchToTab, closeTabs, sortTabsInGroup, groupTabsByDomain, ungroupAll, removeDuplicates, findDuplicateGroups, mergeAllWindows, extractGroupToWindow, discardTabs, closeTabsToLeft, closeTabsToRight, closeTabsSameSite, closeOldTabs, shuffleTabs, uniteDomain, isolateDomain, splitWindow, splitByDomain, stackWindows, pinCurrentTab, unpinCurrentTab, outlineBranch, type TabInfo } from "../../lib/tabs/index.ts";
+  import { getAllTabs, switchToTab, closeTabs, sortTabsInGroup, groupTabsByDomain, ungroupAll, removeDuplicates, mergeAllWindows, extractGroupToWindow, discardTabs, closeTabsToLeft, closeTabsToRight, closeTabsSameSite, closeOldTabs, shuffleTabs, uniteDomain, isolateDomain, splitWindow, splitByDomain, stackWindows, pinCurrentTab, unpinCurrentTab, outlineBranch, type TabInfo } from "../../lib/tabs/index.ts";
   import { getPinnedTabs, getPinForTab, type PinnedTabEntry } from "../../lib/pin.ts";
   import { getArchiveCount } from "../../lib/archive.ts";
-  import { regexSearch, tabsToSearchItems, searchBookmarks, searchHistory, parseCommand, type SearchResult } from "../../lib/search.ts";
+  import { tabsToSearchItems, searchBookmarks, searchHistory, parseCommand, type SearchResult } from "../../lib/search.ts";
   import { createTabSearch, type TabSearch } from "../../lib/tabsearch.ts";
+  import { resolveView, readingListRows, duplicateTabs, firstSelectable, nextSelectable, ACTION_PREFIXES, type ViewContext } from "../../lib/views.ts";
   import { createDebouncer } from "../../lib/debounce.ts";
   import { updateConfig } from "../../lib/rules.ts";
-  import { matchCommands, ALL_COMMANDS, ACTION_COMMANDS, TRIAGE_COMMANDS, CATEGORY_STYLES, groupCommands, type CommandDefinition, type CommandCategory } from "../../lib/commands.ts";
+  import { matchCommands, ALL_COMMANDS, TRIAGE_COMMANDS, CATEGORY_STYLES, groupCommands, type CommandDefinition, type CommandCategory } from "../../lib/commands.ts";
   import { snapshotBeforeGroup, executeUndo, hasUndo, touchesUndoStack } from "../../lib/undo.ts";
   import { focusMode, unfocusMode, hasSavedWorkspace, exportTabsToFile, loadTabsFromText } from "../../lib/workspace.ts";
   import { addTabsToReadingList, getReadingList } from "../../lib/readinglist.ts";
@@ -382,11 +383,11 @@
             ...(bookmarkResults.length > 0 ? [{ type: "divider" as const, id: "div-bookmarks", title: "Bookmarks", url: "" }, ...bookmarkResults] : []),
             ...(historyResults.length > 0 ? [{ type: "divider" as const, id: "div-history", title: "History", url: "" }, ...historyResults] : []),
           ];
-          selectedIndex = firstSelectable();
+          selectedIndex = firstSelectable(results);
         });
       }
     }
-    selectedIndex = firstSelectable();
+    selectedIndex = firstSelectable(results);
   }
 
   /**
@@ -408,7 +409,7 @@
         const found = await (prefix === "b" ? searchBookmarks(searchQuery) : searchHistory(searchQuery));
         if (query !== capturedQuery) return;
         results = found;
-        selectedIndex = firstSelectable();
+        selectedIndex = firstSelectable(results);
       } finally {
         if (query === capturedQuery) loading = false;
       }
@@ -432,174 +433,41 @@
     return prefixSource!.rows;
   }
 
+  /**
+   * The Chrome reads a view needs beyond the loaded tabs, made for that view alone. Reading
+   * List rows are mapped inside the read, so every keystroke ranks the same row objects and
+   * rankView keeps their haystack.
+   */
+  const VIEW_READS = new Map<string, () => Promise<Partial<ViewContext>>>([
+    ["rl", async () => ({ source: await sourceOnce("rl", async () => readingListRows(await getReadingList())) })],
+    ["rc", async () => ({ source: await sourceOnce("rc", () => getRecentlyClosed()) })],
+    ["@b", async () => ({ branch: await activeBranch() })],
+    ["@shared", async () => ({ groups: await chrome.tabGroups.query({}) })],
+  ]);
+
+  async function activeBranch(): Promise<{ id: number; depth: number }[]> {
+    const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+    return active?.id ? outlineBranch(active.id) : [];
+  }
+
   async function handlePrefixSearch(prefix: string, searchQuery: string) {
     loading = true;
     try {
-      // Triage views are table-driven: they only differ by which tabs they select, and the
-      // eight hand-copied switch arms this replaces are what let a broken "@shared" hide.
-      //
-      // Every view below ranks through tabSearch.rankView, keyed by the view. Each used to build
-      // a fresh haystack from its rows on every keystroke (719 entries of diacritic stripping
-      // and pinyin for "@u", 2.6 ms a key at 1000 tabs); rankView keeps one until the rows change.
-      const view = TRIAGE_BY_PREFIX.get(prefix);
-      if (view) {
-        const viewTabs = await view.tabs();
-        results = searchQuery ? tabSearch.rankView(prefix, viewTabs, searchQuery) : viewTabs;
-        if (viewTabs.length === 0 && view.empty) flashStatus(view.empty);
-        return;
-      }
-
-      switch (prefix) {
-        // /w and /g read the tabs this popup already loaded. /w used to call
-        // getCurrentWindowTabs() on every keystroke: tabs.query over every tab in every window
-        // plus tabGroups.query and windows.getCurrent, three IPC round-trips to keep a slice of
-        // what allTabs holds. The dashboard, @ views and plain search all work from the same load.
-        case "w": {
-          results = tabSearch.rankView("w", allTabs.filter((t) => t.windowId === currentWindowId), searchQuery);
-          break;
-        }
-        case "p": {
-          results = tabSearch.rankView("p", allTabs.filter((t) => t.pinned), searchQuery);
-          break;
-        }
-        case "g": {
-          const activeTab = dashboardTabs.find((t) => t.active && t.windowId === currentWindowId);
-          const activeGroupId = activeTab?.groupId ?? -1;
-          const groupTabs = activeGroupId !== -1
-            ? allTabs.filter((t) => t.groupId === activeGroupId)
-            : allTabs.filter((t) => !t.groupId || t.groupId === -1);
-          results = tabSearch.rankView("g", groupTabs, searchQuery);
-          break;
-        }
-        case "@": {
-          const triageResults: SearchResult[] = [];
-          for (const cat of TRIAGE_OVERVIEW) {
-            const catTabs = await cat.overviewTabs!();
-            if (catTabs.length === 0) continue;
-            const matched = searchQuery ? tabSearch.rankView(cat.id, catTabs, searchQuery) : catTabs;
-            if (matched.length === 0) continue;
-            triageResults.push({ type: "divider", id: cat.id, title: `${cat.title} (${matched.length})`, url: "" });
-            triageResults.push(...matched);
-          }
-          results = triageResults;
-          if (triageResults.length === 0) {
-            flashStatus(searchQuery ? "No triage matches" : "All clear — no tabs need attention");
-          }
-          break;
-        }
-        case "rl": {
-          // Mapped inside the fetch, so every keystroke gets the same row objects and rankView
-          // keeps its haystack.
-          const rlResults = await sourceOnce("rl", async () => (await getReadingList()).map((item, i) => ({
-            type: "bookmark" as const, id: `rl-${i}`, title: `${item.hasBeenRead ? "✓ " : ""}${item.title}`, url: item.url,
-          })));
-          results = searchQuery ? tabSearch.rankView("rl", rlResults, searchQuery) : rlResults;
-          if (rlResults.length === 0) flashStatus("Reading List is empty");
-          break;
-        }
-        case "rc": {
-          const rcItems = await sourceOnce("rc", () => getRecentlyClosed());
-          results = searchQuery ? tabSearch.rankView("rc", rcItems, searchQuery) : rcItems;
-          if (rcItems.length === 0) flashStatus("No recently closed tabs");
-          break;
-        }
-        case "re": {
-          const indices = regexSearch(tabSearch.haystack(), searchQuery, 50, tabSearch.recency);
-          results = indices.map((i) => tabSearch.items[i]);
-          break;
-        }
-        default:
-          if (ACTION_PREFIXES.has(prefix)) {
-            results = searchQuery ? tabSearch.rank(searchQuery) : [];
-          } else {
-            results = tabSearch.rank(`/${prefix} ${searchQuery}`);
-          }
-      }
+      const read = VIEW_READS.get(prefix);
+      const extra = read ? await read() : undefined;
+      // Assembled after the read, so the view resolves against the latest tab load.
+      const view = resolveView(prefix, searchQuery, {
+        search: tabSearch,
+        currentWindowId,
+        activeGroupId: dashboardTabs.find((t) => t.active && t.windowId === currentWindowId)?.groupId ?? -1,
+        ...extra,
+      });
+      results = view.rows;
+      if (view.empty) flashStatus(view.empty);
     } finally {
       loading = false;
-      selectedIndex = firstSelectable();
+      selectedIndex = firstSelectable(results);
     }
-  }
-
-  const ACTION_PREFIXES = new Set(ACTION_COMMANDS.map((c) => c.prefix));
-
-  interface TriageCategory {
-    prefix: string;
-    id: string;
-    title: string;
-    tabs: () => SearchResult[] | Promise<SearchResult[]>;
-    /** Status line when the dedicated @-view comes back empty. */
-    empty?: string;
-    /** Whether the bare "@" overview lists this category, and with what (shorter) list. */
-    overviewTabs?: () => SearchResult[] | Promise<SearchResult[]>;
-  }
-
-  // One definition per category, driving both the dedicated "@x" views and the bare "@"
-  // overview. Overview order follows this list.
-  const TRIAGE_CATEGORIES: TriageCategory[] = [
-    { prefix: "@a", id: "div-triage-audio", title: "Playing Audio",
-      tabs: () => allTabs.filter((t) => t.audible), overviewTabs: () => allTabs.filter((t) => t.audible) },
-    { prefix: "@m", id: "div-triage-muted", title: "Muted",
-      tabs: () => allTabs.filter((t) => t.muted), overviewTabs: () => allTabs.filter((t) => t.muted) },
-    { prefix: "@d", id: "div-triage-dupes", title: "Duplicates",
-      tabs: () => findDuplicateTabs(allTabs), overviewTabs: () => findDuplicateTabs(allTabs) },
-    // The dedicated view goes deeper than the overview section, which is one of six.
-    { prefix: "@r", id: "div-triage-recent", title: "Recently Active",
-      tabs: () => mostRecentTabs(20), overviewTabs: () => mostRecentTabs(15) },
-    // "Unloaded" is what /discard produces: dropped from memory, reloads when you return.
-    // "Paused by Chrome" is Chrome's own Memory Saver freeze — TabOrdo never sets it, so this
-    // view is an observation, not a result of anything the user did here.
-    { prefix: "@s", id: "div-triage-suspended", title: "Unloaded",
-      tabs: () => allTabs.filter((t) => t.discarded), overviewTabs: () => allTabs.filter((t) => t.discarded) },
-    { prefix: "@f", id: "div-triage-frozen", title: "Paused by Chrome", empty: "Chrome hasn't paused any tabs",
-      tabs: () => allTabs.filter((t) => t.frozen), overviewTabs: () => allTabs.filter((t) => t.frozen) },
-    { prefix: "@u", id: "div-triage-ungrouped", title: "Ungrouped", empty: "All tabs are grouped",
-      tabs: () => allTabs.filter((t) => !t.groupId || t.groupId === -1) },
-    // What /branch would gather, before gathering it — and the place to see why it grabbed
-    // (or missed) a tab. Contextual like @u, so it stays out of the bare "@" overview.
-    { prefix: "@b", id: "div-triage-branch", title: "Branch", empty: "No tabs were opened from this one",
-      tabs: branchViewTabs },
-    { prefix: "@shared", id: "div-triage-shared", title: "Shared Groups", empty: "No shared group tabs",
-      tabs: sharedGroupTabs },
-  ];
-
-  // A Map, not an object literal: an object lookup would hit Object.prototype, so a command
-  // like /constructor or /toString would resolve to a truthy non-category and throw.
-  const TRIAGE_BY_PREFIX = new Map(TRIAGE_CATEGORIES.map((c) => [c.prefix, c]));
-  const TRIAGE_OVERVIEW = TRIAGE_CATEGORIES.filter((c) => c.overviewTabs);
-
-  function mostRecentTabs(limit: number): SearchResult[] {
-    return [...allTabs]
-      .filter((t) => t.type === "tab")
-      .sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0))
-      .slice(0, limit);
-  }
-
-  /**
-   * The active tab's branch as an outline: the root first, everything opened from it indented
-   * beneath, in tree order. Depth is drawn into the title with a non-breaking indent — the
-   * row component has no notion of nesting, and this is a view, not a data change.
-   */
-  async function branchViewTabs(): Promise<SearchResult[]> {
-    const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!active?.id) return [];
-    const outline = await outlineBranch(active.id);
-    // A lone root is not a branch; let the empty message say so.
-    if (outline.length < 2) return [];
-    const byId = new Map(allTabs.filter((t) => t.tabId !== undefined).map((t) => [t.tabId!, t]));
-    const rows: SearchResult[] = [];
-    for (const { id, depth } of outline) {
-      const t = byId.get(id);
-      if (!t) continue;
-      rows.push(depth === 0 ? t : { ...t, title: `${"\u00A0\u00A0".repeat(depth - 1)}\u21B3 ${t.title || "Untitled"}` });
-    }
-    return rows;
-  }
-
-  async function sharedGroupTabs(): Promise<SearchResult[]> {
-    const allGroups = await chrome.tabGroups.query({});
-    const sharedIds = new Set(allGroups.filter((g) => (g as any).shared === true).map((g) => g.id));
-    return allTabs.filter((t) => t.groupId && sharedIds.has(t.groupId));
   }
 
   /**
@@ -613,11 +481,6 @@
     const out: T[][] = [];
     for (let i = 0; i < items.length; i += ROWS_PER_CHUNK) out.push(items.slice(i, i + ROWS_PER_CHUNK));
     return out;
-  }
-
-  /** Every copy in each duplicate group, by the rule /dedup closes by. */
-  function findDuplicateTabs(tabs: SearchResult[]): SearchResult[] {
-    return [...findDuplicateGroups(tabs).values()].flat();
   }
 
   // Read-only. The background owns the AI progress state machine end to end: runAIGroup's
@@ -680,7 +543,7 @@
 
   let groupCount = $derived(windows.reduce((n, w) => n + w.groups.size, 0));
   let audioCount = $derived(dashboardTabs.filter((t) => t.audible && !t.mutedInfo?.muted).length);
-  let dupeCount = $derived(findDuplicateTabs(allTabs).length);
+  let dupeCount = $derived(duplicateTabs(allTabs).length);
   let frozenCount = $derived(dashboardTabs.filter((t) => t.frozen).length);
   let suspendedCount = $derived(dashboardTabs.filter((t) => t.discarded && !t.frozen).length);
 
@@ -815,31 +678,6 @@
     } finally {
       busy = false;
     }
-  }
-
-  /**
-   * Step the palette selection one row in `dir`, stepping over the divider rows that the
-   * bookmark/history tail and the @triage overview interleave. Dividers aren't selectable —
-   * landing on one hides the highlight and makes Enter a no-op — so walk past them, and at
-   * either end stay on a real row rather than come to rest on a label.
-   */
-  /** Same rule for a fresh list: @triage and a bookmarks-only match both open on a divider. */
-  function firstSelectable(): number {
-    const i = results.findIndex((r) => r.type !== "divider");
-    return i < 0 ? 0 : i;
-  }
-
-  function nextSelectable(from: number, dir: 1 | -1): number {
-    for (let i = from + dir; i >= 0 && i < results.length; i += dir) {
-      if (results[i].type !== "divider") return i;
-    }
-    if (results[from]?.type !== "divider") return from;
-    // Already parked on a divider (a triage list opens on one) with nothing past it — take
-    // the nearest real row the other way instead of sitting there.
-    for (let i = from - dir; i >= 0 && i < results.length; i -= dir) {
-      if (results[i].type !== "divider") return i;
-    }
-    return from;
   }
 
   async function handleSelect(item: SearchResult) {
@@ -1128,12 +966,12 @@
           e.preventDefault();
           selectedIndex = paletteMode === "commands"
             ? Math.min(selectedIndex + 1, commandHints.length - 1)
-            : nextSelectable(selectedIndex, 1);
+            : nextSelectable(results, selectedIndex, 1);
         } else if (e.key === "ArrowUp") {
           e.preventDefault();
           selectedIndex = paletteMode === "commands"
             ? Math.max(selectedIndex - 1, 0)
-            : nextSelectable(selectedIndex, -1);
+            : nextSelectable(results, selectedIndex, -1);
         } else if (e.key === "Enter") {
           e.preventDefault();
           const { prefix, query: searchQuery } = parseCommand(query);

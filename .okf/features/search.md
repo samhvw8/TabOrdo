@@ -4,7 +4,7 @@ title: Ranked search
 description: How lib/search.ts ranks tabs for the palette (literal tiers before approximate ones, title over URL, pinned and current-window then recency), plus regex, pinyin, Vietnamese, the non-tab sources, and the caching that keeps typing fast.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/search.ts
 tags: [search, palette, performance, i18n]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-22T05:58:00Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-22T06:05:00Z }
 sources:
   - id: search-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/search.ts
@@ -45,6 +45,10 @@ sources:
   - id: popup-app
     resource: https://github.com/samhvw8/TabOrdo/blob/main/entrypoints/popup/App.svelte
     title: Popup search wiring
+    last_modified: 2026-09-22
+  - id: views-ts
+    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/views.ts
+    title: Prefix views
     last_modified: 2026-09-22
   - id: search-test
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/search.test.ts
@@ -122,9 +126,9 @@ Group titles sit in both haystacks, so a group-name hit ranks as a title hit, an
 |--------|-----------|---------|
 | Bookmarks | Plain query of 2+ chars: 5 results after a 200 ms debounce, appended under a divider. `/b`: up to 20, on the same 200 ms debounce | Chrome's `bookmarks.search` order[^popup-app][^search-ts] |
 | History | Same, via `history.search`. `/h`: up to 20, debounced like `/b` | Chrome's order[^popup-app] |
-| Reading List (`/rl`) | `readingList.query({})` once per visit to the prefix; read items prefixed `✓ ` | `rankView`: `rankedSearch`, no recency[^popup-app][^readinglist-ts] |
+| Reading List (`/rl`) | `readingList.query({})` once per visit to the prefix; read items prefixed `✓ ` | `rankView`: `rankedSearch`, no recency[^popup-app][^views-ts][^readinglist-ts] |
 | Recently closed (`/rc`, `/recent`) | `sessions.getRecentlyClosed` (25), window sessions flattened; `/rc` reads it once per visit | `rankView`[^sessions-ts][^popup-app] |
-| `/w`, `/p`, `/g` | Current window, Chrome-pinned, active tab's group (or ungrouped), all filtered from the tabs the popup loaded | `rankView`: `rankedSearch`, no recency or priority; an empty query lists the first 50[^popup-app][^tabsearch-ts] |
+| `/w`, `/p`, `/g` | Current window, Chrome-pinned, active tab's group (or ungrouped), all filtered from the tabs the popup loaded | `rankView`: `rankedSearch`, no recency or priority; an empty query lists the first 50[^views-ts][^tabsearch-ts] |
 
 Keystrokes make no Chrome calls in the prefix views, measured with the chrome stub over a 6-letter word at 1000 tabs:[^popup-app]
 
@@ -201,6 +205,7 @@ Setup: Node 22 on an Apple M1 Pro, 1000 generated tabs (10% Chinese titles, 15% 
 [^sessions-ts]: lib/sessions.ts
 [^readinglist-ts]: lib/readinglist.ts
 [^popup-app]: entrypoints/popup/App.svelte
+[^views-ts]: lib/views.ts
 [^search-test]: lib/search.test.ts
 [^pinyin-test]: lib/pinyin.test.ts
 [^highlight-test]: lib/highlight.test.ts

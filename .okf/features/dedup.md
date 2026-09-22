@@ -4,7 +4,7 @@ title: Duplicate tab removal
 description: How /dedup decides two tabs are the same page, which copy survives, where it is triggered from, why the dupe badge and @d agree with it, and how those rules changed between 0.6.0 and the unreleased single close path.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabs/dedup.ts
 tags: [dedup, tabs, position-locks]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-22T05:55:38Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-22T06:05:00Z }
 sources:
   - id: dedup-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabs/dedup.ts
@@ -24,7 +24,11 @@ sources:
     last_modified: 2026-09-17
   - id: popup-app
     resource: https://github.com/samhvw8/TabOrdo/blob/main/entrypoints/popup/App.svelte
-    title: Dashboard tile, @d view and dupe badge
+    title: Dashboard tile and dupe badge
+    last_modified: 2026-09-22
+  - id: views-ts
+    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/views.ts
+    title: "@d view and duplicateTabs"
     last_modified: 2026-09-22
   - id: background
     resource: https://github.com/samhvw8/TabOrdo/blob/main/entrypoints/background/index.ts
@@ -80,7 +84,7 @@ sources:
 
 So `youtube.com/watch?v=A` and `?v=B` are different pages, while a link shared with `?utm_source=x` still matches the original. Tracking parameters "identify the click, not the page".[^dedup-ts][^dedup-test]
 
-`findDuplicateGroups(tabs)` is the one place this rule is applied. It is pure and takes anything with a `url`, so `/dedup` runs it over `TabInfo`s and the popup's "N dupes" badge and `@d` view run it over search rows. A copy the badge counts is one `/dedup` acts on, and the reverse.[^dedup-ts][^popup-app][^dedup-test]
+`findDuplicateGroups(tabs)` is the one place this rule is applied. It is pure and takes anything with a `url`, so `/dedup` runs it over `TabInfo`s and the popup's "N dupes" badge and `@d` view run it over search rows, through `duplicateTabs` in `lib/views.ts`. A copy the badge counts is one `/dedup` acts on, and the reverse.[^dedup-ts][^views-ts][^popup-app][^dedup-test]
 
 # Survivor policy
 
@@ -148,6 +152,7 @@ All three reach `closeTabs`, so all three get an undo snapshot and per-tab closi
 [^pin-ts]: lib/pin.ts
 [^actions-ts]: lib/actions.ts
 [^popup-app]: entrypoints/popup/App.svelte
+[^views-ts]: lib/views.ts
 [^background]: entrypoints/background/index.ts
 [^dedup-test]: lib/tabs/dedup.test.ts
 [^changelog]: CHANGELOG.md
