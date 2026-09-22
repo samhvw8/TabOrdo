@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { getAllTabs, switchToTab, closeTabs, groupTabsByDomain, ungroupAll, removeDuplicates, mergeAllWindows, discardTabs, closeTabsToLeft, closeTabsToRight, closeTabsSameSite, closeOldTabs, shuffleTabs, uniteDomain, isolateDomain, splitWindow, splitByDomain, stackWindows, pinCurrentTab, unpinCurrentTab, outlineBranch, type TabInfo } from "../../lib/tabs/index.ts";
+  import { getAllTabs, switchToTab, closeTabs, pinCurrentTab, unpinCurrentTab, outlineBranch, type TabInfo } from "../../lib/tabs/index.ts";
   import { getPinnedTabs, getPinForTab, type PinnedTabEntry } from "../../lib/pin.ts";
   import { getArchiveCount } from "../../lib/archive.ts";
   import { regexSearch, tabsToSearchItems, searchBookmarks, searchHistory, parseCommand, type SearchResult } from "../../lib/search.ts";
@@ -9,17 +9,15 @@
   import { updateConfig } from "../../lib/rules.ts";
   import { matchCommands, ALL_COMMANDS, ACTION_COMMANDS, TRIAGE_COMMANDS, CATEGORY_STYLES, groupCommands, type CommandDefinition, type CommandCategory } from "../../lib/commands.ts";
   import { snapshotBeforeGroup, executeUndo, hasUndo, touchesUndoStack } from "../../lib/undo.ts";
-  import { focusMode, unfocusMode, hasSavedWorkspace, exportTabsToFile, loadTabsFromText } from "../../lib/workspace.ts";
-  import { addTabsToReadingList, getReadingList } from "../../lib/readinglist.ts";
+  import { hasSavedWorkspace, loadTabsFromText } from "../../lib/workspace.ts";
+  import { getReadingList } from "../../lib/readinglist.ts";
   import { getRecentlyClosed } from "../../lib/sessions.ts";
   import { withBulkLock } from "../../lib/bulklock.ts";
-  import { groupAllByDomain, sortWindowByDomain } from "../../lib/arrange.ts";
   import { checkAIAvailability, getAIProgress, defaultProgress, AI_PROGRESS_KEY, type AIGroupProgress } from "../../lib/ai.ts";
   import { getActionLog, ACTION_LOG_KEY, type ActionLogEntry } from "../../lib/actionLog.ts";
   import { groupDotClass, relTime } from "../../lib/format.ts";
-  import { runAction, mergeStatus, FEEDBACK_URL, sortGroup, extractGroup } from "../../lib/actions.ts";
-  import { DASHBOARD_ACTION_POOL, ACTION_POOL_MAP, DEFAULT_DASHBOARD_IDS, ALT_MODE, MORE_SECTIONS,
-           UNPIN_ICON, PIN_TOP_ICON, type DashActionDef, type MoreItem } from "../../lib/dashboard.ts";
+  import { runAction, runTile, sortGroup, extractGroup, type ActionContext, type ActionResult } from "../../lib/actions.ts";
+  import { TILE_BY_ID, DEFAULT_DASHBOARD_IDS, MORE_SECTIONS, UNLOCK_FACE, type Tile, type TileFace } from "../../lib/dashboard.ts";
   import SearchInput from "../../components/SearchInput.svelte";
   import ResultList from "../../components/ResultList.svelte";
   import CommandHints from "../../components/CommandHints.svelte";
@@ -98,7 +96,7 @@
 
 
   let dashboardActionIds = $state<string[]>([...DEFAULT_DASHBOARD_IDS]);
-  let dashboardActions = $derived(dashboardActionIds.map(id => ACTION_POOL_MAP.get(id)).filter((a): a is DashActionDef => !!a));
+  let dashboardActions = $derived(dashboardActionIds.map(id => TILE_BY_ID.get(id)).filter((t): t is Tile => !!t));
 
   let activeTabPin = $derived.by(() => {
     const active = dashboardTabs.find(t => t.active && t.windowId === currentWindowId);
@@ -106,32 +104,23 @@
     return getPinForTab(active.url, active.groupTitle, pinnedTabs, active.id) ?? null;
   });
 
-  let pinDisplay = $derived.by(() => {
-    if (altPressed) {
-      if (activeTabPin && activeTabPin.position === 0) return { label: "Unlock", icon: UNPIN_ICON, tooltip: "Release this tab's held position." };
-      return { label: "Lock Top", icon: PIN_TOP_ICON, tooltip: "Hold tab at the first position in its group." };
-    }
-    if (activeTabPin) return { label: "Unlock", icon: UNPIN_ICON, tooltip: "Release this tab's held position." };
-    return { label: "Lock Tab", icon: ACTION_POOL_MAP.get("pin")!.icon, tooltip: "Hold current tab at its position in the group." };
+  // Mirrors handlePinCurrent: a held tab releases, unless Alt can still move it to the top.
+  let pinDisplay = $derived.by((): TileFace => {
+    const lock = TILE_BY_ID.get("pin")!;
+    if (activeTabPin && !(altPressed && activeTabPin.position !== 0)) return UNLOCK_FACE;
+    return altPressed ? lock.alt! : lock;
   });
 
-  // Rebuilding a carried group can fail (Chrome refuses tab edits mid-drag, for one), which
-  // used to leave tabs loose or in a grey untitled group while the status bar still said
-  // "Merged". Say so instead.
   /**
-   * Live text for a More-panel row. MORE_SECTIONS is static data; these three rows read state
-   * the catalogue can't know — whether a workspace is saved, how big the archive is, and
-   * whether the active tab is already locked.
+   * What a tile shows right now, on the grid and in the More panel alike. The table holds each
+   * tile's resting face; Lock Tab and Focus also read state it can't know (is the tab held, is
+   * a workspace saved), and Alt swaps in the alt-click's face.
    */
-  function moreRowText(item: MoreItem): { label: string; tip: string } {
-    if (item.action === "pin") return { label: pinDisplay.label, tip: pinDisplay.tooltip };
-    if (item.action === "focus") {
-      return hasWorkspace
-        ? { label: "Unfocus", tip: "Restore saved tabs" }
-        : { label: "Focus", tip: "Save tabs & start fresh" };
-    }
-    if (item.action === "archive") return { label: item.label, tip: `${archiveCount} saved` };
-    return { label: item.label, tip: item.tip };
+  function tileFace(tile: Tile, withAlt: boolean): TileFace {
+    if (tile.id === "pin") return pinDisplay;
+    if (withAlt && tile.alt) return tile.alt;
+    if (tile.id === "focus" && hasWorkspace) return { ...tile, label: "Unfocus", tooltip: "Restore saved tabs." };
+    return tile;
   }
 
   function smallIcon(svg: string): string {
@@ -683,14 +672,11 @@
   let frozenCount = $derived(dashboardTabs.filter((t) => t.frozen).length);
   let suspendedCount = $derived(dashboardTabs.filter((t) => t.discarded && !t.frozen).length);
 
-  // A single click on a dashboard/overflow button should never close tabs outright. Typing the
-  // equivalent slash command is deliberate enough to skip the second tap, and undo covers both.
-  const CONFIRM_ACTIONS = new Set(["merge", "dedup", "closeleft", "closeright", "closeold", "closesite", "focus"]);
-
+  // Which tiles confirm is the table's call (TileDef.confirm in lib/commands.ts).
   function needsConfirm(action: string): boolean {
     // "Focus" toggles: the unfocus direction restores tabs, so only arm the closing one.
     if (action === "focus") return !hasWorkspace;
-    return CONFIRM_ACTIONS.has(action);
+    return TILE_BY_ID.get(action)?.confirm ?? false;
   }
 
   async function handleOverflowAction(action: string) {
@@ -706,57 +692,17 @@
       }
     }
     const goBack = () => { activeSection = "dashboard"; };
+    // Every tile runs its handler from the action table unless it needs something only the
+    // component has: workspace or lock state, the palette, or the AI hand-off before the lock.
     switch (action) {
-      case "collapse": goBack(); dashCommand("collapse"); break;
-      case "extract": goBack(); dashCommand("extract"); break;
-      case "branch": goBack(); dashCommand("branch"); break;
-      case "branchup": goBack(); dashCommand("branchup"); break;
-      case "restore": goBack(); dashCommand("restore"); break;
-      case "mute": goBack(); dashCommand("mute"); break;
-      case "unmute": goBack(); dashCommand("unmute"); break;
-      case "freeze": goBack(); dashCommand("freeze"); break;
-      case "pingroup": goBack(); dashCommand("pingroup"); break;
-      case "split": goBack(); dashCommand("split"); break;
-      case "regroup": goBack(); dashAction(async () => { await snapshotBeforeGroup(); await groupTabsByDomain("rebuild"); return "Regrouped"; }); break;
-      case "ungroup": goBack(); dashAction(async () => { await snapshotBeforeGroup(); await ungroupAll(); return "Ungrouped all"; }); break;
-      case "shuffle": goBack(); dashAction(async () => { await snapshotBeforeGroup(); await shuffleTabs(); return "Shuffled"; }); break;
-      case "unite": goBack(); dashAction(async () => { const n = await uniteDomain(); return n > 0 ? `United ${n}` : "None to unite"; }); break;
-      case "isolate": goBack(); dashAction(async () => { const n = await isolateDomain(); return n > 0 ? `Isolated ${n}` : "Not enough tabs"; }); break;
-      case "splitv": goBack(); dashAction(async () => { await snapshotBeforeGroup(); await splitWindow("vertical"); return "Split V"; }); break;
-      case "splith": goBack(); dashAction(async () => { await snapshotBeforeGroup(); await splitWindow("horizontal"); return "Split H"; }); break;
-      case "splitdomain": goBack(); dashAction(async () => { await snapshotBeforeGroup(); const n = await splitByDomain(); return n > 0 ? `${n + 1} windows` : "One domain"; }); break;
-      case "stack": goBack(); dashAction(async () => { await stackWindows(); return "Stacked"; }); break;
-      case "closeleft": goBack(); dashAction(async () => { const n = await closeTabsToLeft(); return n > 0 ? `Closed ${n} left` : "None to close"; }); break;
-      case "closeright": goBack(); dashAction(async () => { const n = await closeTabsToRight(); return n > 0 ? `Closed ${n} right` : "None to close"; }); break;
-      case "closeold": goBack(); dashAction(async () => { const n = await closeOldTabs(); return n > 0 ? `Closed ${n} old` : "No old tabs"; }); break;
-      case "closesite": goBack(); dashAction(async () => { const n = await closeTabsSameSite(); return n > 0 ? `Closed ${n} same-site` : "No other tabs"; }); break;
-      case "focus":
-        goBack(); dashAction(async () => {
-          if (hasWorkspace) { const n = await unfocusMode(); hasWorkspace = await hasSavedWorkspace(); return n > 0 ? `Restored ${n}` : "No workspace"; }
-          else { const n = await focusMode(); hasWorkspace = await hasSavedWorkspace(); return n > 0 ? `Saved ${n}, focused` : "No tabs to save"; }
-        }); break;
-      case "save": goBack(); exportTabsToFile(); flashStatus("Exporting...", 2000); break;
-      case "load": requestFilePicker(); break;
-      case "archive": chrome.tabs.create({ url: chrome.runtime.getURL("/archive.html") }); break;
-      case "feedback": chrome.tabs.create({ url: FEEDBACK_URL }); break;
-      case "sort": goBack(); dashAction(async () => { await sortWindowByDomain(currentWindowId); return "Sorted"; }); break;
-      case "group": goBack(); dashAction(async () => { await groupAllByDomain(); return "Grouped"; }); break;
-      case "dedup": goBack(); dashAction(async () => { const n = await removeDuplicates(); return n > 0 ? `${n} removed` : "No dupes"; }); break;
-      case "merge": goBack(); dashAction(async () => { await snapshotBeforeGroup(); return mergeStatus(await mergeAllWindows()); }); break;
+      case "focus": goBack(); dashCommand(hasWorkspace ? "unfocus" : "focus"); break;
       case "pin": goBack(); handlePinCurrent(new MouseEvent("click", { altKey: altPressed })); break;
       case "aigroup": goBack(); await startAIGroup(); break;
-      case "readlater": goBack(); dashAction(async () => {
-        const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
-        if (active?.url && active.title) { await addTabsToReadingList([{ url: active.url, title: active.title }]); return "Added to Reading List"; }
-        return "No active tab";
-      }); break;
+      case "archive": openArchive(); break;
       // updateResults() can't populate this one: "recent" is an action prefix, so it would
       // fall through to an empty tab search. Run the action itself to fill the list.
       case "recent": goBack(); query = "/recent "; paletteMode = "search"; commandHints = []; await handleActionCommand("recent", ""); break;
-      case "sidepanel":
-        if (chrome.sidePanel) { chrome.sidePanel.open({ windowId: currentWindowId }); }
-        else { flashStatus("Side Panel not available (Chrome 114+)"); }
-        break;
+      default: goBack(); dashTile(action);
     }
   }
 
@@ -783,15 +729,7 @@
 
     try {
       await withBulkLock(async () => {
-        const matchingTabs = rankTabs(searchQuery);
-        const outcome = await runAction(prefix, {
-          query: searchQuery,
-          matchingTabs,
-          tabIds: matchingTabs.map((t) => t.tabId!),
-          currentWindowId,
-          rankTabs,
-          requestFilePicker,
-        });
+        const outcome = await runAction(prefix, actionContext(searchQuery, rankTabs(searchQuery)));
         if (!outcome) return;
 
         // The handler switched tabs (/parent): leave the way picking a result does.
@@ -914,32 +852,36 @@
     }
   }
 
+  /** What a handler runs against. `matchingTabs` is what the query, or a selection, resolved to. */
+  function actionContext(query: string, matchingTabs: SearchResult[]): ActionContext {
+    return { query, matchingTabs, tabIds: matchingTabs.map((t) => t.tabId!), currentWindowId, rankTabs, requestFilePicker };
+  }
+
   /**
-   * Run a palette action from a dashboard or menu button. Routes through the same handler
-   * the slash command uses, so a button and its command can't drift into reporting different
-   * things for the same work. `tabs` stands in for the palette's matched list, for the
-   * selection buttons.
+   * Run a slash command's handler from a button, so a button and its command can't drift into
+   * reporting different things for the same work. `tabs` stands in for the palette's matched
+   * list, for the selection buttons.
    */
   function dashCommand(prefix: string, commandQuery = "", tabs: TabInfo[] = []) {
-    return dashAction(async () => {
-      const matchingTabs = tabsToSearchItems(tabs);
-      const outcome = await runAction(prefix, {
-        query: commandQuery,
-        matchingTabs,
-        tabIds: matchingTabs.map((t) => t.tabId!),
-        currentWindowId,
-        rankTabs,
-        requestFilePicker,
-      });
-      if (outcome?.workspaceChanged) hasWorkspace = await hasSavedWorkspace();
-      return outcome?.message;
-    });
+    return dashAction(() => settle(runAction(prefix, actionContext(commandQuery, tabsToSearchItems(tabs)))));
+  }
+
+  /** Run a tile. Not dashCommand: Group+ is tile id "group", and /group does something else. */
+  function dashTile(id: string) {
+    return dashAction(() => settle(runTile(id, actionContext("", []))));
+  }
+
+  /** A handler's outcome as dashAction wants it: the status line, workspace state re-read. */
+  async function settle(pending: Promise<ActionResult | null>): Promise<string | undefined> {
+    const outcome = await pending;
+    if (outcome?.workspaceChanged) hasWorkspace = await hasSavedWorkspace();
+    return outcome?.message;
   }
 
   /** Dashboard tile click: Lock Tab keeps its bespoke state toggle, everything else may have an alt mode. */
   function dashButtonClick(id: string, e: MouseEvent) {
     if (id === "pin") { handlePinCurrent(e); return; }
-    const alt = (e.altKey || e.ctrlKey) ? ALT_MODE[id] : undefined;
+    const alt = (e.altKey || e.ctrlKey) ? TILE_BY_ID.get(id)?.alt : undefined;
     if (alt?.query !== undefined) { dashCommand(alt.action, alt.query); return; }
     handleOverflowAction(alt?.action ?? id);
   }
@@ -1281,27 +1223,27 @@
         {/if}
         <div class="px-2 pt-1.5 pb-1 text-[9px] font-semibold uppercase tracking-wider text-text-muted/70">{section.title}</div>
         <div class="grid gap-0.5">
-          {#each section.items as item}
-            {@const poolEntry = ACTION_POOL_MAP.get(item.action)}
-            {@const row = moreRowText(item)}
+          {#each section.tiles as tile}
+            {@const face = tileFace(tile, false)}
             <div
-              class="w-full text-left flex items-start gap-2.5 px-2 py-1.5 rounded-md hover:bg-surface-hover active:bg-surface-active transition-colors group cursor-pointer {pendingConfirm === item.action ? 'bg-accent-red/10 ring-1 ring-accent-red/30' : ''}"
+              class="w-full text-left flex items-start gap-2.5 px-2 py-1.5 rounded-md hover:bg-surface-hover active:bg-surface-active transition-colors group cursor-pointer {pendingConfirm === tile.id ? 'bg-accent-red/10 ring-1 ring-accent-red/30' : ''}"
               role="button" tabindex="0"
-              onclick={() => handleOverflowAction(item.action)}
-              onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleOverflowAction(item.action); } }}
+              onclick={() => handleOverflowAction(tile.id)}
+              onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleOverflowAction(tile.id); } }}
             >
               <span class="shrink-0 w-5 h-5 rounded bg-surface-active/60 flex items-center justify-center mt-px group-hover:bg-primary/15 group-hover:text-primary transition-colors">
-                {#if poolEntry}{@html smallIcon(item.action === "pin" ? pinDisplay.icon : poolEntry.icon)}{/if}
+                {@html smallIcon(face.icon)}
               </span>
               <div class="flex-1 min-w-0">
-                <div class="text-xs font-medium {pendingConfirm === item.action ? 'text-accent-red' : 'text-text'}">{pendingConfirm === item.action ? "Click again to confirm" : row.label}</div>
-                <div class="text-[10px] text-text-muted/70 leading-tight">{row.tip}</div>
+                <div class="text-xs font-medium {pendingConfirm === tile.id ? 'text-accent-red' : 'text-text'}">{pendingConfirm === tile.id ? "Click again to confirm" : face.label}</div>
+                <!-- The archive's size is worth a row's subtitle; on the grid the tooltip says what the tile does. -->
+                <div class="text-[10px] text-text-muted/70 leading-tight">{tile.id === "archive" ? `${archiveCount} saved` : face.tooltip}</div>
               </div>
               <button
-                class="shrink-0 self-center text-sm leading-none transition-[color,opacity] hover:scale-110 {dashboardActionIds.includes(item.action) ? 'text-primary' : 'text-text-muted/30 opacity-0 group-hover:opacity-100'}"
-                onclick={(e) => { e.stopPropagation(); toggleDashboardAction(item.action); }}
-                title={dashboardActionIds.includes(item.action) ? "Remove from dashboard" : "Add to dashboard"}
-              >{dashboardActionIds.includes(item.action) ? "★" : "☆"}</button>
+                class="shrink-0 self-center text-sm leading-none transition-[color,opacity] hover:scale-110 {dashboardActionIds.includes(tile.id) ? 'text-primary' : 'text-text-muted/30 opacity-0 group-hover:opacity-100'}"
+                onclick={(e) => { e.stopPropagation(); toggleDashboardAction(tile.id); }}
+                title={dashboardActionIds.includes(tile.id) ? "Remove from dashboard" : "Add to dashboard"}
+              >{dashboardActionIds.includes(tile.id) ? "★" : "☆"}</button>
             </div>
           {/each}
         </div>
@@ -1408,14 +1350,14 @@
       {#if dashboardActions.length > 0}
         <div class="grid grid-cols-3 gap-1.5 px-3 pb-2 {busy ? 'opacity-50 pointer-events-none' : ''}"
           aria-busy={busy}>
-          {#each dashboardActions as action}
-            {@const alt = altPressed && action.id !== "pin" ? ALT_MODE[action.id] : undefined}
+          {#each dashboardActions as tile}
+            {@const face = tileFace(tile, altPressed)}
             <ActionButton
-              label={pendingConfirm === action.id ? "Confirm" : alt ? alt.label : action.id === "focus" ? (hasWorkspace ? "Unfocus" : "Focus") : action.id === "pin" ? pinDisplay.label : action.label}
-              icon={alt ? (alt.icon ?? ACTION_POOL_MAP.get(alt.action)?.icon ?? action.icon) : action.id === "pin" ? pinDisplay.icon : action.icon}
-              tooltip={alt ? alt.tooltip : action.id === "pin" ? pinDisplay.tooltip : action.tooltip}
-              confirming={pendingConfirm === action.id}
-              onclick={(e) => dashButtonClick(action.id, e)}
+              label={pendingConfirm === tile.id ? "Confirm" : face.label}
+              icon={face.icon}
+              tooltip={face.tooltip}
+              confirming={pendingConfirm === tile.id}
+              onclick={(e) => dashButtonClick(tile.id, e)}
             />
           {/each}
         </div>
@@ -1438,7 +1380,7 @@
           <button class="px-2 py-0.5 rounded text-[10px] font-medium bg-surface-hover text-text-muted border border-border hover:text-text transition-colors"
             onclick={() => dashCommand("archive", "", dashboardTabs.filter((t) => selectedTabs.has(t.id)))}>Archive</button>
           <button class="px-2 py-0.5 rounded text-[10px] font-medium bg-surface-hover text-text-muted border border-border hover:text-text transition-colors"
-            onclick={() => dashAction(async () => { await discardTabs([...selectedTabs]); return `Discarded ${selectedTabs.size}`; })}>Discard</button>
+            onclick={() => dashCommand("discard", "", dashboardTabs.filter((t) => selectedTabs.has(t.id)))}>Discard</button>
         </div>
       {/if}
 

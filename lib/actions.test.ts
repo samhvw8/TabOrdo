@@ -2,8 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { installChromeStub, type ChromeStub } from "./testing/chrome-stub.ts";
 import { hasUndo, peekUndoEntry, executeUndo } from "./undo.ts";
 import { getArchive } from "./archive.ts";
-import { runAction, ACTION_HANDLERS, mergeStatus, sortGroup, extractGroup, type ActionContext } from "./actions.ts";
-import { ACTION_COMMANDS } from "./commands.ts";
+import { runAction, runTile, ACTION_HANDLERS, mergeStatus, sortGroup, extractGroup, type ActionContext } from "./actions.ts";
 import type { SearchResult } from "./search.ts";
 
 // The palette's action behaviour used to live in a switch inside App.svelte and was reachable
@@ -50,26 +49,90 @@ describe("runAction dispatch", () => {
     expect(await runAction("nonsense", ctx())).toBeNull();
   });
 
-  it("aliases /lock and /pin to the same handler", () => {
-    expect(ACTION_HANDLERS.lock).toBe(ACTION_HANDLERS.pin);
-    expect(ACTION_HANDLERS.unlock).toBe(ACTION_HANDLERS.unpin);
-    expect(ACTION_HANDLERS.lockgroup).toBe(ACTION_HANDLERS.pingroup);
-    expect(ACTION_HANDLERS.unlockgroup).toBe(ACTION_HANDLERS.unpingroup);
+  // Regroup is a tile with no slash command behind it; typing it must not reach the tile.
+  it("does not run a tile-only row as a command", async () => {
+    expect(await runAction("regroup", ctx())).toBeNull();
   });
 
-  // Without this, adding a command to ACTION_COMMANDS and forgetting the handler ships a
-  // slash command that is listed, accepted, and silently does nothing.
-  it("has a handler for every advertised action command", () => {
-    const missing = ACTION_COMMANDS
-      .map((c) => c.prefix)
-      .filter((p) => p !== "aigroup" && typeof ACTION_HANDLERS[p] !== "function");
-    expect(missing).toEqual([]);
+  it("does not resolve a prefix through Object.prototype", async () => {
+    expect(await runAction("constructor", ctx())).toBeNull();
+    expect(await runTile("toString", ctx())).toBeNull();
   });
 
-  it("advertises every handler it defines", () => {
-    const advertised = new Set(ACTION_COMMANDS.map((c) => c.prefix));
-    const orphans = Object.keys(ACTION_HANDLERS).filter((p) => !advertised.has(p));
-    expect(orphans).toEqual([]);
+  // The old names of the lock commands, still typed from muscle memory.
+  it("runs /pin, /unpin, /pingroup and /unpingroup as the lock commands", async () => {
+    stub.openTabs = [
+      { id: 1, url: "https://a.com", title: "A", pinned: false, windowId: 1, groupId: 5, index: 0, active: true },
+    ];
+    stub.groups = [{ id: 5, title: "Work", windowId: 1 }];
+    // Locks live in storage, so each run starts from the tab and its group both held.
+    const run = async (prefix: string) => {
+      await runAction("lock", ctx({ query: "^" }));
+      await runAction("lockgroup", ctx({ query: "^" }));
+      return runAction(prefix, ctx({ query: "^" }));
+    };
+    const pairs = [["pin", "lock"], ["unpin", "unlock"], ["pingroup", "lockgroup"], ["unpingroup", "unlockgroup"]];
+    for (const [alias, target] of pairs) {
+      expect(await run(alias), `/${alias}`).toEqual(await run(target));
+    }
+  });
+});
+
+// A tile runs its command's handler unless it has one of its own, so the grid and the palette
+// cannot report different things for the same work.
+describe("runTile", () => {
+  const domains = () => {
+    stub.windows = [{ id: 1 }];
+    stub.openTabs = [
+      { id: 1, url: "https://github.com/one", title: "G1", pinned: false, windowId: 1, groupId: -1, index: 0, active: true },
+      { id: 2, url: "https://example.com/a", title: "E1", pinned: false, windowId: 1, groupId: -1, index: 1 },
+      { id: 3, url: "https://github.com/two", title: "G2", pinned: false, windowId: 1, groupId: -1, index: 2 },
+      { id: 4, url: "https://example.com/b", title: "E2", pinned: false, windowId: 1, groupId: -1, index: 3 },
+    ];
+  };
+
+  it("runs the bare command for a tile without a handler of its own", async () => {
+    domains();
+    expect(await runTile("sort", ctx())).toEqual({ message: "Sorted tabs by domain", acted: true });
+    expect((await peekUndoEntry())?.type).toBe("group");
+  });
+
+  it("groups every loose tab by domain for Group+, where /group groups only the matches", async () => {
+    domains();
+    expect(await runTile("group", ctx())).toEqual({ message: "Grouped", acted: true });
+    expect(stub.openTabs.every((t) => t.groupId !== -1)).toBe(true);
+    expect((await peekUndoEntry())?.type).toBe("group");
+
+    // The command of the same name, bare, has no matches to act on.
+    expect(await runAction("group", ctx())).toEqual({ acted: false });
+  });
+
+  it("ungroups every group for the Ungroup tile, where bare /ungroup takes only the active tab", async () => {
+    domains();
+    for (const t of stub.openTabs) t.groupId = t.url!.includes("github") ? 7 : 8;
+    stub.groups = [{ id: 7, title: "github", windowId: 1 }, { id: 8, title: "example", windowId: 1 }];
+
+    expect(await runTile("ungroup", ctx())).toEqual({ message: "Ungrouped all", acted: true });
+    expect(stub.ungroupedIds.sort()).toEqual([1, 2, 3, 4]);
+    expect(await hasUndo()).toBe(true);
+  });
+
+  it("regroups from scratch for the Regroup tile, and leaves an undo entry", async () => {
+    domains();
+    for (const t of stub.openTabs) t.groupId = 9;
+    stub.groups = [{ id: 9, title: "Mixed", windowId: 1 }];
+
+    expect(await runTile("regroup", ctx())).toEqual({ message: "Regrouped", acted: true });
+    const groupOf = (id: number) => stub.openTabs.find((t) => t.id === id)!.groupId;
+    expect(groupOf(1)).toBe(groupOf(3));
+    expect(groupOf(2)).toBe(groupOf(4));
+    expect(groupOf(1)).not.toBe(groupOf(2));
+    expect((await peekUndoEntry())?.type).toBe("group");
+  });
+
+  it("runs an alias tile's target command", async () => {
+    domains();
+    expect(await runTile("pingroup", ctx())).toEqual(await runAction("lockgroup", ctx()));
   });
 });
 
