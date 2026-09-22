@@ -168,6 +168,70 @@ export async function clearPinTabIds(): Promise<void> {
   if (changed) await savePinnedTabs(pins);
 }
 
+/**
+ * Match `pins` to the open `tabs`, in place. A lock whose tab is open keeps it and takes on its
+ * URL and title. A lock with no open tab (after a restart every lock, once clearPinTabIds has
+ * run) takes an open tab with its URL: one in a group titled like the lock's group first, any
+ * other after that, and never one another lock holds. Returns whether anything changed, and the
+ * tabs newly matched, whose 📌 badge is the caller's to apply (setTitleBadge lives in lib/tabs,
+ * which imports this module).
+ *
+ * Pure, so the worker and the Locks panel run the same rule and each does its own read and
+ * write. Only a URL match assigns an id; the ids it trusts are ones the caller has already let
+ * clearPinTabIds see, so last session's id never lands on an unrelated tab.
+ */
+export function reconcilePins(
+  pins: PinnedTabEntry[],
+  tabs: chrome.tabs.Tab[],
+  groups: chrome.tabGroups.TabGroup[]
+): { changed: boolean; adopted: number[] } {
+  const byId = new Map(tabs.filter((t) => t.id !== undefined).map((t) => [t.id!, t]));
+  const groupTitle = new Map(groups.map((g) => [g.id, g.title]));
+  const held = new Set<number>();
+  const waiting: PinnedTabEntry[] = [];
+  const adopted: number[] = [];
+  let changed = false;
+
+  const syncFrom = (pin: PinnedTabEntry, tab: chrome.tabs.Tab) => {
+    // The badge is part of the page title while the lock is live; storing it verbatim put
+    // "📌 " inside the lock's own saved title.
+    const cleanTitle = stripPinBadge(tab.title);
+    if (cleanTitle && pin.title !== cleanTitle) { pin.title = cleanTitle; changed = true; }
+    if (tab.url && pin.url !== tab.url) { pin.url = tab.url; changed = true; }
+  };
+
+  for (const pin of pins) {
+    const tab = pin.tabId !== undefined ? byId.get(pin.tabId) : undefined;
+    if (tab) {
+      held.add(tab.id!);
+      syncFrom(pin, tab);
+    } else {
+      waiting.push(pin);
+    }
+  }
+
+  // In-group matches first, so a lock that can only fall back never takes the copy another
+  // lock's group holds.
+  const matched = new Set<PinnedTabEntry>();
+  for (const inGroupOnly of [true, false]) {
+    for (const pin of waiting) {
+      if (matched.has(pin)) continue;
+      const match = tabs.find((t) =>
+        t.id !== undefined && !held.has(t.id) && t.url === pin.url &&
+        (!inGroupOnly || groupTitle.get(t.groupId) === pin.groupName)
+      );
+      if (!match) continue;
+      pin.tabId = match.id;
+      matched.add(pin);
+      held.add(match.id!);
+      adopted.push(match.id!);
+      changed = true;
+      syncFrom(pin, match);
+    }
+  }
+  return { changed, adopted };
+}
+
 /** One group's `tabs` with each locked tab at its slot and the rest in `compare` order around
  *  them. A lock resolves by tabId before URL, so it follows its tab through a navigation. */
 export function pinAwareSortTabs(

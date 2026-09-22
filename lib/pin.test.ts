@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { installChromeStub, type ChromeStub } from "./testing/chrome-stub.ts";
 import {
   groupStartIndex, buildGroupOrder, pinTab, unpinTab, getPinnedTabs, syncPinUrl, clearPinTabIds, PIN_BADGE,
-  applyGroupPinsToWindow, lockedGroupOrder, applyPinsToGroup,
+  applyGroupPinsToWindow, lockedGroupOrder, applyPinsToGroup, reconcilePins, type PinnedTabEntry,
 } from "./pin.ts";
 
 // 2 pinned tabs, then group A (1), group B (2), group C (3).
@@ -156,6 +156,72 @@ describe("clearPinTabIds", () => {
     await pinTab("https://a.com", "Work", 0);
     await clearPinTabIds();
     expect(await getPinnedTabs()).toHaveLength(1);
+  });
+});
+
+describe("reconcilePins", () => {
+  const lock = (p: Partial<PinnedTabEntry> & { id: string }): PinnedTabEntry =>
+    ({ url: "https://a.com/1", groupName: "Read", position: 0, ...p });
+  const tab = (id: number, url: string, groupId = -1, title = "T") =>
+    ({ id, url, title, groupId, pinned: false, windowId: 1 }) as chrome.tabs.Tab;
+  const groups = [{ id: 5, title: "Read" }, { id: 6, title: "Other" }] as chrome.tabGroups.TabGroup[];
+
+  // After a restart every lock has lost its tab id (clearPinTabIds), and until something
+  // matched it back no navigation could carry it along.
+  it("matches a lock with no tab to the open tab with its URL, and reports it", () => {
+    const pins = [lock({ id: "p" })];
+    const r = reconcilePins(pins, [tab(3, "https://b.com"), tab(7, "https://a.com/1", 5)], groups);
+    expect(r).toEqual({ changed: true, adopted: [7] });
+    expect(pins[0].tabId).toBe(7);
+  });
+
+  it("prefers the copy of the URL that sits in the lock's group", () => {
+    const pins = [lock({ id: "p" })];
+    reconcilePins(pins, [tab(3, "https://a.com/1", 6), tab(7, "https://a.com/1", 5)], groups);
+    expect(pins[0].tabId).toBe(7);
+  });
+
+  it("falls back to a copy outside the group when there is none inside it", () => {
+    const pins = [lock({ id: "p" })];
+    reconcilePins(pins, [tab(3, "https://a.com/1")], groups);
+    expect(pins[0].tabId).toBe(3);
+  });
+
+  it("gives two locks on one URL a tab each, each in its own group", () => {
+    const pins = [lock({ id: "p", groupName: "Other" }), lock({ id: "q", groupName: "Read" })];
+    reconcilePins(pins, [tab(3, "https://a.com/1", 5), tab(4, "https://a.com/1", 6)], groups);
+    expect(pins.map((p) => p.tabId)).toEqual([4, 3]);
+  });
+
+  it("never hands a tab another lock is holding to a second lock", () => {
+    const pins = [lock({ id: "p" }), lock({ id: "q", tabId: 7 })];
+    const r = reconcilePins(pins, [tab(7, "https://a.com/1", 5)], groups);
+    expect(pins[0].tabId).toBeUndefined();
+    expect(r.adopted).toEqual([]);
+  });
+
+  it("re-matches a lock whose tab has closed", () => {
+    const pins = [lock({ id: "p", tabId: 99 })];
+    expect(reconcilePins(pins, [tab(7, "https://a.com/1", 5)], groups).adopted).toEqual([7]);
+    expect(pins[0].tabId).toBe(7);
+  });
+
+  it("brings a held tab's URL and title into the lock, without the badge", () => {
+    const pins = [lock({ id: "p", tabId: 7, title: "Ch 1" })];
+    const r = reconcilePins(pins, [tab(7, "https://a.com/2", 5, `${PIN_BADGE}Ch 2`)], groups);
+    expect(r).toEqual({ changed: true, adopted: [] });
+    expect(pins[0]).toMatchObject({ url: "https://a.com/2", title: "Ch 2" });
+  });
+
+  it("reports no change when every lock already holds its tab", () => {
+    const pins = [lock({ id: "p", tabId: 7, title: "T" })];
+    expect(reconcilePins(pins, [tab(7, "https://a.com/1", 5)], groups)).toEqual({ changed: false, adopted: [] });
+  });
+
+  it("leaves a lock whose URL is not open alone", () => {
+    const pins = [lock({ id: "p" })];
+    expect(reconcilePins(pins, [tab(3, "https://b.com")], groups)).toEqual({ changed: false, adopted: [] });
+    expect(pins[0].tabId).toBeUndefined();
   });
 });
 

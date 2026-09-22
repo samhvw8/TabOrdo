@@ -6,7 +6,7 @@ import {
   createAutomationState, noteTabCreated, onTabRemoved, onTabRegrouped, onTabDetached, onConfigChanged,
   onTabNavigated, switchToExisting, followPinState,
 } from "../../lib/automation.ts";
-import { syncLockedTab, resetLocksAfterRestart } from "../../lib/locksync.ts";
+import { createLockSyncState, syncLockedTab, noticeTab, resetLocksAfterRestart } from "../../lib/locksync.ts";
 import { runAIGroup } from "../../lib/aigroup.ts";
 import { createMenus, runMenuItem, openDashboard } from "../../lib/menus.ts";
 import { DISCARD_ALARM, startDiscardAlarm, ensureDiscardAlarm, discardIdleTabs } from "../../lib/discard.ts";
@@ -33,6 +33,7 @@ function register(what: string, fn: () => void): void {
 
 export default defineBackground(() => {
   const auto = createAutomationState();
+  const locks = createLockSyncState();
 
   // Needs the manifest "commands" key; absent without it.
   register("commands.onCommand", () => {
@@ -93,8 +94,13 @@ export default defineBackground(() => {
     chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => onTabRegrouped(auto, tabId, changeInfo, tab));
   });
 
+  // Locks follow their tab through navigation, and a lock with no tab (after a restart) takes a
+  // tab with its URL when one is created or finishes loading.
   register("tabs.onUpdated (pin URL sync)", () => {
-    chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => syncLockedTab(tabId, changeInfo, tab));
+    chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => syncLockedTab(locks, tabId, changeInfo, tab));
+  });
+  register("tabs.onCreated (lock match)", () => {
+    chrome.tabs.onCreated.addListener((tab) => noticeTab(locks, tab));
   });
 
   register("tabs.onDetached", () => {
@@ -142,7 +148,7 @@ export default defineBackground(() => {
 
   register("runtime.onStartup", () => {
     chrome.runtime.onStartup.addListener(async () => {
-      await resetLocksAfterRestart();
+      await resetLocksAfterRestart(locks);
       await ensureDiscardAlarm();
     });
   });

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { getPinnedTabs, getPinnedGroups, savePinnedTabs, pinTab, unpinTab, unpinGroup, reorderPins, applyPinsToGroup, stripPinBadge, type PinnedTabEntry, type PinnedGroupEntry } from "../lib/pin.ts";
+  import { getPinnedTabs, getPinnedGroups, savePinnedTabs, pinTab, unpinTab, unpinGroup, reorderPins, applyPinsToGroup, reconcilePins, type PinnedTabEntry, type PinnedGroupEntry } from "../lib/pin.ts";
   import { switchToTab, setTitleBadge, getFullHostname } from "../lib/tabs/index.ts";
   import { getSortRules, setSortRules, rankPositionsOf, domainMatches, pathMatches, sortPathOf, type SortRule } from "../lib/rules.ts";
   import { faviconCacheUrl } from "../lib/favicon.ts";
@@ -84,32 +84,13 @@
         }
       }
     }
-    // Sync pins with currently open tabs: backfill tabIds, update titles/URLs
-    const allTabs = await chrome.tabs.query({});
-    for (const pin of raw) {
-      const openTab = pin.tabId ? allTabs.find((t) => t.id === pin.tabId) : undefined;
-      const matchByUrl = !openTab ? allTabs.find((t) => t.url === pin.url) : undefined;
-      const match = openTab || matchByUrl;
-      if (match) {
-        if (match.id && pin.tabId !== match.id) {
-          pin.tabId = match.id;
-          needsSave = true;
-          // A backfilled id means this session never badged the tab (ids reset at startup,
-          // and the URL match is how the pin found it again) — put the 📌 back.
-          void setTitleBadge(match.id, true);
-        }
-        // The badge is part of the page title while the lock is live; storing it verbatim
-        // put "📌 " inside the pin's own saved title.
-        const cleanTitle = stripPinBadge(match.title);
-        if (cleanTitle && pin.title !== cleanTitle) { pin.title = cleanTitle; needsSave = true; }
-        if (match.url && pin.url !== match.url) { pin.url = match.url; needsSave = true; }
-      } else if (!pin.tabId) {
-        const byUrl = allTabs.find((t) => t.url === pin.url);
-        if (byUrl?.id) { pin.tabId = byUrl.id; needsSave = true; }
-      }
-    }
+    // Match locks to the open tabs: the worker's rule, so the panel and the worker agree.
+    const [allTabs, allGroups] = await Promise.all([chrome.tabs.query({}), chrome.tabGroups.query({})]);
+    const { changed, adopted } = reconcilePins(raw, allTabs, allGroups);
+    // A tab a lock has only just matched carries no 📌 yet.
+    for (const id of adopted) void setTitleBadge(id, true);
 
-    if (needsSave) await savePinnedTabs(raw);
+    if (needsSave || changed) await savePinnedTabs(raw);
     pinnedTabs = raw;
     sortRules = await getSortRules();
     pinnedGroups = await getPinnedGroups();
