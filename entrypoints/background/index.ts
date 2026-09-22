@@ -6,6 +6,7 @@ import { logAction } from "../../lib/actionLog.ts";
 import { addToReadingList } from "../../lib/readinglist.ts";
 import { checkAIAvailability, suggestGroups, setAIProgress, getAIProgress, defaultProgress } from "../../lib/ai.ts";
 import { isBulkLocked, acquireBulkLock, releaseBulkLock, newLockOwner, withBulkLock, AI_LEASE_MS } from "../../lib/bulklock.ts";
+import { createSelfWriteLedger } from "../../lib/selfwrite.ts";
 let pinSyncInProgress = false;
 const ungroupTimers = new Map<number, ReturnType<typeof setTimeout>>();
 
@@ -20,57 +21,15 @@ const groupCreatedAt = new Map<number, number>();
 
 // Tab ids TabOrdo itself just grouped/ungrouped, so listeners can tell our own
 // echoes apart from external mutations and skip re-reacting to them.
-const SELF_WRITE_TTL_MS = 1000;
-const selfWrites = new Map<number, number>();
+const selfWrites = createSelfWriteLedger();
 
-// Both ledgers only ever pruned an entry when the *same* id was queried again, so ids nobody
-// asks about again — a long AI run marks hundreds — sat there for the life of the worker. A
-// recycled tab id landing on one of them would then suppress a genuine external mutation.
-// Sweeping on write is enough: nothing reads an entry it wouldn't also have to write past.
-function sweepExpired(ledger: Map<number, number>, now: number): void {
-  for (const [id, t] of ledger) {
-    if (now - t > SELF_WRITE_TTL_MS) ledger.delete(id);
-  }
-}
-
-function markSelfWrite(tabIds: number[]): void {
-  const now = Date.now();
-  sweepExpired(selfWrites, now);
-  for (const id of tabIds) selfWrites.set(id, now);
-}
-
-function isRecentSelfWrite(tabId: number): boolean {
-  const t = selfWrites.get(tabId);
-  if (t === undefined) return false;
-  if (Date.now() - t > SELF_WRITE_TTL_MS) {
-    selfWrites.delete(tabId);
-    return false;
-  }
-  return true;
-}
-
-// Same idea, separate ledger for pin-state writes. The pinSyncInProgress flag alone couldn't
-// suppress the echoes: Chrome dispatches the onUpdated events our own tabs.update calls
-// generate *after* the loop has finished and cleared the flag, so every synced tab kicked off
-// another full pass. They converged (the state already matched) but each one woke the worker
-// and re-queried every tab in the profile.
-const pinSelfWrites = new Map<number, number>();
-
-function markPinSelfWrite(tabIds: number[]): void {
-  const now = Date.now();
-  sweepExpired(pinSelfWrites, now);
-  for (const id of tabIds) pinSelfWrites.set(id, now);
-}
-
-function isRecentPinSelfWrite(tabId: number): boolean {
-  const t = pinSelfWrites.get(tabId);
-  if (t === undefined) return false;
-  if (Date.now() - t > SELF_WRITE_TTL_MS) {
-    pinSelfWrites.delete(tabId);
-    return false;
-  }
-  return true;
-}
+// Same idea, separate ledger for pin-state writes, so a pin write never hides a group change
+// on the same tab. The pinSyncInProgress flag alone couldn't suppress the echoes: Chrome
+// dispatches the onUpdated events our own tabs.update calls generate *after* the loop has
+// finished and cleared the flag, so every synced tab kicked off another full pass. They
+// converged (the state already matched) but each one woke the worker and re-queried every tab
+// in the profile.
+const pinSelfWrites = createSelfWriteLedger();
 
 function scheduleAutoUngroup(windowId: number, delayMs = 150): void {
   const existing = ungroupTimers.get(windowId);
@@ -114,7 +73,7 @@ async function autoUngroupSingleTabGroups(windowId: number): Promise<void> {
       if (!title) continue;
       if (ruleNames && ruleNames.has(title)) continue;
       if (isIgnoredGroupName(title, config.ignoreGroupNames)) continue;
-      markSelfWrite([tabs[0].id]);
+      selfWrites.mark([tabs[0].id]);
       await chrome.tabs.ungroup(tabs[0].id);
       await logAction("Ungrouped", `"${title}" (single tab left)`);
     }
@@ -146,7 +105,7 @@ async function safeGroupUpdate(groupId: number, props: chrome.tabGroups.UpdatePr
  * shared, since that query makes tabs.group reject, and a rejection already comes back false.
  */
 async function tryJoinGroup(tabId: number, groupId: number, title: string): Promise<boolean> {
-  markSelfWrite([tabId]);
+  selfWrites.mark([tabId]);
   try {
     await chrome.tabs.group({ tabIds: [tabId], groupId });
     await logAction("Grouped", `tab into "${title}"`);
@@ -284,7 +243,7 @@ export default defineBackground(() => {
   register("tabs.onUpdated (groupId)", () => {
     chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
       if (changeInfo.groupId === undefined) return;
-      if (isRecentSelfWrite(tabId)) return;
+      if (selfWrites.has(tabId)) return;
       try {
         const config = await getConfig();
         if (config.autoUngroup) scheduleAutoUngroup(tab.windowId);
@@ -370,7 +329,7 @@ export default defineBackground(() => {
                   const existingGroups = await chrome.tabGroups.query({ windowId: tab.windowId });
                   const match = existingGroups.find((g) => g.title === rule.name && !isSharedGroup(g));
                   if (!match || !(await tryJoinGroup(tabId, match.id, rule.name))) {
-                    markSelfWrite([tabId]);
+                    selfWrites.mark([tabId]);
                     const groupId = await chrome.tabs.group({ tabIds: [tabId] }).catch((e) => { console.error("[TabOrdo] rule group create:", e); return null; });
                     if (groupId) {
                       await safeGroupUpdate(groupId, { title: rule.name, color: rule.color });
@@ -401,7 +360,7 @@ export default defineBackground(() => {
                   : [];
                 if (plan && partnerIds.length > 0) {
                   const memberIds = [tabId, ...partnerIds];
-                  markSelfWrite(memberIds);
+                  selfWrites.mark(memberIds);
                   const groupId = await chrome.tabs.group({ tabIds: memberIds }).catch((e) => { console.error("[TabOrdo] domain group create:", e); return null; });
                   if (groupId) {
                     await safeGroupUpdate(groupId, { title: plan.title, color: plan.color });
@@ -436,7 +395,7 @@ export default defineBackground(() => {
     chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
       if (changeInfo.pinned === undefined || !tab.url) return;
       if (pinSyncInProgress) return;
-      if (isRecentPinSelfWrite(tabId)) return;
+      if (pinSelfWrites.has(tabId)) return;
       if (!(await getConfig()).autoPinFollow) return;
 
       pinSyncInProgress = true;
@@ -444,7 +403,7 @@ export default defineBackground(() => {
         const allTabs = await chrome.tabs.query({});
         const sameUrl = allTabs.filter((t) => t.id !== tabId && t.url === tab.url);
         const stale = sameUrl.filter((t) => t.pinned !== changeInfo.pinned);
-        markPinSelfWrite(stale.map((t) => t.id!));
+        pinSelfWrites.mark(stale.map((t) => t.id!));
         for (const t of stale) {
           await chrome.tabs.update(t.id!, { pinned: changeInfo.pinned }).catch((e) => {
             console.warn("[TabOrdo] pin follow update failed:", e);
@@ -630,7 +589,7 @@ export default defineBackground(() => {
           await chrome.tabs.move(strays, { windowId: targetWindowId, index: -1 });
         }
         const memberIds = members.map((t) => t.id!);
-        markSelfWrite(memberIds);
+        selfWrites.mark(memberIds);
         const gid = await chrome.tabs.group({ tabIds: memberIds, createProperties: { windowId: targetWindowId } });
         await safeGroupUpdate(gid, { title: s.groupName, color: s.color as chrome.tabGroups.ColorEnum });
         grouped += memberIds.length;
