@@ -4,7 +4,7 @@ title: Position locks
 description: /lock, /unlock, /lockgroup and /unlockgroup hold a tab at a slot in its group or a group at a slot among its window's groups; internally they are still "pins" (lib/pin.ts), placed by every sort and by the lock commands, and marked with a 📌 title badge.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/pin.ts
 tags: [locks, pins, tab-order, sorting, title-badge]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-22T04:56:32Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-22T14:00:00Z }
 sources:
   - id: pin
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/pin.ts
@@ -25,7 +25,7 @@ sources:
   - id: pins-panel
     resource: https://github.com/samhvw8/TabOrdo/blob/main/components/PinsPanel.svelte
     title: components/PinsPanel.svelte
-    last_modified: 2026-09-17
+    last_modified: 2026-09-22
   - id: pin-cache-test
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/pin-cache.test.ts
     title: lib/pin-cache.test.ts
@@ -45,7 +45,15 @@ sources:
   - id: bg-index
     resource: https://github.com/samhvw8/TabOrdo/blob/main/entrypoints/background/index.ts
     title: entrypoints/background/index.ts
-    last_modified: 2026-09-17
+    last_modified: 2026-09-22
+  - id: locksync
+    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/locksync.ts
+    title: lib/locksync.ts (lock URL sync, restart reconcile)
+    last_modified: 2026-09-22
+  - id: locksync-test
+    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/locksync.test.ts
+    title: lib/locksync.test.ts
+    last_modified: 2026-09-22
   - id: dedup
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabs/dedup.ts
     title: lib/tabs/dedup.ts
@@ -120,11 +128,11 @@ The aliases are hidden from the browse list but still resolve.[^commands][^actio
 
 Locking at a slot that is already taken shifts every lock at or after it up by one, so the new lock wins the slot.[^pin][^commit-shift] Re-locking an existing entry only updates its position.
 
-**Read cache.** `getPinnedTabs` and `getPinnedGroups` serve both lists from memory, because the service worker reads them on its hottest paths: the pin URL sync on every url, title and status event of every tab, and `organizeWindow` on every tab that finishes loading. The cache follows the same rules as the [rules config cache](/features/grouping-rules.md). It is armed only once `storage.onChanged` is subscribed, dropped by any write to its key from any context, primed after a `set()` only once the write has landed, and handed out as clones.[^pin] Every read-modify-write (`pinTab`, `unpinTab`, `reorderPins`, `clearPinTabIds`, `pinGroup`, `unpinGroup`, the write branch of `syncPinUrl`, and the Locks panel's load) passes `fresh` and reads storage. Each realm holds its own cache, so a write built on a copy whose invalidation had not arrived yet would revert another context's change.[^pin][^pins-panel][^pin-cache-test] `syncPinUrl` answers "not a lock" and "lock unchanged" from a warm cache with no storage read, so a lock made elsewhere in the moment before its `onChanged` arrives misses one sync event, and the tab's next event catches up.[^pin]
+**Read cache.** `getPinnedTabs` and `getPinnedGroups` serve both lists from memory, because the service worker reads them on its hottest paths: the pin URL sync on every url, title and status event of every tab, and `organizeWindow` on every tab that finishes loading. The cache follows the same rules as the [rules config cache](/features/grouping-rules.md). It is armed only once `storage.onChanged` is subscribed, dropped by any write to its key from any context, primed after a `set()` only once the write has landed, and handed out as clones.[^pin] Every read-modify-write (`pinTab`, `unpinTab`, `reorderPins`, `clearPinTabIds`, `pinGroup`, `unpinGroup`, the write branch of `syncPinUrl`, the worker's restart reconcile, and the Locks panel's load) passes `fresh` and reads storage. Each realm holds its own cache, so a write built on a copy whose invalidation had not arrived yet would revert another context's change.[^pin][^pins-panel][^pin-cache-test] `syncPinUrl` answers "not a lock" and "lock unchanged" from a warm cache with no storage read, so a lock made elsewhere in the moment before its `onChanged` arrives misses one sync event, and the tab's next event catches up.[^pin]
 
 # Behaviour
 
-**Identity.** A tab lock resolves `tabId` first, then URL, in `getPinForTab`, `unpinTab`, `pinAwareSortTabs` (which `applyPinsToGroup` runs) and dedup.[^pin][^dedup] Tracking `tabId` lets a lock follow a tab through navigation, which is the novel- and manga-reading case.[^commit-panel] The background's pin URL sync rewrites the entry's `url` and `title` when that tab navigates.[^bg-index]
+**Identity.** A tab lock resolves `tabId` first, then URL, in `getPinForTab`, `unpinTab`, `pinAwareSortTabs` (which `applyPinsToGroup` runs) and dedup.[^pin][^dedup] Tracking `tabId` lets a lock follow a tab through navigation, which is the novel- and manga-reading case.[^commit-panel] The worker's lock URL sync (`syncLockedTab`) rewrites the entry's `url` and `title` when that tab navigates.[^locksync]
 
 **Where positions are applied.**
 
@@ -157,13 +165,23 @@ A lock beats a [sort priority](/features/sort-priority.md) rule.[^sort-test]
 
 `setTitleBadge` injects `📌 ` (`PIN_BADGE`) into `document.title` through `chrome.scripting.executeScript`, with a `MutationObserver` that keeps it in place across in-page title changes. Unlocking removes it.[^lock] The badge was built on `activeTab` + `scripting` with no new permissions,[^commit-badge] so it is bound by the [no-host-permissions decision](/decisions/no-host-permissions.md). Injection failures are logged, never thrown.[^lock]
 
-- A full navigation destroys the badge. The background re-applies it on `status: "complete"` for any tab a lock tracks.[^bg-index]
+- A full navigation destroys the badge. The worker re-applies it on `status: "complete"` for any tab a lock tracks.[^locksync]
 - `stripPinBadge` removes the prefix before a title is stored. Otherwise the badge's own title echo would write "📌 Title" into the entry.[^pin]
-- Tab ids do not survive a restart and get reused, so `onStartup` runs `clearPinTabIds`. The Locks panel's load then matches locks back to tabs by URL, backfills the id and re-applies the badge.[^pin][^pins-panel]
+- After a restart the worker matches locks back to their tabs and badges them; see below.[^locksync]
+
+# After a browser restart
+
+Tab ids do not survive a restart, and the new session reuses them, so a stored id would land on an unrelated tab. `onStartup` runs `clearPinTabIds`, then `reconcilePins` matches the locks to the restored tabs by URL. Session restore creates tabs after `onStartup` has fired, so the worker also reconciles whenever a tab is created, navigates or finishes loading at the URL of a lock with no tab. That check reads the cached lock list, so it costs nothing while no lock is waiting.[^bg-index] The pass waits until a second has gone by with no new trigger, so it sees a restored window's tabs in their titled groups, and badges each tab it matched. A restored tab that has not loaded yet refuses the injection; it gets the badge when it loads, because the URL sync now finds its lock by id.[^locksync][^pin]
+
+The URL sync and every reconcile wait for the startup reset. Both are listeners Chrome does not await, and a sync that read the list before the reset landed would match last session's id to whatever tab holds it now, then write the id back after the reset.[^locksync][^locksync-test]
+
+`reconcilePins(pins, tabs, groups)` is the matching rule, pure so the worker and the Locks panel share it. A lock whose tab is open keeps it and takes on its URL and title. A lock with no open tab takes a tab with its URL: one in a group titled like the lock's group first, any other after that, never one another lock holds. Only a URL match assigns an id.[^pin]
+
+Before, only the Locks panel's load matched locks back, and it ignored groups and could give one tab to two locks. Until the panel was opened, a locked tab that navigated left its lock behind, because the URL sync matches by id alone, and its badge stayed off.[^pins-panel][^locksync]
 
 # Locks panel (`components/PinsPanel.svelte`)
 
-This is the sidebar's "Locks" section. It shows [Sort Priority](/features/sort-priority.md) (labelled "Not locks"), Locked Groups, and Locked Tabs grouped by group name. Loading normalises positions to 0..n-1 and syncs `tabId`, `title` and `url` from open tabs. Rows drag to reorder. Clicking a row switches to the tab, or reopens a closed one, puts it back in its group and re-applies the locks. "Clean N closed" drops locks whose tab is gone.[^pins-panel]
+This is the sidebar's "Locks" section. It shows [Sort Priority](/features/sort-priority.md) (labelled "Not locks"), Locked Groups, and Locked Tabs grouped by group name. Loading normalises positions to 0..n-1 and matches locks to the open tabs with `reconcilePins`, the worker's rule, badging any tab it newly matches. Rows drag to reorder. Clicking a row switches to the tab, or reopens a closed one, puts it back in its group and re-applies the locks. "Clean N closed" drops locks whose tab is gone.[^pins-panel]
 
 # Relation to Chrome's pin
 
@@ -176,12 +194,15 @@ This is the sidebar's "Locks" section. It shows [Sort Priority](/features/sort-p
 - **A bare `/lock` does not hold the tab where it is.** It uses `position = existingPins.length` (append after the group's existing locks) and then moves the tab there.[^lock] Commit 82ee4fc intended that ("defaults to appending at end of pin list"),[^commit-panel] but the README's tile table says "Hold at current position".[^readme]
 - **`/movegroup $` and a group locked last end up in different places when loose tabs trail the groups.** `/movegroup $` moves the group to the very end of the window, past them. A lock's last slot counts groups only, so the next sort puts the locked group back ahead of them.[^order][^pin]
 - Which of two tab locks on one slot holds it follows the tab ids, and tab ids change across a browser restart. The pair can swap once after one.[^pin]
+- The restart match prefers the copy of a URL inside the lock's group only among the tabs open when the pass runs. If another copy was matched first and the in-group copy was restored more than a second later, the lock keeps the first one.[^locksync]
 - Locks are keyed by group title. Renaming a group orphans its locks, and every group with that title in any window obeys them. A tab outside a titled group cannot be locked ("Group has no title").[^lock][^pin]
 - The lock vocabulary change is incomplete. Status messages say "Pinned at position…" and "Usage: /pin", and the panel's empty states and buttons still say `/pin`, `/pingroup` and "unpin".[^lock][^pins-panel]
 
 # Tests that guard it
 
 - `lib/pin.test.ts`: `groupStartIndex` slot maths (counted with the group lifted out), `buildGroupOrder`, `unpinTab` by tabId after the URL moved, `syncPinUrl` strips the badge, `clearPinTabIds`.[^pin-test]
+- `lib/pin.test.ts` "reconcilePins": a lock with no tab takes its URL's tab, the in-group copy first, a fallback outside the group, two locks on one URL each get their own tab, a held tab is never handed to a second lock, a closed lock's tab is re-matched, a held tab's URL and title come across without the badge, and no change is reported when nothing moved.[^pin-test]
+- `lib/locksync.test.ts`: the lock follows navigation and is re-badged on load; after a restart each lock finds its restored tab and is badged, then follows it; a sync racing the reset never pulls the lock onto the unrelated tab holding last session's id; a tab restored after the first pass is matched when created or when it finishes loading; a burst is matched in one pass; no query while no lock is waiting.[^locksync-test]
 - `lib/pin.test.ts` "lockedGroupOrder": slots on either side, clamping, the tie-break order, two groups under one title, a shared slot spilling, and the rule mapping its own output to itself.[^pin-test]
 - `lib/pin.test.ts` "applyGroupPinsToWindow": `tabGroups.move` only, planned on one query, rightward and last-slot locks, only the locked group moves, a multi-tab group stays whole, no calls when everything is in place. "applyPinsToGroup": two locks the one-at-a-time version misplaced land in one move, and no move when nothing is out of place.[^pin-test]
 - `lib/tabs/sort.test.ts` "sortTabsInWindow with position locks" (held slot, sorting around it, holding by tabId after navigation, two tab locks on one slot staying put) and "still yields to a position lock".[^sort-test]
@@ -205,6 +226,8 @@ This is the sidebar's "Locks" section. It shows [Sort Priority](/features/sort-p
 [^actions]: lib/actions.ts
 [^popup-app]: entrypoints/popup/App.svelte
 [^bg-index]: entrypoints/background/index.ts
+[^locksync]: lib/locksync.ts
+[^locksync-test]: lib/locksync.test.ts
 [^dedup]: lib/tabs/dedup.ts
 [^readme]: README.md
 [^changelog]: CHANGELOG.md

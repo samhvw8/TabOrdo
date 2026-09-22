@@ -3,7 +3,7 @@ type: Architecture
 title: Architecture overview
 description: How TabOrdo's MV3 entrypoints, lib modules, command dispatch and storage areas fit together, and which realm owns what.
 tags: [architecture, mv3, storage, realms]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-22T12:00:00Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-22T14:00:00Z }
 sources:
   - id: wxt-config
     resource: https://github.com/samhvw8/TabOrdo/blob/main/wxt.config.ts
@@ -12,7 +12,27 @@ sources:
   - id: background
     resource: https://github.com/samhvw8/TabOrdo/blob/main/entrypoints/background/index.ts
     title: Background service worker
-    last_modified: 2026-09-17
+    last_modified: 2026-09-22
+  - id: automation-ts
+    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/automation.ts
+    title: The worker's tab automations
+    last_modified: 2026-09-22
+  - id: locksync-ts
+    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/locksync.ts
+    title: The worker's lock sync and restart reconcile
+    last_modified: 2026-09-22
+  - id: menus-ts
+    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/menus.ts
+    title: Action-icon menu
+    last_modified: 2026-09-22
+  - id: arrange-ts
+    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/arrange.ts
+    title: Group and Sort shared by tiles and menu
+    last_modified: 2026-09-22
+  - id: aigroup-ts
+    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/aigroup.ts
+    title: The /aigroup runner
+    last_modified: 2026-09-22
   - id: popup-app
     resource: https://github.com/samhvw8/TabOrdo/blob/main/entrypoints/popup/App.svelte
     title: Popup and side panel component
@@ -67,7 +87,7 @@ TabOrdo is a Chrome MV3 extension built with WXT, Svelte 5 and TypeScript. Four 
 
 | Entrypoint | Realm | Role |
 |---|---|---|
-| `entrypoints/background/index.ts` | Service worker | Tab listeners (auto-group, auto-sort, auto-ungroup, switch-to-existing, pin follow, lineage), context menus, the auto-discard alarm, and the `/aigroup` runner.[^background] |
+| `entrypoints/background/index.ts` | Service worker | Wiring only. Registers the tab listeners (auto-group, auto-sort, auto-ungroup, switch-to-existing, pin follow, lock sync, lineage), the context menu, the auto-discard alarm and the `/aigroup` runner, and hands each event to a lib function. Only the lineage listeners keep their bodies inline.[^background] |
 | `entrypoints/popup/` | Action popup, 450x600 | Mounts `App.svelte`. Chrome tears it down on any focus loss.[^popup-app] `RulesEditor`, `PinsPanel` and `SettingsPanel` are dynamic imports in their own chunks (75 KB of the 391 KB App chunk), started in `requestIdleCallback` after first paint so a panel opens from a settled promise with no blank frame.[^popup-app] |
 | `entrypoints/sidepanel/` | Side panel | Mounts the **same** `popup/App.svelte` with `fluid: true`.[^sidepanel-main] Declared as `side_panel.default_path` in the manifest.[^wxt-config] |
 | `entrypoints/archive/` | Extension tab page | Browses and restores archived tabs; opened via `chrome.runtime.getURL("/archive.html")`.[^popup-app] |
@@ -80,6 +100,8 @@ Every background listener is registered through `register()`, so one throwing re
 - Every group TabOrdo builds goes through `buildGroup` in `lib/tabs/group.ts`: join a live group, or create one in a window and set its title, colour and collapsed state. `gatherIntoGroup` first moves tabs sitting in other windows, because `chrome.tabs.group` rejects ids that span windows. Undo, the cross-window movers, domain grouping and `/branch` all use them.[^group-ts]
 - `lib/url.ts` holds the two "is this a page" rules, kept apart on purpose. `isSaveablePage` leaves out `chrome://` and `chrome-extension://` pages, for focus mode, the Reading List and `/save`. `isReopenablePage` drops only an empty URL or `chrome://newtab/`, for undo and the archive.[^url-ts]
 - `lib/tabs/tree.ts` write serialisation assumes the background is the only writer. The popup and side panel import the barrel too, so keep `recordOpener` and `forgetTab` calls in the background.[^tabs-barrel]
+- The worker's listener bodies are lib modules: `automation.ts` (auto-group, auto-ungroup, auto-sort, switch-to-existing, pin follow), `locksync.ts`, `discard.ts`, `menus.ts`, `aigroup.ts`, and `selfwrite.ts` for the self-write ledger. They take the worker's in-memory state as a parameter, so tests call them against the stub ([background automation](/features/background-automation.md)).[^automation-ts][^background]
+- `lib/arrange.ts` holds Group and Sort by domain for the dashboard tiles and the action-icon menu, each taking the undo snapshot, so the two surfaces cannot drift apart.[^arrange-ts]
 - `lib/actions.ts` holds `ACTION_HANDLERS`, one async handler per slash command. `lib/commands.ts` is the command catalogue and `lib/dashboard.ts` the dashboard tile catalogue.[^actions-ts][^commit-7e3e91a]
 - Cross-cutting modules: `undo.ts` ([undo stack](/architecture/undo-stack.md)), `bulklock.ts` ([bulk lock](/architecture/bulk-lock.md)), `rules.ts`, `pin.ts`, `archive.ts`, `workspace.ts`, `search.ts`, `ai.ts`, `actionLog.ts`, `url.ts`.
 
@@ -89,8 +111,8 @@ Every background listener is registered through `register()`, so one throwing re
 2. `handleActionCommand` returns early while `busy` is set. It sends `/aigroup` to `startAIGroup()` **before** taking the lock. Everything else sets `busy` and runs `runAction(prefix, ctx)` inside `withBulkLock`.[^popup-app] `runAction` looks up `ACTION_HANDLERS[prefix]` and returns `null` when no handler exists.[^actions-ts]
 3. The handler returns an `ActionResult`: `message`, `acted`, `workspaceChanged`, `results` or `closePopup`. The component turns that into a status flash, an undo-button refresh and a tab reload.[^actions-ts][^popup-app]
 4. **Dashboard tiles** go through `dashAction(fn)`, which uses the same `busy` guard and `withBulkLock`. It refreshes `canUndo` and the tab list even when `fn` throws, because a partial close is a real outcome.[^popup-app] `dashCommand(prefix, query, tabs)` wraps `dashAction` around `runAction`, so a tile and its slash command share one handler. Only some tiles use it (the selection Close and Archive buttons, collapse, extract, branch and others). Several tiles, such as closeleft and dedup, still call `lib` functions inline in `handleOverflowAction`.[^popup-app]
-5. **Context menus** live in the background. Group by domain, dedup and sort run inside `withBulkLock`, the same suppression the palette takes. Without it the automations react to the very mutations those entries make.[^background]
-6. **`/aigroup`** is a `chrome.runtime.sendMessage({ type: "aigroup-start" })` to the background. The background's `runAIGroup` holds and renews its own lease.[^background]
+5. **Context menus** are served by the worker (`lib/menus.ts`). Group by domain, dedup and sort run inside `withBulkLock`, the same suppression the palette takes. Without it the automations react to the very mutations those entries make. Group and Sort call the same `lib/arrange.ts` functions as the dashboard tiles.[^menus-ts][^arrange-ts]
+6. **`/aigroup`** is a `chrome.runtime.sendMessage({ type: "aigroup-start" })` to the background. `runAIGroup` (`lib/aigroup.ts`), run by the worker, holds and renews its own lease.[^aigroup-ts][^background]
 
 # Storage: local vs session
 
@@ -99,7 +121,7 @@ Every background listener is registered through `register()`, so one throwing re
 | `chrome.storage.local` | `rulesConfig`, `pinnedTabs`, `pinnedGroups`, `tabOrdo_archive`, `tabOrdo_archiveCount`, `tabOrdo_actionLog`, `tabOrdo_workspaces`, and popup prefs `collapsedGroups`, `dashboardActionIds`, `onboardingDismissed` | User data and settings that must survive a browser restart. |
 | `chrome.storage.session` | `tabOrdo_undo:<id>`, `bulkOpLock:<owner>`, `tabParents`, `tabOrdo_aiGroupProgress`, `openMode` | State keyed to tab ids or to live runs. Tab ids are per browser session, and the next session reuses the same small range, so a map that outlived the session would point at unrelated tabs.[^tree-ts][^undo-ts] |
 
-Pins are the exception: they sit in `local` with a `tabId`, so the background's `runtime.onStartup` clears those ids and URL matching backfills fresh ones.[^background]
+Pins are the exception: they sit in `local` with a `tabId`, so the worker's `runtime.onStartup` clears those ids, and the worker then matches each lock to its restored tab by URL, once at startup and again as restored tabs are created and load ([position locks](/features/position-locks.md)).[^locksync-ts]
 
 # Realms share storage, not memory
 
@@ -108,7 +130,7 @@ The popup and the side panel are the same component in two realms. Each has its 
 - Any module-level cache of shared state must re-read before it mutates. The undo stack keeps no copy and lists storage each time (see [undo stack](/architecture/undo-stack.md)), and every lock or config setter reads with `fresh` past its cache ([position locks](/features/position-locks.md), [grouping rules](/features/grouping-rules.md)).[^undo-ts][^pin-ts]
 - `chrome.storage.session` has no compare-and-swap. A lock cannot be a refcount or a shared map, which is why the [bulk lock](/architecture/bulk-lock.md) uses one key per owner.
 - The component subscribes to `chrome.storage.onChanged` for `rulesConfig`, the action log, AI progress and the undo stack's entry keys (`touchesUndoStack`), so a side panel left open stays current.[^popup-app][^undo-ts]
-- The background also writes the undo stack: the context-menu dedup calls `closeTabs`, which snapshots.[^background]
+- The background also writes the undo stack: the context-menu dedup calls `closeTabs`, which snapshots, and the menu's Group and Sort snapshot through `lib/arrange.ts`.[^menus-ts][^arrange-ts]
 
 # Related
 
@@ -119,6 +141,11 @@ The popup and the side panel are the same component in two realms. Each has its 
 
 [^wxt-config]: wxt.config.ts
 [^background]: entrypoints/background/index.ts
+[^automation-ts]: lib/automation.ts
+[^locksync-ts]: lib/locksync.ts
+[^menus-ts]: lib/menus.ts
+[^arrange-ts]: lib/arrange.ts
+[^aigroup-ts]: lib/aigroup.ts
 [^popup-app]: entrypoints/popup/App.svelte
 [^sidepanel-main]: entrypoints/sidepanel/main.ts
 [^tabs-barrel]: lib/tabs/index.ts

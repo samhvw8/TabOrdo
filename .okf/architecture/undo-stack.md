@@ -4,8 +4,12 @@ title: Undo stack
 description: lib/undo.ts keeps a 20-entry close/group undo stack in chrome.storage.session, one key per entry, with durable pushes shared across the popup, side panel and background realms.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/undo.ts
 tags: [undo, storage, realms, performance]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-22T12:00:00Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-22T14:00:00Z }
 sources:
+  - id: arrange
+    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/arrange.ts
+    title: lib/arrange.ts (Group and Sort for the tiles and the action-icon menu)
+    last_modified: 2026-09-22
   - id: undo-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/undo.ts
     title: lib/undo.ts
@@ -63,7 +67,7 @@ The per-entry column was measured with a metadata key beside each entry, which t
 | `type` | Written by | `data` |
 |---|---|---|
 | `close` | `snapshotBeforeClose(tabIds)`, called only by [`closeTabs`](/architecture/tab-closing.md) | `ClosedTabData[]`: `url`, `pinned`, `windowId`, `id`, `index`, `groupId`, plus `groupTitle` and `groupColor` when the tab's group has them |
-| `group` | `snapshotBeforeGroup()`, called by the group, ungroup, branch, sort, merge, shuffle and split handlers, their dashboard tiles, and `startAIGroup` | `GroupAssignment[]` for every unpinned tab: `tabId`, `groupId`, `windowId`, `index`, plus `groupTitle` and `groupColor` when the tab's group has them |
+| `group` | `snapshotBeforeGroup()`, called by the group, ungroup, branch, sort, merge, shuffle and split handlers, their dashboard tiles, the action-icon menu's Group and Sort (through `lib/arrange.ts`, shared with their tiles), and `startAIGroup` | `GroupAssignment[]` for every unpinned tab: `tabId`, `groupId`, `windowId`, `index`, plus `groupTitle` and `groupColor` when the tab's group has them |
 
 Chrome clears the session area when the extension updates, reloads or is disabled, and when the browser restarts, so every entry on the stack was written by the running version. Restore code reads no older entry shape, and there is no migration.[^undo-ts] `executeUndo` returns `"Unknown undo type"` for any other type.[^undo-test]
 
@@ -83,7 +87,7 @@ Chrome clears the session area when the extension updates, reloads or is disable
 
 - **Durability before closing.** Chrome tears the popup down on any focus loss, so a fire-and-forget persist could lose the snapshot for anything that hands off to the background, such as `/aigroup`.[^undo-ts] A rejected session write used to let the caller close tabs it had no snapshot for.[^undo-test][^changelog]
 - **One key per entry.** The stack was one array under `tabOrdo_undoStack`, so every push read and rewrote all twenty snapshots, and `onChanged` delivered old and new copies to the service worker and every open surface. Every popup open read the whole array to light one button.[^undo-ts] Per-entry keys also remove the lost-update race the array had: writers only add or remove their own keys, the pattern the [bulk lock](/architecture/bulk-lock.md) moved to for its leases.
-- **No copy in memory.** The popup and side panel are one component in two realms over one persisted stack, and the background is a third writer: the context-menu dedup goes through `closeTabs`.[^background] Each realm used to keep a mirror of entry metadata so `canUndo` could be read synchronously. That meant a metadata key per entry, a refresh before every mutation, and a per-realm `writeChain` so a slow refresh could not roll `canUndo` back. Every UI use of the mirror was one boolean, so `hasUndo()` asks storage instead. The popup's `refreshCanUndo` applies only the newest answer when several are in flight, which is the guarantee the chain gave.[^popup-app]
+- **No copy in memory.** The popup and side panel are one component in two realms over one persisted stack, and the background is a third writer: the context-menu dedup goes through `closeTabs`, and its Group and Sort through `lib/arrange.ts`.[^background][^arrange] Each realm used to keep a mirror of entry metadata so `canUndo` could be read synchronously. That meant a metadata key per entry, a refresh before every mutation, and a per-realm `writeChain` so a slow refresh could not roll `canUndo` back. Every UI use of the mirror was one boolean, so `hasUndo()` asks storage instead. The popup's `refreshCanUndo` applies only the newest answer when several are in flight, which is the guarantee the chain gave.[^popup-app]
 - **Push order without a chain.** A push stamps above the newest entry listed and above its realm's `lastStamp`, so two pushes that overlap in one realm still stack in call order. `writeChain` first went in for that (`1e5a1df`), when two back-to-back snapshots on the array layout each reloaded the same pre-write state and the first entry vanished.[^undo-ts][^undo-test][^commit-1e5a1df]
 
 # executeUndo: close
@@ -146,6 +150,7 @@ What remains after a shuffle is regrouping: a group whose tabs a shuffle scatter
 - [Architecture overview](/architecture/overview.md)
 
 [^undo-ts]: lib/undo.ts
+[^arrange]: lib/arrange.ts
 [^undo-test]: lib/undo.test.ts
 [^popup-app]: entrypoints/popup/App.svelte
 [^background]: entrypoints/background/index.ts
