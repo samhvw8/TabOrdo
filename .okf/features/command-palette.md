@@ -4,7 +4,7 @@ title: Command palette and dashboard actions
 description: How slash commands, @ triage views and dashboard tiles are registered, dispatched to one handler per command, confirmed, and extended.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/actions.ts
 tags: [command-palette, dashboard, actions, triage]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-22T18:00:00Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-22T21:30:00Z }
 sources:
   - id: commands-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/commands.ts
@@ -129,6 +129,8 @@ Handler conventions:
 The views are pure functions in `lib/views.ts`. `resolveView(prefix, q, ctx)` returns `{ rows, empty }` for every prefix the palette ranks locally: the triage views and the bare `@` overview, `/w`, `/p`, `/g`, `/re`, `/rl`, `/rc`, and the target preview under an action command.[^views-ts] `ctx` is what the popup already holds (its `TabSearch`, the current window, the active tab's group) plus the one Chrome read a view needs, which the popup makes for that view alone: the Reading List or recently closed list (once per visit, through `sourceOnce`), `@b`'s branch outline, or the tab groups for `@shared`.[^views-ts][^popup-app] `/b` and `/h` are not views; the popup looks them up in Chrome on a debounce ([search](/features/search.md)).
 
 All triage views are rows in one `TRIAGE_CATEGORIES` table; text after a view re-ranks its tabs through `tabSearch.rankView`, which keeps the view's haystack until its rows change ([search](/features/search.md)). With no text a view lists every row, uncapped, as `/rl` and `/rc` do; only `/w`, `/p` and `/g` stop at 50. A dedicated view sets `empty` only when it has no rows at all, not when the text matched none of them; the bare `@` overview says "No triage matches" instead. The popup flashes `empty` as the status line. The lookup is a `Map` because an object literal would resolve `/constructor` to `Object.prototype`.[^views-ts]
+
+**Nothing typed, 100 rows at most.** A view with no limit of its own (a triage view, the bare `@` overview, `/rl`, `/rc`) lists its first `VIEW_ROW_CAP` (100) rows while the query is empty, then a divider row, "Showing 98 of 817, type to narrow", that counts tab rows only. A section header left at the cut is dropped with it. The bare `@` at 1000 tabs listed 817 rows, all built in the frame of that keystroke: the slowest keystroke measured, 89 ms at normal speed and 369 ms at 4x CPU throttle. Typed text lifts the cap; ranked views stop at 50 anyway.[^views-ts]
 
 `firstSelectable` and `nextSelectable` keep the highlight off the divider rows that the overview and the bookmark/history tail interleave.[^views-ts] `lib/views.test.ts` covers each view's rows and empty line, `@shared` and `@afoo` through `parseCommand`, the overview's order, labels and caps, prefixes named like `Object.prototype` members, and selection over dividers.[^views-test]
 

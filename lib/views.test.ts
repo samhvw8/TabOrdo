@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { createTabSearch } from "./tabsearch.ts";
 import { parseCommand, type SearchResult } from "./search.ts";
-import { resolveView, readingListRows, duplicateTabs, firstSelectable, nextSelectable, type ViewContext } from "./views.ts";
+import { resolveView, readingListRows, duplicateTabs, firstSelectable, nextSelectable, VIEW_ROW_CAP, type ViewContext } from "./views.ts";
 
 function tab(id: number, fields: Partial<SearchResult> = {}): SearchResult {
   return {
@@ -264,5 +264,38 @@ describe("selection over dividers", () => {
     expect(nextSelectable([a, d("x")], 1, 1)).toBe(0);
     expect(nextSelectable([d("x"), a], 0, -1)).toBe(1);
     expect(nextSelectable([d("x"), d("y")], 0, 1)).toBe(0);
+  });
+});
+
+// A bare "@" at 1000 tabs listed 817 rows, all built in the frame of the "@" keystroke.
+describe("views opened with nothing typed", () => {
+  const many = (n: number, fields: Partial<SearchResult> = {}) => Array.from({ length: n }, (_, i) => tab(i + 1, fields));
+
+  it("list the first VIEW_ROW_CAP rows and say how many there are", () => {
+    const rows = view("@a", ctx(many(150, { audible: true }))).rows;
+    expect(rows).toHaveLength(VIEW_ROW_CAP + 1);
+    expect(rows.at(-1)).toMatchObject({ type: "divider", title: `Showing ${VIEW_ROW_CAP} of 150, type to narrow` });
+  });
+
+  it("are not cut once something is typed", () => {
+    const rows = view("@a tab", ctx(many(150, { audible: true }))).rows;
+    expect(rows.every((r) => r.type !== "divider")).toBe(true);
+  });
+
+  it("are left whole under the cap", () => {
+    const rows = view("@a", ctx(many(VIEW_ROW_CAP, { audible: true }))).rows;
+    expect(rows).toHaveLength(VIEW_ROW_CAP);
+    expect(dividers(rows)).toEqual([]);
+  });
+
+  it("count only tab rows, and never end the cut on a section header", () => {
+    // Audio then muted in the overview: a header and 98 audible tabs put the muted header at
+    // row 100, the last row inside the cap.
+    const c = ctx([...many(98, { audible: true }), ...Array.from({ length: 5 }, (_, i) => tab(200 + i, { muted: true }))]);
+    const rows = view("@", c).rows;
+    expect(rows.at(-2)!.type).not.toBe("divider");
+    // The overview's other sections add rows too, so only the shown count is exact here.
+    expect(rows.at(-1)!.title).toMatch(/^Showing 98 of (\d+), type to narrow$/);
+    expect(Number(rows.at(-1)!.title.match(/of (\d+)/)![1])).toBeGreaterThan(98);
   });
 });

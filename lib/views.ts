@@ -92,6 +92,28 @@ const TRIAGE_OVERVIEW = TRIAGE_CATEGORIES.filter((c) => c.overviewTabs);
  * row: 2.6 ms a key for "@u" at 1000 tabs.
  */
 export function resolveView(prefix: string, q: string, ctx: ViewContext): View {
+  const view = resolveRows(prefix, q, ctx);
+  return q ? view : capped(view);
+}
+
+/**
+ * Rows a view lists before anything is typed. The views with no limit of their own (a triage
+ * view, the bare "@" overview, /rl and /rc) listed every match: 817 rows for "@" at 1000 tabs,
+ * all built in the frame of that keystroke. Past this many, typing narrows faster than scrolling.
+ */
+export const VIEW_ROW_CAP = 100;
+
+function capped(view: View): View {
+  if (view.rows.length <= VIEW_ROW_CAP) return view;
+  const rows = view.rows.slice(0, VIEW_ROW_CAP);
+  // A section header cut off from its rows would label nothing.
+  while (rows.at(-1)?.type === "divider") rows.pop();
+  const tabRows = (rs: SearchResult[]) => rs.filter((r) => r.type !== "divider").length;
+  rows.push({ type: "divider", id: "div-view-cap", title: `Showing ${tabRows(rows)} of ${tabRows(view.rows)}, type to narrow`, url: "" });
+  return { ...view, rows };
+}
+
+function resolveRows(prefix: string, q: string, ctx: ViewContext): View {
   const { search } = ctx;
   const triage = TRIAGE_BY_PREFIX.get(prefix);
   if (triage) {
