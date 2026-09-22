@@ -14,7 +14,7 @@
   import { getReadingList } from "../../lib/readinglist.ts";
   import { getRecentlyClosed } from "../../lib/sessions.ts";
   import { withBulkLock } from "../../lib/bulklock.ts";
-  import { checkAIAvailability, getAIProgress, defaultProgress, AI_PROGRESS_KEY, type AIGroupProgress } from "../../lib/ai.ts";
+  import { getAIProgress, defaultProgress, AI_PROGRESS_KEY, type AIGroupProgress } from "../../lib/ai.ts";
   import { getActionLog, ACTION_LOG_KEY, type ActionLogEntry } from "../../lib/actionLog.ts";
   import { groupDotClass, relTime } from "../../lib/format.ts";
   import { runAction, runTile, sortGroup, extractGroup, type ActionContext, type ActionResult } from "../../lib/actions.ts";
@@ -25,7 +25,6 @@
   import ActionButton from "../../components/ActionButton.svelte";
   import TabCard from "../../components/TabCard.svelte";
   import Sidebar, { type SidebarSection } from "../../components/Sidebar.svelte";
-  import OverflowMenu from "../../components/OverflowMenu.svelte";
   import LazyRows from "../../components/LazyRows.svelte";
 
   // Same component serves two surfaces: the popup is a fixed 450x600 sheet, the side panel is
@@ -53,7 +52,6 @@
 
   let showHelp = $state(false);
   let activeSection = $state<SidebarSection>("dashboard");
-  let showActions = $state(false);
 
   let autoGroupEnabled = $state(false);
   let autoUngroupEnabled = $state(false);
@@ -63,12 +61,10 @@
   let autoDiscardEnabled = $state(false);
   let switchToExistingEnabled = $state(false);
   let hasWorkspace = $state(false);
+  // The panel persists, so grabbing focus on open would yank it off the page the user is reading.
   // `fluid` is fixed per mount — the popup and side-panel entrypoints each pass a literal — so
   // seeding from it once is the intent, not a missed derived. Silenced rather than left to sit,
-  // because two standing warnings train you to skim past the next real one.
-  // svelte-ignore state_referenced_locally
-  let inputFocused = $state(!fluid);
-  // The panel persists, so grabbing focus on open would yank it off the page the user is reading.
+  // because a standing warning trains you to skim past the next real one.
   // svelte-ignore state_referenced_locally
   let searchAutofocus = $state(!fluid);
   let canUndo = $state(false);
@@ -149,9 +145,6 @@
       confirmTimer = setTimeout(() => { pendingConfirm = null; }, 3000);
     }
   }
-
-  // Lock helper lives in lib/bulklock.ts — it releases only the lease this call took, so a
-  // quick popup action can no longer unlock a long-running background AI grouping run.
 
   // Every status message goes through here so none can strand on screen. The triage views
   // used to set statusMessage with no timer of their own, leaving "Reading List is empty"
@@ -580,9 +573,7 @@
     if (!ACTION_PREFIXES.has(prefix)) return;
     if (busy) return;
 
-    // Handled before the lock, deliberately. Inside withBulkLock the background's own
-    // acquire lost to the UI lease we were still holding, and our release then cleared the
-    // lock outright — leaving the entire AI run with no suppression at all.
+    // Outside the lock, like every start of a run: the background takes its own (see startAIGroup).
     if (prefix === "aigroup") {
       query = "";
       await startAIGroup();
@@ -826,18 +817,15 @@
     // closed mid-operation, but it also wiped the background's lock during an AI run —
     // and Chrome closes the popup on every focus loss. Lease expiry handles the stranded
     // case now, without one realm clobbering another's lock.
-    // These used to await one after another — a dozen IPC round-trips before the popup was
-    // populated, each waiting on a result the next one did not need. Chrome tears the popup
-    // down on every focus loss, so that cost is paid on every single open. Nothing here
-    // depends on anything else here, so it all goes out at once, and the two storage reads
-    // are batched into one call per area instead of four.
+    //
     // Two tiers, deliberately. Everything used to await in series — a dozen IPC round-trips
     // before anything appeared — and then briefly all in one Promise.all, which is concurrent
     // but still ONE barrier: the tab list waited on the archive count. Chrome tears the popup
     // down on every focus loss, so this is paid on every open.
     //
-    // Tier 1 is what the first useful frame needs. Tier 2 feeds badges and panels that are
-    // off-screen or secondary; each lands on its own and re-renders the one thing it owns.
+    // Tier 1 is what the first useful frame needs, with its storage reads batched into one call
+    // per area. Tier 2 feeds badges and panels that are off-screen or secondary; each lands on
+    // its own and re-renders the one thing it owns.
     const critical = Promise.all([
       loadTabs(),
       chrome.storage.local.get(["rulesConfig", "collapsedGroups", "dashboardActionIds", "onboardingDismissed"]),
@@ -860,7 +848,6 @@
     onboardingDismissed = !!config.onboardingDismissed;
     if (session.openMode === "dashboard") {
       searchAutofocus = false;
-      inputFocused = false;
       chrome.storage.session.remove("openMode").catch(() => {});
     }
     // loadTabs ranks an empty query itself. A query typed before the tabs arrived was ranked
@@ -891,7 +878,6 @@
       listboxId={RESULTS_LISTBOX_ID}
       expanded={paletteVisible && paletteMode === "search" && results.length > 0}
       activeDescendant={activeOptionId}
-      onfocuschange={(f) => { inputFocused = f; }}
       onkeydown={(e) => {
         // Mid-composition the IME owns these keys: arrows walk the pinyin candidate list and
         // Enter commits the word. Acting on them here moved the result selection and switched
