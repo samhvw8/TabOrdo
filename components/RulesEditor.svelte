@@ -3,6 +3,7 @@
   import { getConfig, updateConfig, populateFromCurrentGroups, mergeRules, domainMatches, type GroupRule } from "../lib/rules.ts";
   import { getFullHostname } from "../lib/tabs/index.ts";
   import { createFlash } from "../lib/flash.ts";
+  import { groupDotClass } from "../lib/format.ts";
 
   let {
     onclose,
@@ -21,12 +22,6 @@
   const COLORS: chrome.tabGroups.ColorEnum[] = [
     "blue", "cyan", "green", "yellow", "orange", "pink", "purple", "red", "grey",
   ];
-
-  const colorClasses: Record<string, string> = {
-    blue: "bg-accent-blue", cyan: "bg-accent-cyan", green: "bg-accent-green",
-    yellow: "bg-accent-yellow", orange: "bg-accent-orange", pink: "bg-accent-pink",
-    purple: "bg-accent-purple", red: "bg-accent-red", grey: "bg-border",
-  };
 
   onMount(async () => {
     const config = await getConfig();
@@ -222,7 +217,7 @@
             {:else}
               {@const winner = testerResult.hits[0]}
               <div class="flex items-center gap-1.5">
-                <span class="w-2 h-2 rounded-full shrink-0 {colorClasses[winner.rule.color] || 'bg-border'}"></span>
+                <span class="w-2 h-2 rounded-full shrink-0 {groupDotClass[winner.rule.color] || 'bg-border'}"></span>
                 <span class="font-medium text-text">{winner.rule.name}</span>
                 <span class="text-text-muted">via</span>
                 <span class="font-mono text-text-muted truncate">{winner.pattern}</span>
@@ -259,7 +254,7 @@
         <div class="flex gap-0.5">
           {#each COLORS as c}
             <button
-              class="w-3 h-3 rounded-full transition-all {colorClasses[c]} {rule.color === c ? 'ring-1 ring-white ring-offset-1 ring-offset-surface' : 'opacity-40 hover:opacity-70'}"
+              class="w-3 h-3 rounded-full transition-all {groupDotClass[c]} {rule.color === c ? 'ring-1 ring-white ring-offset-1 ring-offset-surface' : 'opacity-40 hover:opacity-70'}"
               onclick={(e) => { e.stopPropagation(); updateColor(rule.id, c); }}
               title={c}
             ></button>
@@ -309,7 +304,7 @@
       <div class="flex gap-0.5">
         {#each COLORS as c}
           <button
-            class="w-3 h-3 rounded-full transition-all {colorClasses[c]} {newColor === c ? 'ring-1 ring-white ring-offset-1 ring-offset-surface' : 'opacity-40 hover:opacity-70'}"
+            class="w-3 h-3 rounded-full transition-all {groupDotClass[c]} {newColor === c ? 'ring-1 ring-white ring-offset-1 ring-offset-surface' : 'opacity-40 hover:opacity-70'}"
             onclick={() => { newColor = c; }}
             title={c}
           ></button>

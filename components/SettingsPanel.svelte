@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { getConfig, updateConfig, ruleMatches, ruleToRegex, generalizePatterns, type IgnoreRule } from "../lib/rules.ts";
   import { clearActionLog, type ActionLogEntry } from "../lib/actionLog.ts";
+  import { relTime } from "../lib/format.ts";
 
   // App already keeps the log live for its automation strip, so it hands it down rather than
   // this panel holding a second storage subscription.
@@ -29,13 +30,6 @@
     urlList.rules = config.ignorePatterns;
     groupList.rules = config.ignoreGroupNames;
   });
-
-  function formatLogTime(ts: number): string {
-    const diff = Date.now() - ts;
-    if (diff < 60_000) return "just now";
-    if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
-    return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  }
 
   let testerOpen = $state(false);
   let testerPattern = $state("");
@@ -254,7 +248,7 @@
         <div class="flex flex-col gap-0.5 max-h-44 overflow-y-auto">
           {#each actionLog as entry (entry.ts + entry.detail)}
             <div class="flex items-baseline gap-1.5 text-[10px] leading-4">
-              <span class="text-text-muted/70 shrink-0 w-14">{formatLogTime(entry.ts)}</span>
+              <span class="text-text-muted/70 shrink-0 w-14">{relTime(entry.ts)}</span>
               <span class="font-medium text-text shrink-0">{entry.action}</span>
               <span class="text-text-muted truncate" title={entry.detail}>{entry.detail}</span>
             </div>
