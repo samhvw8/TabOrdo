@@ -47,7 +47,7 @@ sources:
 | `tabOrdo_undo:<id>` | The whole `UndoEntry`, snapshot included | `popUndo`, for the top entry only; `peekUndoEntry` |
 | `tabOrdo_undoMeta:<id>` | `{ type, label, timestamp }` | Mirror refreshes, only for ids the realm has not seen |
 
-A push writes both keys in one `set()`. `<id>` is a 16-digit zero-padded timestamp plus a random suffix, so key order is stack order. A realm always stamps above the newest entry it has seen. Two surfaces pushing in the same millisecond order arbitrarily, and both entries survive.[^undo-ts] Entries are listed by name with `storage.session.getKeys()`, which returns no values, and evicted with `remove`. Chrome builds without `getKeys` (before 130) fall back to `get(null)`, the same fallback as the [bulk lock](/architecture/bulk-lock.md).[^undo-ts][^undo-test]
+A push writes both keys in one `set()`. `<id>` is a 16-digit zero-padded timestamp plus a random suffix, so key order is stack order. A realm always stamps above the newest entry it has seen. Two surfaces pushing in the same millisecond order arbitrarily, and both entries survive.[^undo-ts] Entries are listed by name with `storage.session.getKeys()`, which returns no values, and evicted with `remove`.[^undo-ts][^undo-test]
 
 Measured at 1000 tabs with a full stack of 20 group snapshots, using the chrome stub with byte meters:
 
@@ -137,7 +137,7 @@ What remains after a shuffle is regrouping: a group whose tabs a shuffle scatter
 
 # Tests that guard it
 
-`lib/undo.test.ts` covers the cap, the per-entry layout, cross-realm pickup through a second module instance (`vi.resetModules`), two realms pushing onto a nearly full stack at once, a pop the other realm already took, storage cost (a push and a load read no payload, a pop reads only the top one), the `getKeys` fallback, push durability, overlapping pushes, close restore (window, index, group rejoin and rebuild, still-open skip) and group restore (scoping, relocation, window-separated buckets, partial failure). The order-restore tests cover a shuffle undone in at most one move per window with a tab opened since kept, a `/group` whose untouched groups get no ungroup, group or update call, an untouched group moved whole with `tabGroups.move`, a rename-only group restored without a rebuild, and tabs sent back rightward one call each around groups left in place.[^undo-test] `lib/tabs/close.test.ts` covers undo after a refused close.
+`lib/undo.test.ts` covers the cap, the per-entry layout, cross-realm pickup through a second module instance (`vi.resetModules`), two realms pushing onto a nearly full stack at once, a pop the other realm already took, storage cost (a push and a load read no payload, a pop reads only the top one), push durability, overlapping pushes, close restore (window, index, group rejoin and rebuild, still-open skip) and group restore (scoping, relocation, window-separated buckets, partial failure). The order-restore tests cover a shuffle undone in at most one move per window with a tab opened since kept, a `/group` whose untouched groups get no ungroup, group or update call, an untouched group moved whole with `tabGroups.move`, a rename-only group restored without a rebuild, and tabs sent back rightward one call each around groups left in place.[^undo-test] `lib/tabs/close.test.ts` covers undo after a refused close.
 
 # Related
 

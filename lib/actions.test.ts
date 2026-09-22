@@ -358,11 +358,12 @@ describe("/load", () => {
 });
 
 describe("/readlater", () => {
-  it("explains itself when the Reading List API is absent", async () => {
-    expect(await runAction("readlater", ctx())).toEqual({
-      message: "Reading List not available (requires Chrome 120+)",
-      acted: true,
-    });
+  it("adds the matched tabs to the Reading List", async () => {
+    const addEntry = vi.fn(async () => {});
+    (globalThis.chrome as any).readingList = { addEntry };
+    const r = await runAction("readlater", ctx({ matchingTabs: [asResult({ id: 2, url: "https://b.com", title: "B" })] }));
+    expect(r).toEqual({ message: "Added 1 to Reading List", acted: true });
+    expect(addEntry).toHaveBeenCalledWith({ url: "https://b.com", title: "B", hasBeenRead: false });
   });
 });
 

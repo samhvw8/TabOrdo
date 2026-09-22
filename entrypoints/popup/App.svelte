@@ -10,7 +10,7 @@
   import { matchCommands, ALL_COMMANDS, ACTION_COMMANDS, TRIAGE_COMMANDS, CATEGORY_STYLES, groupCommands, type CommandDefinition, type CommandCategory } from "../../lib/commands.ts";
   import { snapshotBeforeGroup, executeUndo, peekUndo, loadUndoStack, touchesUndoStack } from "../../lib/undo.ts";
   import { focusMode, unfocusMode, hasSavedWorkspace, exportTabsToFile, loadTabsFromText } from "../../lib/workspace.ts";
-  import { addTabsToReadingList, isReadingListAvailable, getReadingList } from "../../lib/readinglist.ts";
+  import { addTabsToReadingList, getReadingList } from "../../lib/readinglist.ts";
   import { getRecentlyClosed } from "../../lib/sessions.ts";
   import { withBulkLock } from "../../lib/bulklock.ts";
   import { checkAIAvailability, getAIProgress, defaultProgress, AI_PROGRESS_KEY, type AIGroupProgress } from "../../lib/ai.ts";
@@ -478,7 +478,6 @@
           break;
         }
         case "rl": {
-          if (!isReadingListAvailable()) { results = []; flashStatus("Reading List not available (Chrome 120+)"); break; }
           // Mapped inside the fetch, so every keystroke gets the same row objects and rankView
           // keeps its haystack.
           const rlResults = await sourceOnce("rl", async () => (await getReadingList()).map((item, i) => ({
@@ -748,7 +747,6 @@
       case "pin": goBack(); handlePinCurrent(new MouseEvent("click", { altKey: altPressed })); break;
       case "aigroup": goBack(); await startAIGroup(); break;
       case "readlater": goBack(); dashAction(async () => {
-        if (!isReadingListAvailable()) return "Reading List not available (Chrome 120+)";
         const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
         if (active?.url && active.title) { await addTabsToReadingList([{ url: active.url, title: active.title }]); return "Added to Reading List"; }
         return "No active tab";

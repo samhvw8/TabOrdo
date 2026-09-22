@@ -19,7 +19,7 @@ import {
 import { archiveTabs, isArchivable } from "./archive.ts";
 import { snapshotBeforeGroup } from "./undo.ts";
 import { focusMode, unfocusMode, exportTabsToFile } from "./workspace.ts";
-import { addTabsToReadingList, isReadingListAvailable } from "./readinglist.ts";
+import { addTabsToReadingList } from "./readinglist.ts";
 import { getRecentlyClosed, restoreSession } from "./sessions.ts";
 import { rankedSearch, buildSearchHaystack, type SearchResult } from "./search.ts";
 
@@ -425,9 +425,6 @@ export const ACTION_HANDLERS: Record<string, ActionHandler> = {
   unpingroup: async () => ({ message: await unpinCurrentGroup(), acted: true }),
 
   readlater: async (ctx) => {
-    if (!isReadingListAvailable()) {
-      return { message: "Reading List not available (requires Chrome 120+)", acted: true };
-    }
     if (ctx.tabIds.length > 0) {
       const tabData = ctx.matchingTabs.map((t) => ({ url: t.url, title: t.title }));
       const added = await addTabsToReadingList(tabData);
@@ -461,7 +458,7 @@ export const ACTION_HANDLERS: Record<string, ActionHandler> = {
   },
 
   restore: async () => {
-    const sessions = await chrome.sessions?.getRecentlyClosed?.({ maxResults: 1 }) ?? [];
+    const sessions = await chrome.sessions.getRecentlyClosed({ maxResults: 1 });
     if (sessions.length === 0) return { message: "No recently closed tabs", acted: true };
     const sid = sessions[0].tab?.sessionId || sessions[0].window?.sessionId;
     if (!sid) return { message: "Nothing to restore", acted: true };

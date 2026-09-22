@@ -103,7 +103,7 @@ Each of these fires on the tab events a bulk operation generates. Unchecked, the
 2. **Single owner + expiry** (`c2acffd`) fixed that, with two flaws of its own, fixed by the next step. A losing acquire wrote nothing, so when the incumbent finished first the loser ran unsuppressed. Release on completion also missed the trailing echoes.[^commit-c2acffd][^bulklock-ts]
 3. **Shared map of leases + decaying release** (`7e3e91a`) fixed both. The same change moved a typed `/aigroup` out of the popup's lock. It had started inside it, so the background's acquire lost to the popup's still-held lease, the popup's release then cleared the lock, and the whole run went unprotected. Context-menu bulk actions also gained the lock in that change.[^commit-7e3e91a][^changelog]
 4. **Per-owner keys** (`228e0e4`). Acquire and release each rewrote the whole map, so a release whose read predated a concurrent acquire dropped the AI run's ten-minute lease at the popup-to-background hand-off. The same change made the AI run renew its lease.[^commit-228e0e4][^bulklock-ts]
-5. **Key-only reads** (`f561ea2`). `isBulkLocked` runs per tab update. `storage.session.get(null)` structured-cloned the whole area, undo stack and lineage map included. It now calls `getKeys` (Chrome 130+) and falls back to the full read on older builds.[^commit-f561ea2][^bulklock-test]
+5. **Key-only reads** (`f561ea2`). `isBulkLocked` runs per tab update. `storage.session.get(null)` structured-cloned the whole area, undo stack and lineage map included. It now lists names with `getKeys` and reads only the lock keys. The fallback to the full read for Chrome before 130 went when the minimum became Chrome 138.[^commit-f561ea2][^bulklock-test]
 
 # Gotchas
 
@@ -114,7 +114,7 @@ Each of these fires on the tab events a bulk operation generates. Unchecked, the
 
 # Tests that guard it
 
-`lib/bulklock.test.ts` uses fake timers for the grace window, a short holder acquiring first, a release from a non-holder, expiry, never shortening a lease, release on throw, a nested quick op, a concurrent release against a fresh acquire, and sweep slack. It also checks, through the stub's `storageReads`, that only lock keys are deserialised, including on a build without `getKeys`.[^bulklock-test]
+`lib/bulklock.test.ts` uses fake timers for the grace window, a short holder acquiring first, a release from a non-holder, expiry, never shortening a lease, release on throw, a nested quick op, a concurrent release against a fresh acquire, and sweep slack. It also checks, through the stub's `storageReads`, that only lock keys are deserialised.[^bulklock-test]
 
 # Related
 

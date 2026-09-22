@@ -1,11 +1,6 @@
 import type { SearchResult } from "./search.ts";
 
-function isSessionsAvailable(): boolean {
-  return typeof chrome !== "undefined" && !!chrome.sessions;
-}
-
 export async function getRecentlyClosed(maxResults = 25): Promise<SearchResult[]> {
-  if (!isSessionsAvailable()) return [];
   const sessions = await chrome.sessions.getRecentlyClosed({ maxResults });
   const results: SearchResult[] = [];
 
@@ -36,6 +31,5 @@ export async function getRecentlyClosed(maxResults = 25): Promise<SearchResult[]
 }
 
 export async function restoreSession(sessionId: string): Promise<void> {
-  if (!isSessionsAvailable()) return;
   await chrome.sessions.restore(sessionId);
 }

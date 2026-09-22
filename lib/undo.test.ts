@@ -157,22 +157,6 @@ describe("storage cost", () => {
     await popUndo();
     expect(payloadReads(from)).toEqual([`tabOrdo_undo:${top.id}`]);
   });
-
-  it("still works on a build without getKeys", async () => {
-    const area = chrome.storage.session as unknown as { getKeys?: unknown };
-    const saved = area.getKeys;
-    delete area.getKeys; // Chrome < 130
-    try {
-      const panel = await otherRealm();
-      await panel.loadUndoStack();
-      expect(panel.undoStackSize()).toBe(20);
-      await panel.pushUndo(entry("close", "old chrome"));
-      expect(entryKeys()).toHaveLength(20);
-      expect((await popUndo())?.data).toBe("old chrome");
-    } finally {
-      area.getKeys = saved;
-    }
-  });
 });
 
 describe("executeUndo — close", () => {

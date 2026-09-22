@@ -209,18 +209,4 @@ describe("lease reads stay off the rest of the session area", () => {
 
     expect(stub.storageReads.map((r) => r.keys)).toEqual([["<keys>"]]);
   });
-
-  it("still works on a build without getKeys", async () => {
-    const area = chrome.storage.session as unknown as { getKeys?: unknown };
-    const saved = area.getKeys;
-    delete area.getKeys; // Chrome < 130
-    try {
-      stub.sessionData["bulkOpLock:owner-a"] = Date.now() + 60_000;
-      expect(await isBulkLocked()).toBe(true);
-      delete stub.sessionData["bulkOpLock:owner-a"];
-      expect(await isBulkLocked()).toBe(false);
-    } finally {
-      area.getKeys = saved;
-    }
-  });
 });

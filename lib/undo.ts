@@ -76,22 +76,9 @@ function newEntryId(): string {
   return `${String(stamp).padStart(16, "0")}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-/** Key names in the session area, plus the values when getting the names meant reading them. */
-async function listSession(): Promise<{ names: string[]; values: Record<string, unknown> | null }> {
-  const area = chrome.storage.session;
-  const getKeys = (area as { getKeys?: () => Promise<string[]> }).getKeys;
-  // getKeys is Chrome 130+. Older builds read the whole area, as bulklock.ts does: correct, and
-  // no more expensive than the single-array layout was on every build.
-  if (typeof getKeys !== "function") {
-    const values = await area.get(null);
-    return { names: Object.keys(values), values };
-  }
-  return { names: await getKeys.call(area), values: null };
-}
-
 /** Rebuild the mirror from key names, reading only metadata this realm has not seen yet. */
 async function refreshMirror(): Promise<void> {
-  const { names, values } = await listSession();
+  const names = await chrome.storage.session.getKeys();
   const ids = names
     .filter((k) => k.startsWith(META_PREFIX))
     .map((k) => k.slice(META_PREFIX.length))
@@ -99,7 +86,7 @@ async function refreshMirror(): Promise<void> {
   const known = new Map(mirror.map((m) => [m.id, m]));
   const unseen = ids.filter((id) => !known.has(id));
   if (unseen.length > 0) {
-    const got = values ? values : await chrome.storage.session.get(unseen.map((id) => META_PREFIX + id));
+    const got = await chrome.storage.session.get(unseen.map((id) => META_PREFIX + id));
     for (const id of unseen) {
       const m = got[META_PREFIX + id] as Omit<UndoMeta, "id"> | undefined;
       if (m) known.set(id, { id, type: m.type, label: m.label, timestamp: m.timestamp });

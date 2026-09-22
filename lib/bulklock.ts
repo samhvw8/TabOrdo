@@ -66,18 +66,13 @@ export function newLockOwner(): string {
  * The lock keys and their values, without dragging the rest of the session area along.
  *
  * get(null) deserialises and structured-clones *every* value in the area, and isBulkLocked
- * sits on the auto-group and auto-sort paths — so that clone was happening per tab update,
- * over an area that also holds the undo stack (up to twenty snapshots, each covering every
- * unpinned tab) and the tab-lineage map. getKeys returns names only, so the values we pay to
- * deserialise are just the handful of lock keys.
- *
- * getKeys is Chrome 130+; older builds fall back to the read this replaced.
+ * sits on the auto-group and auto-sort paths, so that would happen per tab update, over an
+ * area that also holds the undo stack and the tab-lineage map. getKeys returns names only, so
+ * the values we pay to deserialise are just the handful of lock keys.
  */
 async function readLockEntries(): Promise<Record<string, unknown>> {
   const area = chrome.storage.session;
-  const getKeys = (area as { getKeys?: () => Promise<string[]> }).getKeys;
-  if (typeof getKeys !== "function") return area.get(null);
-  const names = (await getKeys.call(area)).filter((k) => k.startsWith(LOCK_PREFIX));
+  const names = (await area.getKeys()).filter((k) => k.startsWith(LOCK_PREFIX));
   return names.length > 0 ? area.get(names) : {};
 }
 

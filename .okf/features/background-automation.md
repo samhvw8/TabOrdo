@@ -4,7 +4,7 @@ title: Background automation
 description: The service worker's tab listeners (auto-group, auto-ungroup, auto-sort, pin follow, auto-discard, switch-to-existing, context menus) and the guards that keep them from fighting other extensions or each other.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/entrypoints/background/index.ts
 tags: [background, service-worker, automation, auto-group, coexistence]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-17T10:00:38Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-22T12:00:00Z }
 sources:
   - id: bg-index
     resource: https://github.com/samhvw8/TabOrdo/blob/main/entrypoints/background/index.ts
@@ -122,7 +122,7 @@ The settle window and the self-write ledger came in as a pair: the first general
 
 # Context menus and other listeners
 
-- The action-icon context menu is built in `onInstalled` after `removeAll()`: Group tabs by domain, Remove duplicate tabs, Sort tabs by domain, Save to Reading List (only if `chrome.readingList` exists), Discard inactive tabs, and Open in Side Panel (only if `chrome.sidePanel` exists). The first three run under `withBulkLock`, because without it the automations reacted to the menu's own changes.[^bg-index][^changelog]
+- The action-icon context menu is built in `onInstalled` after `removeAll()`: Group tabs by domain, Remove duplicate tabs, Sort tabs by domain, Save to Reading List, Discard inactive tabs, and Open in Side Panel (only if `chrome.sidePanel` exists). The first three run under `withBulkLock`, because without it the automations reacted to the menu's own changes.[^bg-index][^changelog]
 - `commands.onCommand` `open-dashboard` sets `openMode` in session storage and calls `chrome.action.openPopup()`, removing the flag if that call fails.
 - `runtime.onMessage` `aigroup-start` runs [AI grouping](/features/ai-grouping.md) and always answers. `onStartup` clears stored lock tab ids. Two lineage listeners feed [branch lineage](/features/branch-lineage.md).[^bg-index]
 
