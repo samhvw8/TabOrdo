@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { getAllTabs, switchToTab, closeTabs, sortTabsInWindow, sortTabsInGroup, groupTabsByDomain, ungroupAll, removeDuplicates, mergeAllWindows, extractGroupToWindow, discardTabs, closeTabsToLeft, closeTabsToRight, closeTabsSameSite, closeOldTabs, shuffleTabs, uniteDomain, isolateDomain, splitWindow, splitByDomain, stackWindows, pinCurrentTab, unpinCurrentTab, outlineBranch, type TabInfo } from "../../lib/tabs/index.ts";
+  import { getAllTabs, switchToTab, closeTabs, sortTabsInGroup, groupTabsByDomain, ungroupAll, removeDuplicates, mergeAllWindows, extractGroupToWindow, discardTabs, closeTabsToLeft, closeTabsToRight, closeTabsSameSite, closeOldTabs, shuffleTabs, uniteDomain, isolateDomain, splitWindow, splitByDomain, stackWindows, pinCurrentTab, unpinCurrentTab, outlineBranch, type TabInfo } from "../../lib/tabs/index.ts";
   import { getPinnedTabs, getPinForTab, type PinnedTabEntry } from "../../lib/pin.ts";
   import { getArchiveCount } from "../../lib/archive.ts";
   import { search, tabsToSearchItems, searchBookmarks, searchHistory, parseCommand, type SearchResult } from "../../lib/search.ts";
@@ -13,6 +13,7 @@
   import { addTabsToReadingList, getReadingList } from "../../lib/readinglist.ts";
   import { getRecentlyClosed } from "../../lib/sessions.ts";
   import { withBulkLock } from "../../lib/bulklock.ts";
+  import { groupAllByDomain, sortWindowByDomain } from "../../lib/arrange.ts";
   import { checkAIAvailability, getAIProgress, defaultProgress, AI_PROGRESS_KEY, type AIGroupProgress } from "../../lib/ai.ts";
   import { getActionLog, ACTION_LOG_KEY, type ActionLogEntry } from "../../lib/actionLog.ts";
   import { runAction, mergeStatus, FEEDBACK_URL } from "../../lib/actions.ts";
@@ -749,8 +750,8 @@
       case "load": requestFilePicker(); break;
       case "archive": chrome.tabs.create({ url: chrome.runtime.getURL("/archive.html") }); break;
       case "feedback": chrome.tabs.create({ url: FEEDBACK_URL }); break;
-      case "sort": goBack(); dashAction(async () => { await snapshotBeforeGroup(); await sortTabsInWindow(currentWindowId); return "Sorted"; }); break;
-      case "group": goBack(); dashAction(async () => { await snapshotBeforeGroup(); await groupTabsByDomain("additive"); return "Grouped"; }); break;
+      case "sort": goBack(); dashAction(async () => { await sortWindowByDomain(currentWindowId); return "Sorted"; }); break;
+      case "group": goBack(); dashAction(async () => { await groupAllByDomain(); return "Grouped"; }); break;
       case "dedup": goBack(); dashAction(async () => { const n = await removeDuplicates(); return n > 0 ? `${n} removed` : "No dupes"; }); break;
       case "merge": goBack(); dashAction(async () => { await snapshotBeforeGroup(); return mergeStatus(await mergeAllWindows()); }); break;
       case "pin": goBack(); handlePinCurrent(new MouseEvent("click", { altKey: altPressed })); break;

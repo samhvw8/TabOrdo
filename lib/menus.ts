@@ -1,7 +1,8 @@
 // The two entry points on the action icon that the service worker serves itself: the
 // right-click menu, and the open-dashboard shortcut.
 
-import { groupTabsByDomain, removeDuplicates, sortTabsInWindow } from "./tabs/index.ts";
+import { removeDuplicates } from "./tabs/index.ts";
+import { groupAllByDomain, sortWindowByDomain } from "./arrange.ts";
 import { addToReadingList } from "./readinglist.ts";
 import { withBulkLock } from "./bulklock.ts";
 
@@ -26,14 +27,14 @@ export async function runMenuItem(menuItemId: string | number): Promise<void> {
       // suppression — without it the auto-group/sort/ungroup listeners react to the very
       // mutations these are making. The palette wrapped them; this path never did.
       case "tabOrdo-group-domain":
-        await withBulkLock(() => groupTabsByDomain("additive"));
+        await withBulkLock(() => groupAllByDomain());
         break;
       case "tabOrdo-dedup":
         await withBulkLock(() => removeDuplicates());
         break;
       case "tabOrdo-sort": {
         const win = await chrome.windows.getCurrent();
-        await withBulkLock(() => sortTabsInWindow(win.id!));
+        await withBulkLock(() => sortWindowByDomain(win.id!));
         break;
       }
       case "tabOrdo-readlater": {
