@@ -4,7 +4,7 @@ title: Duplicate tab removal
 description: How /dedup decides two tabs are the same page, which copy survives, where it is triggered from, why the dupe badge and @d agree with it, and how those rules changed between 0.6.0 and the unreleased single close path.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabs/dedup.ts
 tags: [dedup, tabs, position-locks]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-22T06:05:00Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-22T18:00:00Z }
 sources:
   - id: dedup-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabs/dedup.ts
@@ -20,8 +20,8 @@ sources:
     last_modified: 2026-08-03
   - id: actions-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/actions.ts
-    title: /dedup handler
-    last_modified: 2026-09-17
+    title: /dedup handler, runTile
+    last_modified: 2026-09-22
   - id: popup-app
     resource: https://github.com/samhvw8/TabOrdo/blob/main/entrypoints/popup/App.svelte
     title: Dashboard tile and dupe badge
@@ -30,10 +30,10 @@ sources:
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/views.ts
     title: "@d view and duplicateTabs"
     last_modified: 2026-09-22
-  - id: background
-    resource: https://github.com/samhvw8/TabOrdo/blob/main/entrypoints/background/index.ts
-    title: Action context menu
-    last_modified: 2026-09-17
+  - id: menus-ts
+    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/menus.ts
+    title: Action context menu (runMenuItem)
+    last_modified: 2026-09-22
   - id: dedup-test
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabs/dedup.test.ts
     title: Dedup tests
@@ -108,14 +108,14 @@ For each lock entry, look only at the bucket's tabs whose group title equals the
 | Trigger | Path | Status text |
 |---------|------|-------------|
 | `/dedup` in the palette | `ACTION_HANDLERS.dedup` → `removeDuplicates`, inside the bulk lock, no confirmation | "Removed N duplicate(s)" / "No duplicates found"[^actions-ts] |
-| Dashboard Dedup tile, More panel row | `handleOverflowAction("dedup")` → `removeDuplicates`, needs a second click | "N removed" / "No dupes"[^popup-app] |
-| Action context menu "Remove duplicate tabs" | Background `contextMenus.onClicked` → `withBulkLock(removeDuplicates)` | None; errors go to the console[^background] |
+| Dashboard Dedup tile, More panel row | `handleOverflowAction("dedup")` → `dashTile` → `runTile("dedup")`, which runs the `/dedup` handler inside the bulk lock; needs a second click | "Removed N duplicate(s)" / "No duplicates found", the same as `/dedup`[^popup-app][^actions-ts] |
+| Action context menu "Remove duplicate tabs" | `runMenuItem` in `lib/menus.ts` → `withBulkLock(removeDuplicates)` | None; errors go to the console[^menus-ts] |
 
 All three reach `closeTabs`, so all three get an undo snapshot and per-tab closing. Text after `/dedup` is ignored; the handler takes no arguments.[^actions-ts]
 
 # Gotchas
 
-- The "N dupes" badge counts every copy, the survivors included, while `/dedup` reports how many it closed. Two copies of one page show "2 dupes" and then "1 removed".[^popup-app][^actions-ts]
+- The "N dupes" badge counts every copy, the survivors included, while `/dedup` reports how many it closed. Two copies of one page show "2 dupes" and then "Removed 1 duplicate(s)".[^popup-app][^actions-ts]
 - A lock entry matched by URL compares the stored raw URL, not the normalised one.[^dedup-ts]
 - When Chrome refuses a duplicate (a tab being dragged, for instance), the rest still close and the command then throws, so the palette shows `Error: N tab(s) could not be closed: …`.[^dedup-test][^close-ts][^popup-app]
 
@@ -153,7 +153,7 @@ All three reach `closeTabs`, so all three get an undo snapshot and per-tab closi
 [^actions-ts]: lib/actions.ts
 [^popup-app]: entrypoints/popup/App.svelte
 [^views-ts]: lib/views.ts
-[^background]: entrypoints/background/index.ts
+[^menus-ts]: lib/menus.ts
 [^dedup-test]: lib/tabs/dedup.test.ts
 [^changelog]: CHANGELOG.md
 [^commit-7e3e91a]: commit 7e3e91a

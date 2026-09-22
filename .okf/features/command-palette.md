@@ -4,7 +4,7 @@ title: Command palette and dashboard actions
 description: How slash commands, @ triage views and dashboard tiles are registered, dispatched to one handler per command, confirmed, and extended.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/actions.ts
 tags: [command-palette, dashboard, actions, triage]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-22T06:20:00Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-22T18:00:00Z }
 sources:
   - id: commands-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/commands.ts
@@ -79,7 +79,7 @@ Every label is derived from what you type (`/close`, `@a`), and an alias's descr
 
 The handlers are not in the rows because `lib/commands.ts` must stay a leaf. `lib/search.ts` imports it for `parseCommand`, and the handlers import `lib/tabs`, the workspace and session stores and `lib/search.ts` itself (`/recent` ranks with `rankedSearch`). Rows holding handlers would make commands → actions → search → commands a cycle, and `search.ts` reads `TRIAGE_COMMANDS` while it loads. Instead the two handler records are typed `Record<HandledCommand, ActionHandler>` and `Record<OwnTile, ActionHandler>`, with both key types derived from the table, so a row without a handler, or a handler without a row, fails `npm run check`.[^commands-ts][^actions-ts]
 
-The triage views still live in `App.svelte`, and so does the tile click dispatcher, `handleOverflowAction`, for the few tiles that need component state.[^popup-app]
+The triage views live in `lib/views.ts` (see Triage views below).[^views-ts] The tile click dispatcher, `handleOverflowAction`, stays in `App.svelte` for the few tiles that need component state.[^popup-app]
 
 # Behaviour
 
@@ -88,6 +88,7 @@ The triage views still live in `App.svelte`, and so does the tile click dispatch
 - `parseCommand` matches the longest known `@` prefix, so `@shared` is not swallowed by `@s` and `@afoo` still means `@a` + `foo`. Slash input is `/(\w+)\s*(.*)`.[^search-ts]
 - `matchCommands`: bare `/` lists every non-hidden command; typed text matches a prefix start or label substring, then falls back to an in-order character match on prefix or description. Hidden aliases resolve once typed.[^commands-ts]
 - Hints show only while the input has no space. `Tab` completes the highlighted hint; `Enter` on a parsed action prefix runs it.[^popup-app]
+- The Help panel lists every command through the same `CommandHints` component, with no row highlighted; picking one fills the palette as a hint does.[^popup-app]
 
 ## Running an action (`handleActionCommand`)
 
@@ -95,6 +96,8 @@ The triage views still live in `App.svelte`, and so does the tile click dispatch
 2. Inside `withBulkLock`, `rankTabs(query)` builds `matchingTabs`: the top 50 ranked rows backed by a tab; an empty query matches nothing.
 3. `runAction(prefix, ctx)` returns an `ActionResult`, or `null` when no handler exists.
 4. `closePopup` closes the window; a defined `message` flashes; `results` replaces the list; `workspaceChanged` re-reads `hasSavedWorkspace()`; `acted` clears the query, refreshes undo state and reloads tabs. A throw shows `Error: …` for 5 s.[^popup-app]
+
+The query is cleared through `setQuery("")`, on the `/aigroup` path too, because it re-ranks: a bare `query = ""` left the palette in hint mode with the old hint selected, so a second Enter after `/aigroup` put "/aigroup " back in the box.[^popup-app]
 
 | `ActionContext` | Meaning[^actions-ts] |
 |-----------------|---------|
@@ -142,7 +145,7 @@ All triage views are rows in one `TRIAGE_CATEGORIES` table; text after a view re
 - The More panel lists every tile under the palette's browse clusters, in `ACTION_GROUP_ORDER` and table order.[^dashboard-ts]
 - Selection bar: Close, Archive and Discard run the `/close`, `/archive` and `/discard` handlers on the ticked tabs; that is how the Archive button, which used to close with no undo snapshot, got one.[^popup-app][^commit-54b3787]
 - A group header's Sort and Extract run `sortGroup` and `extractGroup` from `lib/actions.ts`, which snapshot first like the handlers.[^actions-ts]
-- Tiles with `confirm` in the table (`merge`, `dedup`, `closeleft`, `closeright`, `closeold`, `closesite`, and `focus` only while no workspace is saved) arm on the first click (label "Confirm") and run on a second within 3 s. Selection Close confirms too; selection Archive does not.[^commands-ts][^popup-app] Typed commands never confirm: typing is already deliberate.[^changelog]
+- Tiles with `confirm` in the table (`merge`, `dedup`, `closeleft`, `closeright`, `closeold`, `closesite`, and `focus` only while no workspace is saved) arm on the first click (label "Confirm") and run on a second within 3 s. Selection Close confirms too; selection Archive does not. Both go through one helper, `confirmed(id)`.[^commands-ts][^popup-app] Typed commands never confirm: typing is already deliberate.[^changelog]
 
 # Invariants
 
