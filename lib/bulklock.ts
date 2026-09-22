@@ -1,47 +1,14 @@
 // Suppresses the background auto-group / auto-sort / auto-ungroup listeners while a bulk
 // operation rearranges tabs.
 //
-// This used to be a bare `bulkOpInProgress: true|false` in chrome.storage.session with no
-// notion of who held it, written from three places across two realms (the popup and the
-// side panel are the same component, so popup writers exist twice over). Any popup bulk
-// action finishing — or merely reopening the popup, which reset the flag on mount — cleared
-// a lock the service worker was still holding for a multi-second AI grouping run.
-//
-// A refcount cannot fix that: chrome.storage.session has no compare-and-swap, so two realms
-// doing read-increment-write both read the same value and both write the same result.
-//
-// A SINGLE owner token plus an expiry was the next attempt, and it was still wrong in two
-// ways that a code review caught before either bit a user:
-//
-//  1. A losing acquire wrote nothing, so the loser had no lease of its own — and when the
-//     incumbent finished first it removed the key, leaving the loser's operation running
-//     completely unsuppressed. The old header claimed suppression "covers the union of both
-//     operations"; it covers the union only when the first acquirer happens to finish last.
-//     That is exactly backwards for the case that matters: a quick popup action taken just
-//     before a ten-minute AI run.
-//  2. Release was mistimed regardless of ownership. Chrome dispatches the onUpdated echoes of
-//     a bulk operation AFTER the call that caused them resolves, and scheduleAutoUngroup
-//     debounces 150ms before it checks — by which point a release-on-completion lock is
-//     already gone. Background-originated writes were covered by the separate selfWrites
-//     ledger; popup-originated ones were covered by nothing.
-//
-// A SET of leases in one shared map fixed both, but left one lost-update race standing:
-// acquire and release each rewrote the whole map, so a release whose read predated a
-// concurrent acquire wrote the map back without the new lease — silently dropping, say, the
-// AI run's ten-minute lease at the exact popup→background hand-off, leaving the run
-// unsuppressed for its full duration. (The old header claimed every race "fails toward
-// suppressing slightly too long"; that interleaving failed the other way.)
-//
-// So: one lease PER OWNER, each in its own storage key, and release DECAYS its own entry to
-// a short grace window rather than deleting it. Acquire always succeeds, so no operation can
-// end up unsuppressed — and since no writer ever touches another owner's key, there is no
-// shared map to lose an update on. Expired keys are swept opportunistically, and only once
-// they are stale by a wide margin, so a sweep can never race a live renewal.
+// One lease per owner, each under its own session key, because chrome.storage.session has no
+// compare-and-swap: a writer that touches only its own key has no shared value to lose an
+// update on, and an acquire that always succeeds leaves no operation unsuppressed. Release
+// decays the lease to a short grace window instead of deleting it, to cover Chrome's trailing
+// onUpdated echoes. The designs this replaced, and the bug each one had, are in
+// .okf/architecture/bulk-lock.md.
 
 const LOCK_PREFIX = "bulkOpLock:";
-/** The pre-per-owner-key shape (single owner or owner→expiry map) under one shared key.
- *  Still honoured on read so a lease from before an extension reload keeps suppressing. */
-const LEGACY_LOCK_KEY = "bulkOpLock";
 /** Sweep a key only once it has been expired at least this long — no live flow renews or
  *  releases a lease this stale, so sweeping can't clobber a concurrent write. */
 const SWEEP_SLACK_MS = 60 * 1000;
@@ -69,20 +36,13 @@ export function newLockOwner(): string {
  * The lock keys and their values, without dragging the rest of the session area along.
  *
  * get(null) deserialises and structured-clones *every* value in the area, and isBulkLocked
- * sits on the auto-group and auto-sort paths — so that clone was happening per tab update,
- * over an area that also holds the undo stack (up to twenty snapshots, each covering every
- * unpinned tab) and the tab-lineage map. getKeys returns names only, so the values we pay to
- * deserialise are just the handful of lock keys.
- *
- * getKeys is Chrome 130+; older builds fall back to the read this replaced.
+ * sits on the auto-group and auto-sort paths, so that would happen per tab update, over an
+ * area that also holds the undo stack and the tab-lineage map. getKeys returns names only, so
+ * the values we pay to deserialise are just the handful of lock keys.
  */
 async function readLockEntries(): Promise<Record<string, unknown>> {
   const area = chrome.storage.session;
-  const getKeys = (area as { getKeys?: () => Promise<string[]> }).getKeys;
-  if (typeof getKeys !== "function") return area.get(null);
-  const names = (await getKeys.call(area)).filter(
-    (k) => k.startsWith(LOCK_PREFIX) || k === LEGACY_LOCK_KEY
-  );
+  const names = (await area.getKeys()).filter((k) => k.startsWith(LOCK_PREFIX));
   return names.length > 0 ? area.get(names) : {};
 }
 
@@ -94,28 +54,12 @@ async function readAllLeases(): Promise<{ leases: Leases; staleKeys: string[] }>
     const staleKeys: string[] = [];
     const staleCutoff = Date.now() - SWEEP_SLACK_MS;
     for (const [key, value] of Object.entries(all)) {
-      if (key.startsWith(LOCK_PREFIX)) {
-        if (typeof value === "number") {
-          leases[key.slice(LOCK_PREFIX.length)] = value;
-          if (value < staleCutoff) staleKeys.push(key);
-        } else {
-          staleKeys.push(key);
-        }
-      } else if (key === LEGACY_LOCK_KEY && value && typeof value === "object" && !Array.isArray(value)) {
-        const raw = value as Record<string, unknown>;
-        let allStale = true;
-        if (typeof raw.owner === "string" && typeof raw.expiresAt === "number") {
-          leases[raw.owner] = raw.expiresAt;
-          allStale = raw.expiresAt < staleCutoff;
-        } else {
-          for (const [owner, expiresAt] of Object.entries(raw)) {
-            if (typeof expiresAt === "number") {
-              leases[owner] = expiresAt;
-              if (expiresAt >= staleCutoff) allStale = false;
-            }
-          }
-        }
-        if (allStale) staleKeys.push(key);
+      if (!key.startsWith(LOCK_PREFIX)) continue;
+      if (typeof value === "number") {
+        leases[key.slice(LOCK_PREFIX.length)] = value;
+        if (value < staleCutoff) staleKeys.push(key);
+      } else {
+        staleKeys.push(key);
       }
     }
     return { leases, staleKeys };

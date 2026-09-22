@@ -1,15 +1,15 @@
 ---
 type: Feature
 title: Duplicate tab removal
-description: How /dedup decides two tabs are the same page, which copy survives, where it is triggered from, and how those rules changed between 0.6.0 and the unreleased single close path.
+description: How /dedup decides two tabs are the same page, which copy survives, where it is triggered from, why the dupe badge and @d agree with it, and how those rules changed between 0.6.0 and the unreleased single close path.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabs/dedup.ts
 tags: [dedup, tabs, position-locks]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-17T00:16:05Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-22T18:00:00Z }
 sources:
   - id: dedup-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabs/dedup.ts
     title: Duplicate finding and removal
-    last_modified: 2026-09-17
+    last_modified: 2026-09-22
   - id: close-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabs/close.ts
     title: closeTabs
@@ -20,20 +20,24 @@ sources:
     last_modified: 2026-08-03
   - id: actions-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/actions.ts
-    title: /dedup handler
-    last_modified: 2026-09-17
+    title: /dedup handler, runTile
+    last_modified: 2026-09-22
   - id: popup-app
     resource: https://github.com/samhvw8/TabOrdo/blob/main/entrypoints/popup/App.svelte
-    title: Dashboard tile, @d view and dupe badge
-    last_modified: 2026-09-17
-  - id: background
-    resource: https://github.com/samhvw8/TabOrdo/blob/main/entrypoints/background/index.ts
-    title: Action context menu
-    last_modified: 2026-09-17
+    title: Dashboard tile and dupe badge
+    last_modified: 2026-09-22
+  - id: views-ts
+    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/views.ts
+    title: "@d view and duplicateTabs"
+    last_modified: 2026-09-22
+  - id: menus-ts
+    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/menus.ts
+    title: Action context menu (runMenuItem)
+    last_modified: 2026-09-22
   - id: dedup-test
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabs/dedup.test.ts
     title: Dedup tests
-    last_modified: 2026-09-17
+    last_modified: 2026-09-22
   - id: changelog
     resource: https://github.com/samhvw8/TabOrdo/blob/main/CHANGELOG.md
     title: CHANGELOG
@@ -66,7 +70,7 @@ sources:
 
 # Overview
 
-`removeDuplicates()` reads every tab in every window, buckets them by normalised URL, keeps one tab per bucket and hands the rest to `closeTabs`. It returns how many are no longer open.[^dedup-ts] Closing, undo snapshots and refusal handling belong to [tab closing](/architecture/tab-closing.md); this concept covers identity and the survivor.
+`removeDuplicates()` reads every tab in every window, buckets them by normalised URL with `findDuplicateGroups`, keeps one tab per bucket and hands the rest to `closeTabs`. It returns how many are no longer open.[^dedup-ts] Closing, undo snapshots and refusal handling belong to [tab closing](/architecture/tab-closing.md); this concept covers identity and the survivor.
 
 # URL identity (`normalizeUrl`)
 
@@ -79,6 +83,8 @@ sources:
 | Unparseable URL | Never treated as duplicates |
 
 So `youtube.com/watch?v=A` and `?v=B` are different pages, while a link shared with `?utm_source=x` still matches the original. Tracking parameters "identify the click, not the page".[^dedup-ts][^dedup-test]
+
+`findDuplicateGroups(tabs)` is the one place this rule is applied. It is pure and takes anything with a `url`, so `/dedup` runs it over `TabInfo`s and the popup's "N dupes" badge and `@d` view run it over search rows, through `duplicateTabs` in `lib/views.ts`. A copy the badge counts is one `/dedup` acts on, and the reverse.[^dedup-ts][^views-ts][^popup-app][^dedup-test]
 
 # Survivor policy
 
@@ -102,14 +108,14 @@ For each lock entry, look only at the bucket's tabs whose group title equals the
 | Trigger | Path | Status text |
 |---------|------|-------------|
 | `/dedup` in the palette | `ACTION_HANDLERS.dedup` → `removeDuplicates`, inside the bulk lock, no confirmation | "Removed N duplicate(s)" / "No duplicates found"[^actions-ts] |
-| Dashboard Dedup tile, More panel row | `handleOverflowAction("dedup")` → `removeDuplicates`, needs a second click | "N removed" / "No dupes"[^popup-app] |
-| Action context menu "Remove duplicate tabs" | Background `contextMenus.onClicked` → `withBulkLock(removeDuplicates)` | None; errors go to the console[^background] |
+| Dashboard Dedup tile, More panel row | `handleOverflowAction("dedup")` → `dashTile` → `runTile("dedup")`, which runs the `/dedup` handler inside the bulk lock; needs a second click | "Removed N duplicate(s)" / "No duplicates found", the same as `/dedup`[^popup-app][^actions-ts] |
+| Action context menu "Remove duplicate tabs" | `runMenuItem` in `lib/menus.ts` → `withBulkLock(removeDuplicates)` | None; errors go to the console[^menus-ts] |
 
 All three reach `closeTabs`, so all three get an undo snapshot and per-tab closing. Text after `/dedup` is ignored; the handler takes no arguments.[^actions-ts]
 
 # Gotchas
 
-- `@d` and the dashboard's "N dupes" badge use `findDuplicateTabs` in `App.svelte`, which compares raw URLs. Copies differing only by tracking parameters are not listed there but `/dedup` closes them; duplicate `chrome://` pages are listed but `/dedup` never touches them.[^popup-app][^dedup-ts]
+- The "N dupes" badge counts every copy, the survivors included, while `/dedup` reports how many it closed. Two copies of one page show "2 dupes" and then "Removed 1 duplicate(s)".[^popup-app][^actions-ts]
 - A lock entry matched by URL compares the stored raw URL, not the normalised one.[^dedup-ts]
 - When Chrome refuses a duplicate (a tab being dragged, for instance), the rest still close and the command then throws, so the palette shows `Error: N tab(s) could not be closed: …`.[^dedup-test][^close-ts][^popup-app]
 
@@ -123,6 +129,7 @@ All three reach `closeTabs`, so all three get an undo snapshot and per-tab closi
 | 0.7.1 | `013f617` | A pin picks the survivor instead of exempting the copy: exactly one copy stays, Chrome pin and lock ranked equal, most recent among equals. This replaced 0.6.0's "never closes a Chrome-pinned tab".[^commit-013f617][^changelog] |
 | 0.7.2 | `acffcde` | The kill list went through `closeTabs` per id instead of one `tabs.remove(array)`, and the count became what actually closed.[^commit-acffcde] |
 | Unreleased | `54b3787` | The snapshot moved from `removeDuplicates` into `closeTabs`; a refused tab is an error again (0.7.2 reported "No duplicates found"); undo restores only tabs that are actually gone.[^commit-54b3787][^changelog] |
+| Unreleased | | The badge and `@d` group through `findDuplicateGroups`. They had compared raw URLs, so the badge could report "2 dupes" for copies differing only by tracking parameters, then `/dedup` closed them, or count duplicate `chrome://` pages that `/dedup` answered "No dupes" to.[^dedup-ts][^popup-app] |
 
 `54b3787` also corrected 0.7.2's diagnosis. `acffcde` said Chrome rejects an id array outright and removes nothing. Chromium in fact removes in order and stops at the first failure; the test stub had modelled the wrong behaviour and 0.7.2 was validated against it.[^commit-acffcde][^commit-54b3787] See [chrome stub](/testing/chrome-stub.md).
 
@@ -131,6 +138,7 @@ All three reach `closeTabs`, so all three get an undo snapshot and per-tab closi
 `lib/tabs/dedup.test.ts` covers:[^dedup-test]
 
 - Identity: query strings and hashes distinguish pages; tracking-only differences do not.
+- Grouping: `findDuplicateGroups` leaves single tabs, browser pages and unparseable URLs out, and finds exactly the copies `removeDuplicates` closes.
 - Survivor: most recent copy when none is pinned; a pinned copy beats a more recent unpinned one; most recent when all are pinned; a Chrome pin and a lock tie and recency settles it; lock resolved by tab id when its URL is stale; a second copy inside the locked group still closes; a lock in another group is ignored.
 - Closing: a close snapshot that undo reopens; no snapshot when nothing closes; the rest close when one id has already gone; a refused duplicate throws after the rest close.
 
@@ -144,7 +152,8 @@ All three reach `closeTabs`, so all three get an undo snapshot and per-tab closi
 [^pin-ts]: lib/pin.ts
 [^actions-ts]: lib/actions.ts
 [^popup-app]: entrypoints/popup/App.svelte
-[^background]: entrypoints/background/index.ts
+[^views-ts]: lib/views.ts
+[^menus-ts]: lib/menus.ts
 [^dedup-test]: lib/tabs/dedup.test.ts
 [^changelog]: CHANGELOG.md
 [^commit-7e3e91a]: commit 7e3e91a

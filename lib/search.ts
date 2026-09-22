@@ -23,8 +23,6 @@ export interface SearchResult {
   muted?: boolean;
 }
 
-export type SearchMode = "fuzzy" | "exact" | "regex" | "prefix";
-
 const fuzzy = new uFuzzy({
   intraMode: 1,
   intraIns: 1,
@@ -90,34 +88,30 @@ export function stripDiacritics(s: string): string {
     .replace(/[đĐ]/g, "d");
 }
 
-export function search(
-  haystack: string[],
-  needle: string,
-  mode: SearchMode = "fuzzy",
-  limit = 50,
-  recency?: number[]
-): number[] {
+/** `/re`: entries matching `needle` as a case-insensitive regex, most recent first. */
+export function regexSearch(haystack: string[], needle: string, limit = 50, recency?: number[]): number[] {
   if (!needle.trim()) {
     return recencyOrder(haystack.length, recency, limit);
   }
-
+  if (needle.length > 100) return [];
+  // The deadline below only helps between tests — a single test on a nested quantifier such
+  // as `(a+)+$` never returns to be timed. Best-effort heuristic; see rules.ts.
+  if (hasNestedQuantifier(needle)) return [];
+  let re: RegExp;
+  try {
+    re = new RegExp(needle, "i");
+  } catch {
+    return [];
+  }
   // With recency, scan the full haystack so a recent match past the limit window isn't cut off.
   const scanLimit = recency ? haystack.length : limit;
-
-  switch (mode) {
-    case "fuzzy":
-      // uFuzzy's term matching only handles space-delimited scripts; CJK needles use substring matching.
-      if (hasChinese(needle)) {
-        return sortByRecency(exactSearch(haystack, needle, scanLimit), recency).slice(0, limit);
-      }
-      return fuzzySearch(haystack, needle, limit);
-    case "exact":
-      return sortByRecency(exactSearch(haystack, needle, scanLimit), recency).slice(0, limit);
-    case "prefix":
-      return sortByRecency(prefixSearch(haystack, needle, scanLimit), recency).slice(0, limit);
-    case "regex":
-      return sortByRecency(regexSearch(haystack, needle, scanLimit), recency).slice(0, limit);
+  const results: number[] = [];
+  const deadline = Date.now() + 50;
+  for (let i = 0; i < haystack.length && results.length < scanLimit; i++) {
+    if (re.test(haystack[i])) results.push(i);
+    if (Date.now() > deadline) break;
   }
+  return sortByRecency(results, recency).slice(0, limit);
 }
 
 /**
@@ -296,26 +290,6 @@ function prefixSearch(haystack: string[], needle: string, limit: number): number
   const results: number[] = [];
   for (let i = 0; i < words.length && results.length < limit; i++) {
     if (words[i].some((w) => w.startsWith(q))) results.push(i);
-  }
-  return results;
-}
-
-function regexSearch(haystack: string[], needle: string, limit: number): number[] {
-  if (needle.length > 100) return [];
-  // The deadline below only helps between tests — a single test on a nested quantifier such
-  // as `(a+)+$` never returns to be timed. Best-effort heuristic; see rules.ts.
-  if (hasNestedQuantifier(needle)) return [];
-  let re: RegExp;
-  try {
-    re = new RegExp(needle, "i");
-  } catch {
-    return [];
-  }
-  const results: number[] = [];
-  const deadline = Date.now() + 50;
-  for (let i = 0; i < haystack.length && results.length < limit; i++) {
-    if (re.test(haystack[i])) results.push(i);
-    if (Date.now() > deadline) break;
   }
   return results;
 }

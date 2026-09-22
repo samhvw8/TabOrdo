@@ -48,7 +48,12 @@ export interface RulesConfig {
   sortRules: SortRule[];
 }
 
-const STORAGE_KEY = "groupRules";
+/** The rulesConfig switches the dashboard's toggle row flips. Each is off by default. */
+export type AutomationFlag =
+  "useRules" | "autoGroup" | "autoUngroup" | "autoSort" | "autoPinFollow" | "autoDiscard" | "switchToExisting";
+
+export type AutomationFlags = Record<AutomationFlag, boolean>;
+
 const CONFIG_KEY = "rulesConfig";
 
 function normalizeIgnoreRules(raw: unknown): IgnoreRule[] {
@@ -86,22 +91,9 @@ function normalizeSortRules(raw: unknown): SortRule[] {
   }).filter((x): x is SortRule => x !== null);
 }
 
-// The service worker wakes for every tab event and several listeners each need the config,
-// so an uncached read costs 3+ storage round-trips per keystroke-speed event. The cache is
-// only armed once we've subscribed to invalidations — a context without storage.onChanged
-// (e.g. the test stub) keeps reading straight through.
-let cachedConfig: RulesConfig | null = null;
-let cacheArmed = false;
-
-try {
-  chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === "local" && changes[CONFIG_KEY]) cachedConfig = null;
-  });
-  cacheArmed = true;
-} catch {}
-
-export async function getConfig(fresh = false): Promise<RulesConfig> {
-  if (!fresh && cacheArmed && cachedConfig) return structuredClone(cachedConfig);
+// Read from storage every time: a read costs about 0.15 ms, and the popup, the side panel and
+// the worker all write this key, so a copy kept in any one of them can go stale.
+export async function getConfig(): Promise<RulesConfig> {
   const data = await chrome.storage.local.get(CONFIG_KEY);
   if (data[CONFIG_KEY]) {
     const stored = data[CONFIG_KEY];
@@ -123,131 +115,41 @@ export async function getConfig(fresh = false): Promise<RulesConfig> {
       ignoreGroupNames: normalizeIgnoreRules(stored.ignoreGroupNames),
       sortRules: normalizeSortRules(stored.sortRules),
     };
-    cachedConfig = normalized;
-    return structuredClone(normalized);
+    return normalized;
   }
   const config: RulesConfig = { rules: [], autoGroup: false, autoUngroup: false, useRules: false, autoSort: false, autoPinFollow: false, autoDiscard: false, switchToExisting: false, useAI: false, ignorePatterns: [], ignoreGroupNames: [], sortRules: [] };
   await saveConfig(config);
-  return structuredClone(config);
+  return config;
 }
 
-export async function saveConfig(config: RulesConfig): Promise<void> {
-  const plain = JSON.parse(JSON.stringify(config));
-  // Prime the cache only once the write is durable. Priming first meant a rejected set()
-  // (quota, or "Extension context invalidated") left a config that was never persisted and
-  // that no storage.onChanged would ever invalidate — the next writer would then read that
-  // phantom and launder it into storage.
-  try {
-    await chrome.storage.local.set({ [CONFIG_KEY]: plain });
-    cachedConfig = plain;
-  } catch (e) {
-    cachedConfig = null;
-    throw e;
-  }
+async function saveConfig(config: RulesConfig): Promise<void> {
+  // Plain data: the panels hand in Svelte state, and storage cannot clone a proxy.
+  await chrome.storage.local.set({ [CONFIG_KEY]: JSON.parse(JSON.stringify(config)) });
 }
 
-// Every toggle is a read-modify-write of one shared object. Serializing them keeps two
+// Every write is a read-modify-write of one shared object. Serializing them keeps two
 // rapid toggles in THIS context from racing, where the second read happens before the
 // first write lands and silently reverts it.
 let writeChain: Promise<unknown> = Promise.resolve();
 
-async function updateConfig(mutate: (config: RulesConfig) => void): Promise<void> {
+/**
+ * Change the stored config: merge `change` into it, or, for an edit that depends on what is
+ * stored (merging two rules, appending one), run it against the stored value.
+ */
+export async function updateConfig(
+  change: Partial<RulesConfig> | ((config: RulesConfig) => void)
+): Promise<void> {
   const run = writeChain.then(async () => {
-    // Read straight from storage, never the cache. writeChain only orders writers inside
-    // one context, and popup + side panel are the same component in two contexts — a warm
-    // cache here would let one of them mutate a copy taken before the other's write and
-    // silently revert it. Toggles are rare and user-initiated, so the extra read is free.
-    const config = await getConfig(true);
-    mutate(config);
+    // writeChain only orders writers inside one context. The popup and the side panel are the
+    // same component in two, so the read inside the chain is what keeps one from reverting a
+    // write the other has just made.
+    const config = await getConfig();
+    if (typeof change === "function") change(config);
+    else Object.assign(config, change);
     await saveConfig(config);
   });
   writeChain = run.catch(() => {});
   return run;
-}
-
-export async function getRules(): Promise<GroupRule[]> {
-  const config = await getConfig();
-  return config.rules;
-}
-
-export async function saveRules(rules: GroupRule[]): Promise<void> {
-  await updateConfig((config) => { config.rules = rules; });
-}
-
-export async function getAutoGroup(): Promise<boolean> {
-  const config = await getConfig();
-  return config.autoGroup;
-}
-
-export async function setAutoGroup(enabled: boolean): Promise<void> {
-  await updateConfig((config) => { config.autoGroup = enabled; });
-}
-
-export async function getAutoUngroup(): Promise<boolean> {
-  const config = await getConfig();
-  return config.autoUngroup ?? false;
-}
-
-export async function setAutoUngroup(enabled: boolean): Promise<void> {
-  await updateConfig((config) => { config.autoUngroup = enabled; });
-}
-
-export async function getUseRules(): Promise<boolean> {
-  const config = await getConfig();
-  return config.useRules ?? false;
-}
-
-export async function setUseRules(enabled: boolean): Promise<void> {
-  await updateConfig((config) => { config.useRules = enabled; });
-}
-
-export async function getAutoSort(): Promise<boolean> {
-  const config = await getConfig();
-  return config.autoSort ?? false;
-}
-
-export async function setAutoSort(enabled: boolean): Promise<void> {
-  await updateConfig((config) => { config.autoSort = enabled; });
-}
-
-export async function getAutoPinFollow(): Promise<boolean> {
-  const config = await getConfig();
-  return config.autoPinFollow ?? false;
-}
-
-export async function setAutoPinFollow(enabled: boolean): Promise<void> {
-  await updateConfig((config) => { config.autoPinFollow = enabled; });
-}
-
-export async function getAutoDiscard(): Promise<boolean> {
-  const config = await getConfig();
-  return config.autoDiscard ?? false;
-}
-
-export async function setAutoDiscard(enabled: boolean): Promise<void> {
-  await updateConfig((config) => { config.autoDiscard = enabled; });
-}
-
-export async function setSwitchToExisting(enabled: boolean): Promise<void> {
-  await updateConfig((config) => { config.switchToExisting = enabled; });
-}
-
-export async function getIgnorePatterns(): Promise<IgnoreRule[]> {
-  const config = await getConfig();
-  return config.ignorePatterns ?? [];
-}
-
-export async function setIgnorePatterns(patterns: IgnoreRule[]): Promise<void> {
-  await updateConfig((config) => { config.ignorePatterns = patterns; });
-}
-
-export async function getIgnoreGroupNames(): Promise<IgnoreRule[]> {
-  const config = await getConfig();
-  return config.ignoreGroupNames ?? [];
-}
-
-export async function setIgnoreGroupNames(names: IgnoreRule[]): Promise<void> {
-  await updateConfig((config) => { config.ignoreGroupNames = names; });
 }
 
 export async function getSortRules(): Promise<SortRule[]> {
@@ -292,11 +194,6 @@ export function isIgnoredGroupName(title: string, ignoreGroupNames: IgnoreRule[]
 // how much pattern a user can type, not a runtime hazard. Kept rather than lifted so the limit
 // the Settings panel advertises stays the limit that applies.
 export const MAX_PATTERN_LENGTH = 100;
-
-/** True when this rule uses wildcard or regex syntax, and so is subject to MAX_PATTERN_LENGTH. */
-export function isCompiledPattern(rule: Pick<IgnoreRule, "pattern" | "isRegex">): boolean {
-  return !!rule.isRegex || rule.pattern.includes("*");
-}
 
 // The length cap alone doesn't save us: `(a+)+$` is six characters and backtracks
 // exponentially inside a single re.test, freezing the popup with no way out. Reject a
@@ -412,14 +309,10 @@ export function generalizePatterns(rules: IgnoreRule[]): string {
   return parts.length === 1 ? parts[0] : `(${parts.join("|")})`;
 }
 
-export async function addRule(rule: Omit<GroupRule, "id">): Promise<GroupRule> {
+async function addRule(rule: Omit<GroupRule, "id">): Promise<GroupRule> {
   const newRule: GroupRule = { ...rule, id: crypto.randomUUID() };
   await updateConfig((config) => { config.rules = [...config.rules, newRule]; });
   return newRule;
-}
-
-export async function deleteRule(id: string): Promise<void> {
-  await updateConfig((config) => { config.rules = config.rules.filter((r) => r.id !== id); });
 }
 
 export async function mergeRules(idA: string, idB: string): Promise<void> {
@@ -433,7 +326,7 @@ export async function mergeRules(idA: string, idB: string): Promise<void> {
 }
 
 export async function populateFromCurrentGroups(): Promise<number> {
-  const existingRules = await getRules();
+  const existingRules = (await getConfig()).rules;
   const groups = await chrome.tabGroups.query({});
   const allTabs = await chrome.tabs.query({});
   let added = 0;

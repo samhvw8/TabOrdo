@@ -3,7 +3,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { installChromeStub, type ChromeStub } from "../testing/chrome-stub.ts";
-import { popUndo, peekUndo, peekUndoEntry, executeUndo, undoStackSize } from "../undo.ts";
+import { hasUndo, peekUndoEntry, executeUndo } from "../undo.ts";
 import {
   closeTabs,
   discardTabs,
@@ -20,13 +20,10 @@ import { removeDuplicates } from "./dedup.ts";
 
 let stub: ChromeStub;
 
-beforeEach(async () => {
+beforeEach(() => {
   stub = installChromeStub();
   stub.currentWindowId = 1;
   stub.windows = [{ id: 1 }, { id: 2 }];
-  while (await popUndo()) {
-    /* drain the module-level undo stack between tests */
-  }
 });
 
 const openIds = () => stub.openTabs.map((t) => t.id).sort((a, b) => a - b);
@@ -56,7 +53,7 @@ describe("closeTabs", () => {
   it("is a no-op for an empty list, and pushes no undo entry", async () => {
     expect(await closeTabs([])).toBe(0);
     expect(stub.openTabs).toHaveLength(3);
-    expect(peekUndo()).toBeNull();
+    expect(await hasUndo()).toBe(false);
   });
 
   it("snapshots for undo before removing", async () => {
@@ -75,7 +72,7 @@ describe("closeTabs", () => {
 
   it("records no undo entry when every id had already gone", async () => {
     expect(await closeTabs([998, 999])).toBe(2);
-    expect(peekUndo()).toBeNull();
+    expect(await hasUndo()).toBe(false);
   });
 
   // A refused close is the one signal the user can act on. Counting only the fulfilled ones
@@ -102,7 +99,7 @@ describe("closeTabs", () => {
   it("takes no snapshot when asked not to", async () => {
     expect(await closeTabs([1], { snapshot: false })).toBe(1);
     expect(stub.removedIds).toEqual([1]);
-    expect(undoStackSize()).toBe(0);
+    expect(await hasUndo()).toBe(false);
   });
 });
 
@@ -251,7 +248,7 @@ describe("closeTabsToLeft / closeTabsToRight", () => {
       { id: 2, url: "https://right.com", pinned: false, windowId: 1, groupId: -1, index: 1 },
     ];
     expect(await closeTabsToLeft()).toBe(0);
-    expect(peekUndo()).toBeNull();
+    expect(await hasUndo()).toBe(false);
   });
 });
 

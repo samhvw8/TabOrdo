@@ -1,27 +1,31 @@
 ---
 type: Feature
 title: Grouping rules and ignore lists
-description: How the shared rulesConfig is stored, cached and written; how group rules and ignore patterns match hostnames and group names without backtracking; and the Rules editor that edits them.
+description: How the shared rulesConfig is stored and written; how group rules and ignore patterns match hostnames and group names without backtracking; and the Rules editor that edits them.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/rules.ts
 tags: [rules, config, ignore-lists, pattern-matching, storage]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-17T10:30:06Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-22T21:00:00Z }
 sources:
   - id: rules
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/rules.ts
     title: lib/rules.ts
-    last_modified: 2026-08-05
+    last_modified: 2026-09-22
   - id: rules-test
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/rules.test.ts
     title: lib/rules.test.ts
     last_modified: 2026-08-05
-  - id: rules-cache-test
-    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/rules-cache.test.ts
-    title: lib/rules-cache.test.ts
+  - id: rules-writes-test
+    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/rules-writes.test.ts
+    title: lib/rules-writes.test.ts
     last_modified: 2026-07-27
   - id: rules-editor
     resource: https://github.com/samhvw8/TabOrdo/blob/main/components/RulesEditor.svelte
     title: components/RulesEditor.svelte
-    last_modified: 2026-07-29
+    last_modified: 2026-09-22
+  - id: popup-app
+    resource: https://github.com/samhvw8/TabOrdo/blob/main/entrypoints/popup/App.svelte
+    title: entrypoints/popup/App.svelte (automation switches)
+    last_modified: 2026-09-22
   - id: settings-panel
     resource: https://github.com/samhvw8/TabOrdo/blob/main/components/SettingsPanel.svelte
     title: components/SettingsPanel.svelte
@@ -61,7 +65,7 @@ sources:
 | Field | Type | Notes |
 |-------|------|-------|
 | `rules` | `GroupRule[]` = `{ id, name, color, patterns[] }` | Order matters: first match wins |
-| `autoGroup`, `autoUngroup`, `useRules`, `autoSort`, `autoPinFollow`, `autoDiscard`, `switchToExisting` | boolean | Default `false`; see [background automation](/features/background-automation.md) |
+| `autoGroup`, `autoUngroup`, `useRules`, `autoSort`, `autoPinFollow`, `autoDiscard`, `switchToExisting` | boolean | Default `false`; the type `AutomationFlag` names these seven. See [background automation](/features/background-automation.md) |
 | `useAI` | boolean | Read and written, never consulted (see Gotchas) |
 | `ignorePatterns`, `ignoreGroupNames` | `IgnoreRule[]` = `{ pattern, enabled, caseSensitive?, isRegex? }` | Bare strings from older data are normalised to `{ pattern, enabled: true }` |
 | `sortRules` | `SortRule[]` | See [sort priority](/features/sort-priority.md) |
@@ -70,9 +74,9 @@ On the very first read, `getConfig()` writes the all-false default. Normalisatio
 
 # Invariants
 
-- **The read cache is armed only once `storage.onChanged` is subscribed.** A cached read returns a `structuredClone`, and any write to `rulesConfig` from any context clears the cache. The cache exists because the worker wakes for every tab event and several listeners each need the config.[^rules]
-- **The cache is primed only after a successful `set()`.** Priming it first left a config that was never saved cached, and the next writer saved that phantom to storage.[^rules][^rules-cache-test]
-- **Every setter goes through `updateConfig`**, a per-context promise chain that does read, mutate, then save, so two quick toggles in one context cannot revert each other. Its read uses `getConfig(true)` and bypasses the cache: the popup and side panel are the same component in two contexts, and a warm cache would revert the sibling's write.[^rules]
+- **`getConfig()` reads storage every time.** A read costs about 0.15 ms in the worker (measured in Chrome for Testing 153), and the popup, the side panel and the worker all write `rulesConfig`, so a copy held in any one of them can go stale. A read cache used to sit here, with invalidation on `storage.onChanged` and a fresh-read rule on every write path; it shipped two stale-config bugs to save well under a millisecond per tab event, and was removed.[^rules][^rules-writes-test]
+- **Every write goes through `updateConfig`**, a per-context promise chain that does read, change, then save, so two quick toggles in one context cannot revert each other. It takes a patch of fields (`updateConfig({ autoSort: true })`), or a function for an edit that depends on the stored value (`mergeRules`, adding a rule). Its read happens inside the chain, so a write from the other surface that has just landed is not reverted: the popup and side panel are the same component in two contexts.[^rules]
+- **Readers call `getConfig()` and take the fields they need.** There are no per-field getters or setters, except `getSortRules` and `setSortRules`, which the sort and the Pins panel use.[^rules]
 
 # Matching
 
@@ -97,19 +101,19 @@ On the very first read, `getConfig()` writes the all-false default. Normalisatio
 
 # Rules editor (`components/RulesEditor.svelte`)
 
-This is the sidebar's Rules section. It has an auto-group toggle, "Import from groups" (`populateFromCurrentGroups`: one rule per titled group that has no rule yet, patterns = its tabs' hostnames), "+ Current tab", per-rule colour, name, patterns, "+Tab", Merge (B's patterns folded into A, then B deleted) and Del. Pasted URLs are reduced to hostnames. A rule tester reports the winning rule and pattern, plus later rules that also match but can never fire.[^rules-editor] The ignore lists, with their own tester and regex generation, are in the Settings panel.[^settings-panel]
+This is the sidebar's Rules section. Its auto-group switch shares the dashboard's state: App passes in its `automation` record, which its `storage.onChanged` subscription keeps in step with `rulesConfig`, and the toggle function the dashboard's Auto switch uses. The switch therefore follows a change made on the dashboard or in the other surface; it used to read the flag once at mount.[^rules-editor][^popup-app] The section also has "Import from groups" (`populateFromCurrentGroups`: one rule per titled group that has no rule yet, patterns = its tabs' hostnames), "+ Current tab", per-rule colour, name, patterns, "+Tab", Merge (B's patterns folded into A, then B deleted) and Del. Pasted URLs are reduced to hostnames. A rule tester reports the winning rule and pattern, plus later rules that also match but can never fire.[^rules-editor] The ignore lists, with their own tester and regex generation, are in the Settings panel.[^settings-panel]
 
 # Gotchas
 
 - **Ignore patterns see only the hostname**, which has no port and no path. The Settings placeholder `e.g. localhost:5763` can therefore never match, and neither can `*github.com/org*`. Both were confirmed by running `isIgnoredUrl`.[^rules][^settings-panel]
-- The editor keeps its own copy of `rules` from mount and `saveRules` replaces the whole array, so two open editors are last-writer-wins on rules even though other fields merge safely.[^rules-editor]
+- The editor keeps its own copy of `rules` from mount and saves with `updateConfig({ rules })`, which replaces the whole array, so two open editors are last-writer-wins on rules even though other fields merge safely.[^rules-editor]
 - A broad pattern listed earlier shadows a specific one listed later. The tester shows this.[^rules-test]
-- `useAI`, the unused `STORAGE_KEY = "groupRules"` constant and `ruleToRegex`'s `.*` expansion are leftovers. `ruleToRegex` only generates regex text in Settings; it never matches anything.[^rules]
+- `useAI` and `ruleToRegex`'s `.*` expansion are leftovers. `ruleToRegex` only generates regex text in Settings; it never matches anything.[^rules]
 
 # Tests that guard it
 
 - `lib/rules.test.ts`: `domainMatches`, `ruleMatches`, the nested-quantifier guard, the pattern length cap, `matchDomainToRule` order and shadowing, `globMatches` "stays fast on the pattern that used to hang", literal `?`.[^rules-test]
-- `lib/rules-cache.test.ts`: cache hit, invalidation from another context, no phantom after a failed write, no revert of a sibling's toggle, serialised toggles.[^rules-cache-test]
+- `lib/rules-writes.test.ts`: no failed write laundered into the next one, no revert of another context's toggle, serialised toggles.[^rules-writes-test]
 - `lib/tabs/group.test.ts` "ignore lists": manual grouping and ungrouping honour both lists.[^group-test]
 
 # Related
@@ -118,8 +122,9 @@ This is the sidebar's Rules section. It has an auto-group toggle, "Import from g
 
 [^rules]: lib/rules.ts
 [^rules-test]: lib/rules.test.ts
-[^rules-cache-test]: lib/rules-cache.test.ts
+[^rules-writes-test]: lib/rules-writes.test.ts
 [^rules-editor]: components/RulesEditor.svelte
+[^popup-app]: entrypoints/popup/App.svelte
 [^settings-panel]: components/SettingsPanel.svelte
 [^group]: lib/tabs/group.ts
 [^group-test]: lib/tabs/group.test.ts

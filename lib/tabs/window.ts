@@ -3,6 +3,7 @@
 import { getDomainMapper } from "../url.ts";
 import type { MoveGroupsResult } from "./types.ts";
 import { getAllGroups } from "./query.ts";
+import { buildGroup } from "./group.ts";
 
 interface CarriedGroup {
   title?: string;
@@ -52,15 +53,13 @@ async function restoreGroup(
     ? existing.find((g) => g.title === entry.title && g.color === entry.color)
     : undefined;
   try {
-    if (match) {
-      await chrome.tabs.group({ tabIds: entry.tabIds, groupId: match.id });
-      return true;
-    }
-    const groupId = await chrome.tabs.group({ tabIds: entry.tabIds, createProperties: { windowId } });
-    const props: chrome.tabGroups.UpdateProperties = { collapsed: entry.collapsed };
-    if (entry.title !== undefined) props.title = entry.title;
-    if (entry.color !== undefined) props.color = entry.color;
-    await chrome.tabGroups.update(groupId, props);
+    await buildGroup(entry.tabIds, {
+      groupId: match?.id,
+      windowId,
+      title: entry.title,
+      color: entry.color,
+      collapsed: entry.collapsed,
+    });
     return true;
   } catch (e) {
     console.warn("[TabOrdo] could not restore group", entry.title, e);
@@ -143,23 +142,9 @@ export async function splitTabToWindow(tabId: number): Promise<void> {
   await chrome.windows.create({ tabId });
 }
 
+/** Move a group into a window of its own, title, colour and collapsed state included. */
 export async function extractGroupToWindow(groupId: number): Promise<number> {
-  const tabs = await chrome.tabs.query({ groupId });
-  if (tabs.length === 0) return 0;
-  const groupInfo = (await chrome.tabGroups.query({})).find((g) => g.id === groupId);
-  const [first, ...rest] = tabs;
-  const newWindow = await chrome.windows.create({ tabId: first.id! });
-  if (rest.length > 0) {
-    await chrome.tabs.move(rest.map((t) => t.id!), { windowId: newWindow.id!, index: -1 });
-  }
-  const newGroupId = await chrome.tabs.group({
-    tabIds: tabs.map((t) => t.id!),
-    createProperties: { windowId: newWindow.id! },
-  });
-  if (groupInfo) {
-    await chrome.tabGroups.update(newGroupId, { title: groupInfo.title, color: groupInfo.color });
-  }
-  return tabs.length;
+  return (await moveTabsToNewWindow(await chrome.tabs.query({ groupId })))?.result.moved ?? 0;
 }
 
 export async function uniteDomain(): Promise<number> {

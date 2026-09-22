@@ -8,7 +8,6 @@
     activeDescendant,
     onkeydown,
     oninput,
-    onfocuschange,
   }: {
     value: string;
     placeholder?: string;
@@ -18,7 +17,6 @@
     activeDescendant?: string;
     onkeydown?: (e: KeyboardEvent) => void;
     oninput?: () => void;
-    onfocuschange?: (focused: boolean) => void;
   } = $props();
 
   let inputEl: HTMLInputElement;
@@ -69,8 +67,6 @@
     {onkeydown}
     oninput={() => oninput?.()}
     onscroll={syncOverlayScroll}
-    onfocus={() => onfocuschange?.(true)}
-    onblur={() => onfocuschange?.(false)}
     type="text"
     role="combobox"
     aria-expanded={expanded}

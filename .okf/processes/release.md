@@ -4,7 +4,7 @@ title: Releasing TabOrdo
 description: Steps to cut a TabOrdo release (version bump, dated CHANGELOG section, annotated tag, push, GitHub Release that triggers the Chrome Web Store publish), what each CI workflow does, the commit conventions, and what to do when the store publish fails.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/.github/workflows/publish.yml
 tags: [release, ci, chrome-web-store, versioning, git]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-17T02:27:59Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-22T12:00:00Z }
 sources:
   - id: claude-md
     resource: https://github.com/samhvw8/TabOrdo/blob/main/CLAUDE.md
@@ -22,10 +22,10 @@ sources:
     resource: https://github.com/samhvw8/TabOrdo/blob/main/CHANGELOG.md
     title: CHANGELOG.md
     last_modified: 2026-09-17
-  - id: todo
-    resource: https://github.com/samhvw8/TabOrdo/blob/main/TODO.md
-    title: TODO.md "CI/CD"
-    last_modified: 2026-05-30
+  - id: mise-toml
+    resource: https://github.com/samhvw8/TabOrdo/blob/main/mise.toml
+    title: mise.toml (Node version)
+    last_modified: 2026-09-22
   - id: commit-bump-072
     resource: https://github.com/samhvw8/TabOrdo/commit/c51f9f8c02065f90bf674bad36ab7e87d9c68b81
     title: "docs: changelog and version bump for 0.7.2"
@@ -74,8 +74,8 @@ A release is a version bump on `main`, an annotated tag, and a **published** Git
 
 | Workflow | Trigger | Steps |
 |----------|---------|-------|
-| `build.yml` "Build & Package" | push to `main`, PR to `main` | Node 20, `npm ci`, `npm run check`, `npm test`, `npm run zip`; on `main` only, upload `.output/*.zip` as artifact `tab-ordo-chrome` (30 days)[^build-yml] |
-| `publish.yml` "Publish to Chrome Web Store" | `release: published`, `workflow_dispatch` | Node 22, `npm ci`, check, test, zip, then `npx wxt submit --chrome-zip .output/*-chrome.zip` with the `CWS_EXTENSION_ID`, `CWS_CLIENT_ID`, `CWS_CLIENT_SECRET` and `CWS_REFRESH_TOKEN` secrets[^publish-yml] |
+| `build.yml` "Build & Package" | push to `main`, PR to `main` | Node from `mise.toml` via `jdx/mise-action`,[^mise-toml] `npm ci`, `npm run check`, `npm test`, `npm run zip`; on `main` only, upload `.output/*.zip` as artifact `tab-ordo-chrome` (30 days)[^build-yml] |
+| `publish.yml` "Publish to Chrome Web Store" | `release: published`, `workflow_dispatch` | Node from `mise.toml`, `npm ci`, check, test, zip, then `npx wxt submit --chrome-zip .output/*-chrome.zip` with the `CWS_EXTENSION_ID`, `CWS_CLIENT_ID`, `CWS_CLIENT_SECRET` and `CWS_REFRESH_TOKEN` secrets[^publish-yml] |
 
 - Publish repeats check and test because nothing makes a release wait for `build.yml`. Without them, publishing could ship a build that `build.yml` is about to fail.[^publish-yml]
 - The upload step needs `include-hidden-files: true`. `.output` is a dot-directory, and without the flag every build on `main` uploaded nothing and only warned.[^build-yml][^commit-artifact]
@@ -99,7 +99,7 @@ Conventional-commit subjects start in July 2026. Earlier history uses free-form 
 # Gotchas
 
 - A draft Release does not fire `release: published`; only publishing it does.[^publish-yml][^releases]
-- `TODO.md` still lists two open items: move the GCP OAuth app from testing to production to get long-lived refresh tokens, and test `workflow_dispatch` with `--dry-run`.[^todo]
+- Two setup items are still open: move the GCP OAuth app from testing to production so the refresh token stops expiring, and try a `workflow_dispatch` run with `--dry-run`.
 - The oldest CHANGELOG section reads `0.1.0 — 2025-05-20`, although the repository's first commit is from 2026-05-20.[^changelog][^git-history]
 
 # Related
@@ -110,7 +110,7 @@ Conventional-commit subjects start in July 2026. Earlier history uses free-form 
 [^publish-yml]: .github/workflows/publish.yml
 [^build-yml]: .github/workflows/build.yml
 [^changelog]: CHANGELOG.md
-[^todo]: TODO.md
+[^mise-toml]: mise.toml
 [^commit-bump-072]: commit c51f9f8
 [^commit-fix-071]: commit 013f617
 [^commit-docs-060]: commit dc267f2

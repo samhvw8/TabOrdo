@@ -225,6 +225,28 @@ describe("sortTabsInWindow with position locks", () => {
     await sortTabsInWindow(1, "domain");
     expect(strip()[0]).toBe(3);
   });
+
+  // Re-locking a tab to a taken slot leaves two locks on it. The tie followed strip order, so
+  // every sort handed the slot to the other tab.
+  it("keeps two tab locks on one slot in place across sorts", async () => {
+    stub.openTabs = [
+      tab({ id: 1, url: "https://apple.com", index: 0, groupId: 50 }),
+      tab({ id: 2, url: "https://mango.com", index: 1, groupId: 50 }),
+      tab({ id: 3, url: "https://zebra.com", index: 2, groupId: 50 }),
+    ];
+    stub.groups = [{ id: 50, title: "Work", color: "blue", windowId: 1 }];
+    stub.localData.pinnedTabs = [
+      { id: "a", url: "https://apple.com", tabId: 1, groupName: "Work", position: 0 },
+      { id: "z", url: "https://zebra.com", tabId: 3, groupName: "Work", position: 0 },
+    ];
+
+    await sortTabsInWindow(1, "domain");
+    expect(strip()).toEqual([3, 2, 1]);
+    stub.moves.length = 0;
+    await sortTabsInWindow(1, "domain");
+    expect(stub.moves).toEqual([]);
+    expect(strip()).toEqual([3, 2, 1]);
+  });
 });
 
 describe("sortTabsInWindow with group locks", () => {
@@ -262,12 +284,15 @@ describe("sortTabsInWindow with group locks", () => {
   };
   const resetCounts = () => {
     stub.moves.length = 0;
+    stub.groupMoves.length = 0;
     const before = { groups: groupCalls(), queries: windowQueries() };
-    return () => ({ moves: stub.moves.length, groups: groupCalls() - before.groups, queries: windowQueries() - before.queries });
+    return () => ({
+      moves: stub.moves.length + stub.groupMoves.length,
+      groups: groupCalls() - before.groups,
+      queries: windowQueries() - before.queries,
+    });
   };
 
-  // The sort used to lay groups down alphabetically and let the lock pass drag Zulu back to
-  // the front — on every page load, even when Zulu was already there.
   it("lays a locked group down in its slot, so sorting again moves nothing", async () => {
     lock("Zulu", 0);
     await sortTabsInWindow(1, "domain");
@@ -275,8 +300,8 @@ describe("sortTabsInWindow with group locks", () => {
 
     const counts = resetCounts();
     await sortTabsInWindow(1, "domain");
-    // One window query to plan the sort, one for the lock pass, which finds nothing to do.
-    expect(counts()).toEqual({ moves: 0, groups: 0, queries: 2 });
+    // One window query to plan the sort, and no lock pass after it.
+    expect(counts()).toEqual({ moves: 0, groups: 0, queries: 1 });
     expect(strip()).toEqual([3, 1, 2, 4]);
   });
 
@@ -288,30 +313,51 @@ describe("sortTabsInWindow with group locks", () => {
 
     const counts = resetCounts();
     await sortTabsInWindow(1, "domain");
-    expect(counts()).toEqual({ moves: 0, groups: 0, queries: 2 });
+    expect(counts()).toEqual({ moves: 0, groups: 0, queries: 1 });
   });
 
-  // A group dragged to the last slot by the lock pass has always landed at the very end of the
-  // window, past the loose tabs. Laying it down directly keeps that.
-  it("keeps a group locked to the last slot behind the loose tabs", async () => {
-    lock("Alpha", 2);
+  // The old lock pass counted the target index with Alpha still in the strip, so a lock to the
+  // right of the group's alphabetical slot overshot by one: Alpha landed after Zulu.
+  it("lands a group locked to a slot on its right in that slot", async () => {
+    lock("Alpha", 1);
     await sortTabsInWindow(1, "domain");
-    expect(strip()).toEqual([2, 3, 4, 1]);
+    expect(strip()).toEqual([2, 1, 3, 4]);
 
     const counts = resetCounts();
     await sortTabsInWindow(1, "domain");
-    expect(counts()).toEqual({ moves: 0, groups: 0, queries: 2 });
+    expect(counts()).toEqual({ moves: 0, groups: 0, queries: 1 });
   });
 
-  // Two locks clamped to one slot have no layout the pass leaves alone, so the sort falls back
-  // to the alphabetical layout plus the pass, exactly as before.
-  it("falls back to the old two-step when two locks clamp to the same slot", async () => {
-    lock("Alpha", 5);
+  // A slot counts groups only; loose tabs come after every group, a locked one included.
+  it("puts a group locked to the last slot last among the groups, ahead of the loose tabs", async () => {
+    lock("Alpha", 2);
+    await sortTabsInWindow(1, "domain");
+    expect(strip()).toEqual([2, 3, 1, 4]);
+
+    const counts = resetCounts();
+    await sortTabsInWindow(1, "domain");
+    expect(counts()).toEqual({ moves: 0, groups: 0, queries: 1 });
+  });
+
+  // More locks than slots: both clamp to the last one. They used to trade places on every sort.
+  it("keeps two locks clamped to one slot in a stable order, and sorting again moves nothing", async () => {
     lock("Beta", 5);
+    lock("Alpha", 5);
     await sortTabsInWindow(1, "domain");
-    expect(strip()).toEqual([3, 4, 1, 2]);
+    // Same position asked for, so title order breaks the tie.
+    expect(strip()).toEqual([3, 1, 2, 4]);
+
+    const counts = resetCounts();
     await sortTabsInWindow(1, "domain");
-    expect(strip()).toEqual([3, 4, 1, 2]);
+    expect(counts()).toEqual({ moves: 0, groups: 0, queries: 1 });
+    expect(strip()).toEqual([3, 1, 2, 4]);
+  });
+
+  it("gives a shared slot first to the lock that asked for the earlier position", async () => {
+    lock("Alpha", 5);
+    lock("Beta", 3);
+    await sortTabsInWindow(1, "domain");
+    expect(strip()).toEqual([3, 2, 1, 4]);
   });
 });
 
@@ -447,6 +493,9 @@ describe("sortTabsInGroup", () => {
   it("leaves tabs outside the group where they were", async () => {
     await sortTabsInGroup(50, "title");
     expect(stub.openTabs.find((t) => t.id === 3)!.groupId).toBe(-1);
+    // The group sorts in place: moving its tabs to index -1 used to carry the whole group to
+    // the end of the window, past tab 3.
+    expect(strip()).toEqual([2, 1, 3]);
   });
 
   it("is a no-op for a group with no tabs", async () => {

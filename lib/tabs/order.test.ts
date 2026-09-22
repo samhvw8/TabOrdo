@@ -219,4 +219,17 @@ describe("moveGroup", () => {
     const g = stub.openTabs.filter((t) => t.groupId === 60).map((t) => t.index).sort();
     expect(g).toEqual([1, 2]);
   });
+
+  // The index used to be counted with the group still in the strip, so a move to a slot on its
+  // right landed one group too far; and a multi-tab tabs.move going right scatters in Chrome.
+  it("a number to the right lands the group in that slot, moved whole", async () => {
+    stub.openTabs[3].active = false;
+    stub.openTabs[1].active = true;
+    stub.openTabs.push({ id: 6, url: "https://c1.com", pinned: false, windowId: 1, groupId: 70, index: 5 });
+    stub.groups.push({ id: 70, title: "Gamma", color: "red", windowId: 1 });
+    expect(await moveGroup("2")).toBe("Moved group to position 2");
+    expect(strip()).toEqual([1, 4, 5, 2, 3, 6]);
+    expect(stub.moves).toEqual([]);
+    expect(stub.groupMoves).toEqual([{ groupId: 50, index: 3 }]);
+  });
 });

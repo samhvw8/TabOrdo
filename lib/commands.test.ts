@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { matchCommands, ALL_COMMANDS, TRIAGE_COMMANDS } from "./commands.ts";
+import { matchCommands, ALL_COMMANDS, TRIAGE_COMMANDS, ACTIONS, ACTION_BY_ID } from "./commands.ts";
 
 describe("matchCommands", () => {
   it("returns every visible command for bare /, omitting hidden aliases", () => {
@@ -45,5 +45,13 @@ describe("matchCommands", () => {
   it("returns empty for non-command input", () => {
     const cmds = matchCommands("hello");
     expect(cmds).toHaveLength(0);
+  });
+});
+
+describe("action table", () => {
+  // The id is both what you type and the tile id users have stored; a second row with the same
+  // one would shadow the first everywhere it is looked up.
+  it("gives every row its own id", () => {
+    expect(ACTION_BY_ID.size).toBe(ACTIONS.length);
   });
 });

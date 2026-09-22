@@ -1,13 +1,13 @@
 // Ordering tabs inside a window or a group, honouring position locks.
 
 import { getDomainMapper, type DomainMapper } from "../url.ts";
-import { getPinnedTabs, getPinnedGroups, applyGroupPinsToWindow, settleGroupPins, type PinnedTabEntry, type PinnedGroupEntry } from "../pin.ts";
+import { getPinnedTabs, getPinnedGroups, lockedGroupOrder, pinAwareSortTabs } from "../pin.ts";
 import { getSortRules, buildSortRanker, noSortRanking, type SortRanker } from "../rules.ts";
 
 /**
  * Sort rules only reorder *within* a domain block and *between* domains, so they mean nothing
  * to a flat title or url sort. Skipping the build there also skips a storage read on the
- * auto-sort path, which fires on every tab that finishes loading.
+ * auto-sort path, which runs after every burst of tab loads.
  */
 async function rankerFor(by: "title" | "url" | "domain"): Promise<SortRanker> {
   if (by !== "domain") return noSortRanking;
@@ -19,7 +19,6 @@ export async function sortTabsInWindow(
   by: "title" | "url" | "domain" = "domain"
 ): Promise<void> {
   await organizeWindow(windowId, by);
-  await applyGroupPinsToWindow(windowId);
 }
 
 export async function sortTabsInGroup(
@@ -30,12 +29,15 @@ export async function sortTabsInGroup(
   const group = (await chrome.tabGroups.query({})).find((g) => g.id === groupId);
   const domainOf = await getDomainMapper();
   const rank = await rankerFor(by);
+  const compare = (a: chrome.tabs.Tab, b: chrome.tabs.Tab) => compareTabs(a, b, by, domainOf, rank);
   const ordered = group?.title
-    ? pinAwareSortTabs(tabs, group.title, await getPinnedTabs(), by, domainOf, rank)
-    : tabs.sort((a, b) => compareTabs(a, b, by, domainOf, rank));
+    ? pinAwareSortTabs(tabs, group.title, await getPinnedTabs(), compare)
+    : tabs.sort(compare);
   const ids = ordered.map((t) => t.id!);
   if (ids.length > 0) {
-    await chrome.tabs.move(ids, { index: -1 });
+    // Back into the group's own slot, not index -1: every id sits at or right of the group's
+    // first index, so moving them there in order sorts the group in place.
+    await chrome.tabs.move(ids, { index: Math.min(...tabs.map((t) => t.index)) });
     await chrome.tabs.group({ tabIds: ids, groupId });
   }
 }
@@ -68,75 +70,28 @@ export async function organizeWindow(
     }
   }
 
-  const sortedGroups = [...groupMap.values()].sort((a, b) =>
+  const byTitle = [...groupMap.values()].sort((a, b) =>
     (a.group.title || "").localeCompare(b.group.title || "")
   );
+  // Group locks take their slots out of title order. Laid down directly, so a locked group
+  // already in its slot costs nothing, like any other block planLayout finds in place.
+  const sortedGroups = lockedGroupOrder(byTitle.map((e) => e.group), groupPins).map((g) => groupMap.get(g.id)!);
 
+  const compare = (a: chrome.tabs.Tab, b: chrome.tabs.Tab) => compareTabs(a, b, by, domainOf, rank);
   for (const entry of sortedGroups) {
     entry.tabs = entry.group.title
-      ? pinAwareSortTabs(entry.tabs, entry.group.title, allPins, by, domainOf, rank)
-      : entry.tabs.sort((a, b) => compareTabs(a, b, by, domainOf, rank));
+      ? pinAwareSortTabs(entry.tabs, entry.group.title, allPins, compare)
+      : entry.tabs.sort(compare);
   }
-  ungrouped.sort((a, b) => compareTabs(a, b, by, domainOf, rank));
+  ungrouped.sort(compare);
 
   const blocks: Block[] = sortedGroups.map((entry) => ({ ids: entry.tabs.map((t) => t.id!), groupId: entry.group.id }));
   if (ungrouped.length > 0) blocks.push({ ids: ungrouped.map((t) => t.id!), groupId: -1 });
 
-  const target = groupPins.length > 0 ? withGroupPins(tabs, groups, blocks, groupPins, pinnedCount) : blocks;
-  for (const step of planLayout(tabs, target, pinnedCount)) {
+  for (const step of planLayout(tabs, blocks, pinnedCount)) {
     await chrome.tabs.move(step.ids, { index: step.index });
     if (step.groupId !== -1) await chrome.tabs.group({ tabIds: step.ids, groupId: step.groupId });
   }
-}
-
-/**
- * `blocks` in the order applyGroupPinsToWindow would leave them, so the pass that follows every
- * sort finds its groups already in their slots. Alphabetical order used to go down first and
- * the pass then dragged each pinned group back — with three group locks, an already-sorted
- * window moved dozens of tabs out and back on every page load and re-queried the whole window
- * per lock.
- *
- * The layout is the pass's own result, computed on a copy by settleGroupPins with the same
- * slot maths, so the end state is what it always was. `blocks` comes back unchanged — the old
- * two-step, move for move — whenever that cannot be promised:
- *  - settleGroupPins finds no layout the pass would leave alone;
- *  - a tab is outside every block (its group was missing from the query), or a Chrome-pinned
- *    tab is not at the head of the strip, so the copy would not match the real strip;
- *  - a lock's title names two groups. Which one the pass picks follows tabGroups.query order,
- *    and nothing promises that order survives the strip being laid out differently.
- */
-function withGroupPins(
-  tabs: chrome.tabs.Tab[],
-  groups: chrome.tabGroups.TabGroup[],
-  blocks: Block[],
-  pins: PinnedGroupEntry[],
-  pinnedCount: number
-): Block[] {
-  if (pins.some((p) => groups.filter((g) => g.title === p.groupTitle).length > 1)) return blocks;
-  const pinned = tabs.filter((t) => t.pinned).sort((a, b) => a.index - b.index);
-  const laidCount = blocks.reduce((n, b) => n + b.ids.length, 0);
-  if (pinned.length + laidCount !== tabs.length) return blocks;
-  if (pinned.some((t, i) => t.index !== i || t.groupId !== -1)) return blocks;
-
-  const byId = new Map(tabs.map((t) => [t.id!, t]));
-  const laidOut = [...pinned, ...blocks.flatMap((b) => b.ids.map((id) => byId.get(id)!))]
-    .map((t, index) => ({ ...t, index }));
-  const settled = settleGroupPins(laidOut, groups, pins, pinnedCount);
-  if (!settled) return blocks;
-
-  // Read the block order back off the settled strip. Every block has to come back whole: the
-  // pass only moves whole groups, so anything else means the copy went wrong somewhere.
-  const byGroup = new Map(blocks.map((b) => [b.groupId, b]));
-  const strip = settled.filter((t) => !t.pinned).sort((a, b) => a.index - b.index);
-  const ordered: Block[] = [];
-  for (let i = 0; i < strip.length; ) {
-    const block = byGroup.get(strip[i].groupId);
-    if (!block || !block.ids.every((id, k) => strip[i + k]?.id === id)) return blocks;
-    byGroup.delete(block.groupId);
-    ordered.push(block);
-    i += block.ids.length;
-  }
-  return ordered;
 }
 
 /** One run of the target strip: a whole group, or (groupId -1) every loose tab. */
@@ -156,7 +111,7 @@ interface LayoutStep {
 /**
  * The moves that turn the window into `blocks` laid end to end after the Chrome-pinned tabs.
  *
- * This runs on every tab that finishes loading, and it used to move and regroup every block
+ * This runs after every burst of tab loads, and it used to move and regroup every block
  * whether or not anything was out of place: 2 calls per group plus one for the loose tabs, 121
  * of them on a 1000-tab window that was already sorted. Each block is now checked against a
  * local copy of the strip and skipped when its tabs already sit at its index in order; the copy
@@ -221,54 +176,6 @@ function placeBlocks(strip: number[], blocks: Block[], pinnedCount: number): Lay
 
 const callCount = (steps: LayoutStep[]) =>
   steps.reduce((n, s) => n + (s.groupId === -1 ? 1 : 2), 0);
-
-function pinAwareSortTabs(
-  tabs: chrome.tabs.Tab[],
-  groupTitle: string,
-  allPins: PinnedTabEntry[],
-  by: "title" | "url" | "domain",
-  domainOf: DomainMapper,
-  rank: SortRanker
-): chrome.tabs.Tab[] {
-  const groupPins = allPins.filter((p) => p.groupName === groupTitle);
-  if (groupPins.length === 0) return tabs.sort((a, b) => compareTabs(a, b, by, domainOf, rank));
-
-  const tabIdMap = new Map(groupPins.filter((p) => p.tabId).map((p) => [p.tabId!, p.position]));
-  const urlMap = new Map(groupPins.map((p) => [p.url, p.position]));
-  const pinned: { tab: chrome.tabs.Tab; pos: number }[] = [];
-  const unpinned: chrome.tabs.Tab[] = [];
-
-  for (const tab of tabs) {
-    const pos = tabIdMap.get(tab.id!) ?? urlMap.get(tab.url ?? "");
-    if (pos !== undefined) {
-      pinned.push({ tab, pos });
-    } else {
-      unpinned.push(tab);
-    }
-  }
-
-  pinned.sort((a, b) => a.pos - b.pos);
-  unpinned.sort((a, b) => compareTabs(a, b, by, domainOf, rank));
-
-  const result: chrome.tabs.Tab[] = [];
-  let ui = 0;
-  const pinnedByPos = new Map(pinned.map((p) => [p.pos, p.tab]));
-  const totalLen = tabs.length;
-
-  for (let i = 0; i < totalLen; i++) {
-    if (pinnedByPos.has(i)) {
-      result.push(pinnedByPos.get(i)!);
-    } else if (ui < unpinned.length) {
-      result.push(unpinned[ui++]);
-    }
-  }
-  while (ui < unpinned.length) result.push(unpinned[ui++]);
-  for (const p of pinned) {
-    if (!result.includes(p.tab)) result.push(p.tab);
-  }
-
-  return result;
-}
 
 function compareTabs(
   a: chrome.tabs.Tab,

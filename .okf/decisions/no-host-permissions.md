@@ -3,7 +3,7 @@ type: Decision
 title: No host permissions
 description: TabOrdo declares no host_permissions, relying on activeTab plus scripting for its only page injections (/vol and the lock title badge), so Chrome Web Store review stays fast at the cost of reaching only the tab the user just acted on.
 tags: [permissions, chrome-web-store, scripting, privacy, decision]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-17T00:16:05Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-22T05:05:54Z }
 sources:
   - id: commit-remove
     resource: https://github.com/samhvw8/TabOrdo/commit/2b2e6023588e670fa13009627def3a9958832665
@@ -27,8 +27,8 @@ sources:
     last_modified: 2026-08-21
   - id: tab-card
     resource: https://github.com/samhvw8/TabOrdo/blob/main/components/TabCard.svelte
-    title: components/TabCard.svelte (volume slider)
-    last_modified: 2026-08-02
+    title: components/TabCard.svelte (mute button)
+    last_modified: 2026-09-22
   - id: lock
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabs/lock.ts
     title: lib/tabs/lock.ts (setTitleBadge)
@@ -59,7 +59,7 @@ sources:
 
 | Feature | Call | Failure handling |
 |---------|------|------------------|
-| `/vol N` and the volume slider | `setTabVolume` → `chrome.scripting.executeScript` sets `volume` on every `audio`/`video` element | Returns `false`; logs the error[^media] |
+| `/vol N` | `setTabVolume` → `chrome.scripting.executeScript` sets `volume` on every `audio`/`video` element | Returns `false`; logs the error[^media] |
 | Lock 📌 title badge | `setTitleBadge` → `executeScript` of a title prefix plus `MutationObserver` | Logs a warning, never throws[^lock] |
 
 The title badge was built on the same model on purpose: "activeTab + scripting, no new perms".[^commit-badge] Everything else, including tabs, groups, bookmarks, history, sessions, Reading List and favicons, uses its own API permission and needs no host access.[^wxt-config]
@@ -68,7 +68,7 @@ The title badge was built on the same model on purpose: "activeTab + scripting, 
 
 - **`/vol N <search>` reports partial success.** It counts the tabs where injection succeeded and says `Volume N% on ok/total tab(s) — the rest need page access (only the active tab is reachable)` rather than claiming tabs it never touched.[^actions] A test covers "reports partial success when some tabs are not scriptable".[^actions-test]
 - **`/vol N` on an unscriptable active page** reports "Can't control volume on this page".[^actions][^actions-test]
-- **The dashboard tab card's volume slider ignores the result** of `setTabVolume`, so on a tab that cannot be scripted it does nothing and says nothing.[^tab-card]
+- **The dashboard offers mute, not volume.** Audible dashboard rows are usually background tabs, which `activeTab` never reaches, so a per-row volume control would do nothing and say nothing. The tab card's only audio control is mute, which goes through `chrome.tabs.update` and needs no page access; volume is left to `/vol`, which reports what it could not reach.[^tab-card][^actions]
 - **A missing badge is silent.** `setTitleBadge` swallows injection errors, so a lock whose badge could not be (re)applied still holds its position without the 📌.[^lock]
 - **The test stub models this.** `failScriptingIds` lists the tabs for which `scripting.executeScript` rejects; its comment ties this to the real extension having no host permissions.[^chrome-stub]
 

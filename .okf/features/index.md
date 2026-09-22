@@ -10,7 +10,7 @@
 # Automation and ordering
 
 * [Background automation](background-automation.md) - The service worker's tab listeners (auto-group, auto-ungroup, auto-sort, pin follow, auto-discard, switch-to-existing, context menus) and the guards that keep them from fighting other extensions or each other.
-* [Grouping rules and ignore lists](grouping-rules.md) - How the shared rulesConfig is stored, cached and written; how group rules and ignore patterns match hostnames and group names without backtracking; and the Rules editor that edits them.
+* [Grouping rules and ignore lists](grouping-rules.md) - How the shared rulesConfig is stored and written; how group rules and ignore patterns match hostnames and group names without backtracking; and the Rules editor that edits them.
 * [Position locks](position-locks.md) - /lock, /unlock, /lockgroup and /unlockgroup hold a tab at a slot in its group or a group at a slot in its window; internally they are still "pins" (lib/pin.ts), re-applied after grouping and sorting and marked with a 📌 title badge.
 * [Domain sort and sort priority](sort-priority.md) - How a domain sort lays out a window, and the per-domain sort priority rules (first domains, segment-aware anchored path patterns, cross-rule tiers) that change its order without ever overriding a position lock.
 * [AI grouping (/aigroup)](ai-grouping.md) - On-device Gemini Nano topic grouping run by the background service worker; covers the availability check, the progress record that doubles as the run's mutex, the renewed bulk-lock lease, why the popup starts it outside its own lock, and the feature's removal and return.

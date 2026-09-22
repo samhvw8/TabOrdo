@@ -1,16 +1,22 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { getRules, saveRules, getAutoGroup, setAutoGroup, populateFromCurrentGroups, mergeRules, domainMatches, type GroupRule } from "../lib/rules.ts";
+  import { getConfig, updateConfig, populateFromCurrentGroups, mergeRules, domainMatches, type GroupRule, type AutomationFlag, type AutomationFlags } from "../lib/rules.ts";
   import { getFullHostname } from "../lib/tabs/index.ts";
+  import { createFlash } from "../lib/flash.ts";
+  import { groupDotClass } from "../lib/format.ts";
 
   let {
+    automation,
+    ontoggle,
     onclose,
   }: {
+    /** App's automation switches, which its storage subscription keeps in step with rulesConfig. */
+    automation: AutomationFlags;
+    ontoggle: (key: AutomationFlag) => void;
     onclose: () => void;
   } = $props();
 
   let rules = $state<GroupRule[]>([]);
-  let autoGroup = $state(false);
   let mergeSource = $state<string | null>(null);
   let statusMsg = $state("");
   let newName = $state("");
@@ -21,24 +27,12 @@
     "blue", "cyan", "green", "yellow", "orange", "pink", "purple", "red", "grey",
   ];
 
-  const colorClasses: Record<string, string> = {
-    blue: "bg-accent-blue", cyan: "bg-accent-cyan", green: "bg-accent-green",
-    yellow: "bg-accent-yellow", orange: "bg-accent-orange", pink: "bg-accent-pink",
-    purple: "bg-accent-purple", red: "bg-accent-red", grey: "bg-border",
-  };
-
   onMount(async () => {
-    rules = await getRules();
-    autoGroup = await getAutoGroup();
+    rules = (await getConfig()).rules;
   });
 
   async function save() {
-    await saveRules(rules);
-  }
-
-  async function toggleAutoGroup() {
-    autoGroup = !autoGroup;
-    await setAutoGroup(autoGroup);
+    await updateConfig({ rules });
   }
 
   function normalizePattern(p: string): string {
@@ -111,14 +105,14 @@
   async function handleMerge(targetId: string) {
     if (!mergeSource || mergeSource === targetId) return;
     await mergeRules(targetId, mergeSource);
-    rules = await getRules();
+    rules = (await getConfig()).rules;
     mergeSource = null;
     flash("Rules merged");
   }
 
   async function handlePopulate() {
     const count = await populateFromCurrentGroups();
-    rules = await getRules();
+    rules = (await getConfig()).rules;
     flash(count > 0 ? `Added ${count} rule(s) from groups` : "No new groups to add");
   }
 
@@ -133,10 +127,7 @@
     newColor = "blue";
   }
 
-  function flash(msg: string) {
-    statusMsg = msg;
-    setTimeout(() => { statusMsg = ""; }, 2500);
-  }
+  const flash = createFlash((msg) => { statusMsg = msg; }, 2500);
 
   let testerOpen = $state(false);
   let testerInput = $state("");
@@ -175,11 +166,11 @@
       <div class="text-[10px] text-text-muted">Automatically group tabs matching rules</div>
     </div>
     <button
-      class="w-9 h-5 rounded-full transition-colors relative {autoGroup ? 'bg-primary' : 'bg-border'}"
-      onclick={toggleAutoGroup}
-      title={autoGroup ? "Disable auto-group" : "Enable auto-group"}
+      class="w-9 h-5 rounded-full transition-colors relative {automation.autoGroup ? 'bg-primary' : 'bg-border'}"
+      onclick={() => ontoggle("autoGroup")}
+      title={automation.autoGroup ? "Disable auto-group" : "Enable auto-group"}
     >
-      <span class="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform {autoGroup ? 'left-[18px]' : 'left-0.5'}"></span>
+      <span class="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform {automation.autoGroup ? 'left-[18px]' : 'left-0.5'}"></span>
     </button>
   </div>
 
@@ -223,7 +214,7 @@
             {:else}
               {@const winner = testerResult.hits[0]}
               <div class="flex items-center gap-1.5">
-                <span class="w-2 h-2 rounded-full shrink-0 {colorClasses[winner.rule.color] || 'bg-border'}"></span>
+                <span class="w-2 h-2 rounded-full shrink-0 {groupDotClass[winner.rule.color] || 'bg-border'}"></span>
                 <span class="font-medium text-text">{winner.rule.name}</span>
                 <span class="text-text-muted">via</span>
                 <span class="font-mono text-text-muted truncate">{winner.pattern}</span>
@@ -260,7 +251,7 @@
         <div class="flex gap-0.5">
           {#each COLORS as c}
             <button
-              class="w-3 h-3 rounded-full transition-all {colorClasses[c]} {rule.color === c ? 'ring-1 ring-white ring-offset-1 ring-offset-surface' : 'opacity-40 hover:opacity-70'}"
+              class="w-3 h-3 rounded-full transition-all {groupDotClass[c]} {rule.color === c ? 'ring-1 ring-white ring-offset-1 ring-offset-surface' : 'opacity-40 hover:opacity-70'}"
               onclick={(e) => { e.stopPropagation(); updateColor(rule.id, c); }}
               title={c}
             ></button>
@@ -310,7 +301,7 @@
       <div class="flex gap-0.5">
         {#each COLORS as c}
           <button
-            class="w-3 h-3 rounded-full transition-all {colorClasses[c]} {newColor === c ? 'ring-1 ring-white ring-offset-1 ring-offset-surface' : 'opacity-40 hover:opacity-70'}"
+            class="w-3 h-3 rounded-full transition-all {groupDotClass[c]} {newColor === c ? 'ring-1 ring-white ring-offset-1 ring-offset-surface' : 'opacity-40 hover:opacity-70'}"
             onclick={() => { newColor = c; }}
             title={c}
           ></button>

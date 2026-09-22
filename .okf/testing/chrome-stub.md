@@ -4,12 +4,16 @@ title: Chrome API stub
 description: lib/testing/chrome-stub.ts is the repo's executable model of Chrome tab, group, window and storage semantics for vitest, with failure-injection knobs; its fidelity decides what the tests can prove.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/testing/chrome-stub.ts
 tags: [testing, vitest, chrome-api]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-17T09:58:53Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-22T21:00:00Z }
 sources:
   - id: stub
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/testing/chrome-stub.ts
     title: lib/testing/chrome-stub.ts
-    last_modified: 2026-09-17
+    last_modified: 2026-09-22
+  - id: automation-test
+    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/automation.test.ts
+    title: lib/automation.test.ts
+    last_modified: 2026-09-22
   - id: vitest-config
     resource: https://github.com/samhvw8/TabOrdo/blob/main/vitest.config.ts
     title: vitest.config.ts
@@ -22,9 +26,9 @@ sources:
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/undo.ts
     title: lib/undo.ts
     last_modified: 2026-09-17
-  - id: rules-cache-test
-    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/rules-cache.test.ts
-    title: lib/rules-cache.test.ts
+  - id: rules-writes-test
+    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/rules-writes.test.ts
+    title: lib/rules-writes.test.ts
     last_modified: 2026-07-27
   - id: workspace-test
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/workspace.test.ts
@@ -57,7 +61,9 @@ sources:
 | `tabGroups.move` | Same window only. As Chromium's `TabGroupsMoveFunction::MoveGroup`: `index` is where the group's first tab lands once the group is lifted out, in either direction, and the group keeps its id. Recorded in `groupMoves`.[^stub] |
 | `tabs.group` | **Rejects ids that span windows** ("Tabs can only be grouped in the same window."). Creates the group in `groups` when no `groupId` is given, and pulls members contiguous.[^stub][^commit-3431468] |
 | `tabs.remove` | As Chromium's `TabsRemoveFunction`: removes ids **in order and rejects at the first failure**, so earlier ids are gone. An id not in `openTabs` rejects with `No tab with id: N.` An id in `failRemoveIds` rejects with "Tabs cannot be edited right now…".[^stub] |
-| `tabs.update` | Applies `pinned`, `url`, `highlighted`, `muted` and `active`, and records each call in `tabUpdates`.[^stub] |
+| `tabs.get` | Returns the open tab, or rejects an unknown id with `No tab with id: N.`, as `tabs.remove` does. A caller that forgot the catch fails here as it would in Chrome.[^stub] |
+| `tabs.update` | Applies `pinned`, `url`, `highlighted`, `muted` and `active`, and records each call in `tabUpdates`. A change of `pinned` is reported to `tabs.onUpdated` listeners as `{ pinned }` on a microtask, after the call resolves and only when the state changed. That late echo is what pin follow's self-write ledger exists to recognise.[^stub][^automation-test] |
+| `tabs.onUpdated` | `addListener` only, into `tabUpdatedListeners`. Nothing but a pin change from `tabs.update` fires it.[^stub] |
 | `windows.create({ tabId })` | Detaching a tab into a new window drops its group, like a cross-window move.[^stub] |
 | `storage.local` / `storage.session` | `get(null)` returns the whole area (recorded as `"*"`). `getKeys` (Chrome 130+) returns names only (recorded as `"<keys>"`). `set` structured-clones. `onChanged` listeners are called on a microtask, not inline.[^stub] |
 
@@ -71,7 +77,9 @@ sources:
 | `failCreateUrls` | `tabs.create` rejects for those URLs.[^stub] |
 | `failScriptingIds` | `scripting.executeScript` rejects, as it does without host permissions.[^stub] |
 
-Recorders: `created`, `removedIds`, `ungroupedIds`, `discardedIds`, `reloadedIds`, `scriptedIds`, `moves`, `groupMoves`, `groupUpdates`, `tabUpdates`, `storageReads`, `changeListeners`.[^stub]
+Recorders: `created`, `removedIds`, `ungroupedIds`, `discardedIds`, `reloadedIds`, `scriptedIds`, `moves`, `groupMoves`, `groupUpdates`, `tabUpdates`, `storageReads`, `changeListeners`, `tabUpdatedListeners`.[^stub]
+
+A stub tab carries `audible`, `discarded` and `frozen` when a test sets them, for the discard rule. Nothing in the stub changes them: `tabs.discard` only records.[^stub]
 
 # The 0.7.2 lesson
 
@@ -79,9 +87,10 @@ Recorders: `created`, `removedIds`, `ungroupedIds`, `discardedIds`, `reloadedIds
 
 # How tests use it
 
-- Call `stub = installChromeStub()` in `beforeEach`. Each install starts clean.[^stub] Module-level state in the code under test is **not** reset: undo tests drain the stack mirror with `popUndo()` after installing.[^undo-test]
-- A module that touches `chrome` at import time needs the stub first. `rules.ts` registers `storage.onChanged` at module scope, so `rules-cache.test.ts` installs, calls `vi.resetModules()`, and re-imports per test.[^rules-cache-test] `pin.ts` does the same for its lock-list cache, and `pin-cache.test.ts` follows the same pattern. Every other test imports these modules before any stub exists, so their caches stay unarmed there and a direct write to `stub.localData` is always read back.
-- APIs the stub lacks (`sessions`, `sidePanel`) are assigned onto `globalThis.chrome` ad hoc in the test.
+- Call `stub = installChromeStub()` in `beforeEach`. Each install starts clean, and so does the undo stack, which lives only in the stub's session area.[^stub][^undo-test] Module-level state in the code under test is **not** reset.
+- No lib module touches `chrome` at import time, so tests import normally and a direct write to `stub.localData` is always read back. Tests that model another context's write do exactly that, as `rules-writes.test.ts` does.[^rules-writes-test]
+- APIs the stub lacks (`sessions`, `readingList`, `sidePanel`) are assigned onto `globalThis.chrome` ad hoc in the test. The on-device model is a `LanguageModel` global stubbed with `vi.stubGlobal`.
+- The service worker's listener bodies live in `lib` and take their state as a parameter, so a test calls them with the event's arguments and a fresh `createAutomationState()` or `createLockSyncState()`. To model an echo, a test registers the lib function on `chrome.tabs.onUpdated`.[^automation-test]
 - `lib/workspace.test.ts` and `lib/sessions.test.ts` build their own `chrome` fake instead. The workspace fake's `remove` always succeeds.[^workspace-test]
 - `vitest.config.ts` includes `{lib,entrypoints,components}/**/*.test.ts`, widened from `lib/**/*.test.ts` in `3431468`. There are no setup files, so every test installs what it needs.[^vitest-config][^commit-3431468] No test files currently exist under `entrypoints/` or `components/`.
 
@@ -90,7 +99,7 @@ Recorders: `created`, `removedIds`, `ungroupedIds`, `discardedIds`, `reloadedIds
 - `tabs.create` ignores `windowId` and `index`: new tabs land in window 1 with no index. Assert on `created` instead.[^stub]
 - `tabs.remove` neither reindexes the remaining tabs nor drops an emptied group. Undo tests clear `groups` by hand.[^stub][^undo-test]
 - `tabs.move` of several ids removes them all and inserts them at `index`. Chromium places them one after another (`TabsMoveFunction::MoveTab`), which gives a different strip when a tab travels rightward. The stub also never applies `TabStripModel::GetGroupToAssign`: in Chrome a tab moved away from its group leaves it, and a tab dropped between two tabs of one group joins it. `tabs.ungroup` does not move the tab out to the group's edge the way Chrome does. `executeUndo`'s order restore only issues moves where both models agree.[^stub][^undo-ts]
-- No `tabs.get`, `tabGroups.get`, tab events, `runtime`, `alarms` or `contextMenus`. The background service worker, the main user of these, has no tests.[^stub]
+- No `tabGroups.get`, `runtime`, `alarms` or `contextMenus`. Of the events only `tabs.onUpdated` exists, fired only by a pin change: no `onCreated`, `onRemoved`, or `url` and `status` updates. The registrations in `entrypoints/background/index.ts` are therefore untested; the bodies they call are.[^stub]
 - `tabGroups.update` never rejects (for example on Chrome's saved groups), and `discard`/`reload` only record.[^stub]
 
 # Rule of thumb for adding fidelity
@@ -105,10 +114,11 @@ Add fidelity when a test can pass for the wrong reason, and write the comment th
 - [Release process](/processes/release.md)
 
 [^stub]: lib/testing/chrome-stub.ts
+[^automation-test]: lib/automation.test.ts
 [^vitest-config]: vitest.config.ts
 [^undo-test]: lib/undo.test.ts
 [^undo-ts]: lib/undo.ts
-[^rules-cache-test]: lib/rules-cache.test.ts
+[^rules-writes-test]: lib/rules-writes.test.ts
 [^workspace-test]: lib/workspace.test.ts
 [^commit-3431468]: Commit 3431468
 [^commit-acffcde]: Commit acffcde

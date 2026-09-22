@@ -1,6 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { hasChinese, pinyinVariants } from "./pinyin.ts";
-import { buildSearchHaystack, search } from "./search.ts";
+import { buildHaystacks, rankedSearch } from "./search.ts";
+
+/** The palette's ranking: both haystacks, as TabSearch builds them. */
+function ranker(items: { title: string; url: string }[]) {
+  const { haystack, titleHaystack } = buildHaystacks(items);
+  return (q: string) => rankedSearch(haystack, q, 50, undefined, titleHaystack);
+}
 
 describe("hasChinese", () => {
   it("detects CJK characters", () => {
@@ -31,53 +37,51 @@ describe("pinyinVariants", () => {
 });
 
 describe("pinyin search end-to-end", () => {
-  const items = [
+  const find = ranker([
     { title: "知乎 - 首页", url: "https://zhihu.com" },
     { title: "GitHub", url: "https://github.com" },
     { title: "百度一下", url: "https://baidu.com" },
-  ];
-  const haystack = buildSearchHaystack(items);
+  ]);
 
-  it("fuzzy matches full pinyin typed without spaces", () => {
-    expect(search(haystack, "zhihu", "fuzzy")).toEqual([0]);
-    expect(search(haystack, "baidu", "fuzzy")).toEqual([2]);
+  it("matches full pinyin typed without spaces", () => {
+    expect(find("zhihu")).toEqual([0]);
+    expect(find("baidu")).toEqual([2]);
   });
 
-  it("prefix matches a pinyin syllable", () => {
-    expect(search(haystack, "zhi", "prefix")).toContain(0);
+  it("matches a pinyin syllable", () => {
+    expect(find("zhi")).toEqual([0]);
   });
 
-  it("exact matches the joined pinyin form", () => {
-    expect(search(haystack, "baiduyixia", "exact")).toEqual([2]);
+  it("matches the joined pinyin form", () => {
+    expect(find("baiduyixia")).toEqual([2]);
   });
 
   it("leaves non-Chinese items searchable as before", () => {
-    expect(search(haystack, "github", "fuzzy")).toEqual([1]);
+    expect(find("github")).toEqual([1]);
   });
 });
 
 describe("unicode (CJK) queries typed directly", () => {
-  const items = [
+  const find = ranker([
     { title: "知乎 - 首页", url: "https://zhihu.com" },
     { title: "GitHub", url: "https://github.com" },
     { title: "Tiếng Việt - Báo mới", url: "https://baomoi.com" },
-  ];
-  const haystack = buildSearchHaystack(items);
+  ]);
 
-  it("fuzzy matches a Chinese needle", () => {
-    expect(search(haystack, "知乎", "fuzzy")).toEqual([0]);
+  it("matches a Chinese needle", () => {
+    expect(find("知乎")).toEqual([0]);
   });
 
-  it("exact matches a Chinese needle", () => {
-    expect(search(haystack, "首页", "exact")).toEqual([0]);
+  it("matches a Chinese word that doesn't start the title", () => {
+    expect(find("首页")).toEqual([0]);
   });
 
-  it("prefix matches a Chinese word", () => {
-    expect(search(haystack, "知", "prefix")).toContain(0);
+  it("matches a single Chinese character", () => {
+    expect(find("知")).toEqual([0]);
   });
 
   it("matches Vietnamese with and without diacritics", () => {
-    expect(search(haystack, "tiếng", "exact")).toEqual([2]);
-    expect(search(haystack, "tieng viet", "fuzzy")).toEqual([2]);
+    expect(find("tiếng")).toEqual([2]);
+    expect(find("tieng viet")).toEqual([2]);
   });
 });

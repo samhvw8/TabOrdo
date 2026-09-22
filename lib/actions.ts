@@ -1,9 +1,10 @@
-// Palette action handlers, one per slash command.
+// Action handlers, one per slash command and per tile that does something of its own. Slash
+// commands and dashboard tiles both run them, so a tile cannot drift from its command.
 //
-// These used to be a ~300-line switch inside App.svelte's handleActionCommand, which meant
-// the behaviour of every destructive command was only reachable by mounting the component —
-// so none of it was tested. A handler here is an ordinary async function over ActionContext:
-// unit-testable against the chrome stub, and adding a command is a one-file change.
+// A handler is an ordinary async function over ActionContext, unit-testable against the chrome
+// stub. The records are keyed, and typed, by the ids in commands.ts's action table: a row with
+// no handler, or a handler with no row, fails `npm run check` instead of shipping a command
+// that is listed and silently does nothing.
 //
 // What stays in the component: the bulk lock, the busy flag, status-message timing, and
 // /aigroup (which is deliberately run outside the lock — see App.svelte).
@@ -14,12 +15,16 @@ import {
   closeOldTabs, shuffleTabs, uniteDomain, isolateDomain, splitWindow, splitByDomain,
   stackWindows, collapseAllGroups, moveCurrentTab, moveGroup, pinCurrentTab, unpinCurrentTab,
   pinCurrentGroup, unpinCurrentGroup, collectBranch, groupBranch, branchUpRoot, parentOf,
-  switchToTab, type MoveGroupsResult,
+  switchToTab, sortTabsInGroup, extractGroupToWindow, groupTabsByDomain, ungroupAll,
+  type MoveGroupsResult,
 } from "./tabs/index.ts";
 import { archiveTabs, isArchivable } from "./archive.ts";
+import { discardInactiveTabs } from "./discard.ts";
 import { snapshotBeforeGroup } from "./undo.ts";
+import { groupAllByDomain, sortWindowByDomain } from "./arrange.ts";
+import { ACTION_BY_ID, commandRow, type HandledCommand, type OwnTile } from "./commands.ts";
 import { focusMode, unfocusMode, exportTabsToFile } from "./workspace.ts";
-import { addTabsToReadingList, isReadingListAvailable } from "./readinglist.ts";
+import { addTabsToReadingList } from "./readinglist.ts";
 import { getRecentlyClosed, restoreSession } from "./sessions.ts";
 import { rankedSearch, buildSearchHaystack, type SearchResult } from "./search.ts";
 
@@ -164,7 +169,7 @@ async function gatherBranch(ctx: ActionContext, from: "self" | "parent"): Promis
   return { message: `${verb}${suffix}`, acted: true };
 }
 
-export const ACTION_HANDLERS: Record<string, ActionHandler> = {
+export const ACTION_HANDLERS: Record<HandledCommand, ActionHandler> = {
   close: async (ctx) => {
     if (ctx.tabIds.length === 0) return NOTHING;
     const n = await closeTabs(ctx.tabIds);
@@ -236,8 +241,13 @@ export const ACTION_HANDLERS: Record<string, ActionHandler> = {
     const sortBy = (allowed as readonly string[]).includes(ctx.query)
       ? (ctx.query as "title" | "url" | "domain")
       : "domain";
-    await snapshotBeforeGroup();
-    await sortTabsInWindow(ctx.currentWindowId, sortBy);
+    // By domain is also what the Sort tile and the action-icon menu run: one shared function.
+    if (sortBy === "domain") {
+      await sortWindowByDomain(ctx.currentWindowId);
+    } else {
+      await snapshotBeforeGroup();
+      await sortTabsInWindow(ctx.currentWindowId, sortBy);
+    }
     return { message: `Sorted tabs by ${sortBy}`, acted: true };
   },
 
@@ -419,15 +429,12 @@ export const ACTION_HANDLERS: Record<string, ActionHandler> = {
   move: async (ctx) => ({ message: await moveCurrentTab(ctx.query), acted: true }),
   movegroup: async (ctx) => ({ message: await moveGroup(ctx.query), acted: true }),
 
-  pin: async (ctx) => ({ message: await pinCurrentTab(ctx.query), acted: true }),
-  unpin: async () => ({ message: await unpinCurrentTab(), acted: true }),
-  pingroup: async (ctx) => ({ message: await pinCurrentGroup(ctx.query), acted: true }),
-  unpingroup: async () => ({ message: await unpinCurrentGroup(), acted: true }),
+  lock: async (ctx) => ({ message: await pinCurrentTab(ctx.query), acted: true }),
+  unlock: async () => ({ message: await unpinCurrentTab(), acted: true }),
+  lockgroup: async (ctx) => ({ message: await pinCurrentGroup(ctx.query), acted: true }),
+  unlockgroup: async () => ({ message: await unpinCurrentGroup(), acted: true }),
 
   readlater: async (ctx) => {
-    if (!isReadingListAvailable()) {
-      return { message: "Reading List not available (requires Chrome 120+)", acted: true };
-    }
     if (ctx.tabIds.length > 0) {
       const tabData = ctx.matchingTabs.map((t) => ({ url: t.url, title: t.title }));
       const added = await addTabsToReadingList(tabData);
@@ -455,13 +462,12 @@ export const ACTION_HANDLERS: Record<string, ActionHandler> = {
   },
 
   sidepanel: async (ctx) => {
-    if (!chrome.sidePanel) return { message: "Side Panel not available (Chrome 114+)", acted: true };
     await chrome.sidePanel.open({ windowId: ctx.currentWindowId });
     return { message: "Opened Side Panel", acted: true };
   },
 
   restore: async () => {
-    const sessions = await chrome.sessions?.getRecentlyClosed?.({ maxResults: 1 }) ?? [];
+    const sessions = await chrome.sessions.getRecentlyClosed({ maxResults: 1 });
     if (sessions.length === 0) return { message: "No recently closed tabs", acted: true };
     const sid = sessions[0].tab?.sessionId || sessions[0].window?.sessionId;
     if (!sid) return { message: "Nothing to restore", acted: true };
@@ -475,22 +481,68 @@ export const ACTION_HANDLERS: Record<string, ActionHandler> = {
       return { message: `Unloaded ${ctx.tabIds.length} tab(s)`, acted: true };
     }
     if (ctx.query) return NOTHING;
-    const inactive = (await chrome.tabs.query({}))
-      .filter((t) => !t.active && !t.pinned && !t.audible && !t.discarded);
-    if (inactive.length === 0) return { message: "No tabs to unload", acted: true };
-    await discardTabs(inactive.map((t) => t.id!));
-    return { message: `Unloaded ${inactive.length} inactive tab(s)`, acted: true };
+    const unloaded = await discardInactiveTabs();
+    if (unloaded === 0) return { message: "No tabs to unload", acted: true };
+    return { message: `Unloaded ${unloaded} inactive tab(s)`, acted: true };
   },
 };
 
-// Aliases kept working for muscle memory; /lock and /pin are the same action.
-ACTION_HANDLERS.lock = ACTION_HANDLERS.pin;
-ACTION_HANDLERS.unlock = ACTION_HANDLERS.unpin;
-ACTION_HANDLERS.lockgroup = ACTION_HANDLERS.pingroup;
-ACTION_HANDLERS.unlockgroup = ACTION_HANDLERS.unpingroup;
+/**
+ * Tiles that run something other than their bare command. Their ids are the tile ids users
+ * have stored, which is why Group+ is "group" while /group groups whatever the query matched.
+ */
+export const TILE_HANDLERS: Record<OwnTile, ActionHandler> = {
+  group: async () => {
+    await groupAllByDomain();
+    return { message: "Grouped", acted: true };
+  },
 
-/** Returns null for a prefix with no handler (e.g. /aigroup, run by the caller instead). */
+  ungroup: async () => {
+    await snapshotBeforeGroup();
+    await ungroupAll();
+    return { message: "Ungrouped all", acted: true };
+  },
+
+  regroup: async () => {
+    await snapshotBeforeGroup();
+    await groupTabsByDomain("rebuild");
+    return { message: "Regrouped", acted: true };
+  },
+};
+
+// Maps, not the objects: an object lookup would hit Object.prototype, so /constructor would
+// resolve to a function and run it.
+const HANDLERS: ReadonlyMap<string, ActionHandler> = new Map(Object.entries(ACTION_HANDLERS));
+const OWN_TILES: ReadonlyMap<string, ActionHandler> = new Map(Object.entries(TILE_HANDLERS));
+
+/**
+ * The dashboard's group-header Sort and Extract. A group id picks the tabs rather than a query,
+ * so these sit outside ACTION_HANDLERS, but they rearrange the strip like the handlers do and
+ * snapshot first for the same reason: without an entry, Ctrl+Z pops whatever came before.
+ */
+export async function sortGroup(groupId: number, title: string): Promise<string> {
+  await snapshotBeforeGroup();
+  await sortTabsInGroup(groupId);
+  return `Sorted "${title}"`;
+}
+
+export async function extractGroup(groupId: number): Promise<string> {
+  await snapshotBeforeGroup();
+  return `Extracted ${await extractGroupToWindow(groupId)} tab(s)`;
+}
+
+/**
+ * Run a slash command, aliases resolved. Null for a prefix with no handler: not a command, a
+ * tile-only row, or /aigroup, which the caller runs itself.
+ */
 export async function runAction(prefix: string, ctx: ActionContext): Promise<ActionResult | null> {
-  const handler = ACTION_HANDLERS[prefix];
+  const row = ACTION_BY_ID.get(prefix);
+  const handler = row && HANDLERS.get(commandRow(row).id);
   return handler ? handler(ctx) : null;
+}
+
+/** Run a dashboard tile: its own handler where it has one, else its bare command. */
+export async function runTile(id: string, ctx: ActionContext): Promise<ActionResult | null> {
+  const own = OWN_TILES.get(id);
+  return own ? own(ctx) : runAction(id, ctx);
 }

@@ -9,7 +9,7 @@
 /**
  * Registrable-domain lookup, loaded on demand.
  *
- * tldts carries the full public-suffix trie: ~300 KB, HALF the popup bundle, parsed on every
+ * tldts-icann carries the ICANN half of the public-suffix trie: ~170 KB, parsed on every
  * single popup open. Nothing on the first-paint path needs it — the tab list renders
  * getFullHostname below, which is plain URL parsing. Only domain *actions* need real PSL
  * accuracy (so bbc.co.uk groups as bbc.co.uk and not co.uk), and every one of those is async.
@@ -26,7 +26,7 @@ let inflight: Promise<DomainMapper> | null = null;
 export async function getDomainMapper(): Promise<DomainMapper> {
   if (cachedMapper) return cachedMapper;
   if (!inflight) {
-    inflight = import("tldts").then(({ getDomain: tldtsDomain }) => {
+    inflight = import("tldts-icann").then(({ getDomain: tldtsDomain }) => {
       // Sort comparators ask for the same handful of URLs O(n log n) times, so memoise.
       const memo = new Map<string, string>();
       cachedMapper = (url: string): string => {
@@ -61,7 +61,7 @@ let cachedNamer: DomainMapper | null = null;
  */
 export async function getGroupNameMapper(): Promise<DomainMapper> {
   if (cachedNamer) return cachedNamer;
-  const { getDomainWithoutSuffix } = await import("tldts");
+  const { getDomainWithoutSuffix } = await import("tldts-icann");
   const memo = new Map<string, string>();
   cachedNamer = (url: string): string => {
     const hit = memo.get(url);
@@ -84,6 +84,20 @@ export function getFullHostname(url: string): string {
   } catch {
     return "";
   }
+}
+
+// Two rules for "is this a page", deliberately apart. Saving tabs for later (focus mode, the
+// Reading List, /save) leaves the browser's and extensions' own pages out. Bringing back what
+// was closed (undo, the archive) keeps them, and drops only a blank new tab.
+
+/** A page worth saving for later: not one of the browser's or an extension's own pages. */
+export function isSaveablePage(url: string | undefined): url is string {
+  return !!url && !url.startsWith("chrome://") && !url.startsWith("chrome-extension://");
+}
+
+/** A page worth reopening: anything but a blank new tab. */
+export function isReopenablePage(url: string | undefined): url is string {
+  return !!url && url !== "chrome://newtab/";
 }
 
 export function hashCode(str: string): number {

@@ -1,19 +1,21 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { SvelteSet } from "svelte/reactivity";
   import { getArchive, restoreFromArchive, deleteFromArchive, clearArchive, type ArchivedTab } from "../../lib/archive.ts";
   import { faviconCacheUrl } from "../../lib/favicon.ts";
+  import { createFlash } from "../../lib/flash.ts";
 
   // .raw: the list is replaced wholesale on every load, never edited in place, and `filtered`
   // and `grouped` below walk every entry on each search keystroke — through a deep proxy that
   // put a trap on every property read for no reactivity anyone used.
   let archive = $state.raw<ArchivedTab[]>([]);
   let searchQuery = $state("");
-  let selectedIds = $state<Set<string>>(new Set());
+  const selectedIds = new SvelteSet<string>();
   let statusMessage = $state("");
   // Tracks what is closed, not what is open. The other way round needed an empty set to mean
   // "everything is expanded", so collapsing the last open group emptied the set and sprang
   // them all back open.
-  let collapsedGroups = $state<Set<string>>(new Set());
+  const collapsedGroups = new SvelteSet<string>();
 
   let filtered = $derived.by(() => {
     if (!searchQuery.trim()) return archive;
@@ -64,14 +66,12 @@
   }
 
   function toggleGroup(dateKey: string) {
-    const next = new Set(collapsedGroups);
-    if (next.has(dateKey)) next.delete(dateKey); else next.add(dateKey);
-    collapsedGroups = next;
+    if (collapsedGroups.has(dateKey)) collapsedGroups.delete(dateKey); else collapsedGroups.add(dateKey);
   }
 
   async function reload() {
     archive = await getArchive();
-    selectedIds = new Set();
+    selectedIds.clear();
   }
 
   async function handleRestore(ids: string[]) {
@@ -93,27 +93,25 @@
     await reload();
   }
 
-  function showStatus(msg: string) {
-    statusMessage = msg;
-    setTimeout(() => { statusMessage = ""; }, 3000);
-  }
+  const showStatus = createFlash((msg) => { statusMessage = msg; }, 3000);
 
   function toggleSelect(id: string) {
-    const next = new Set(selectedIds);
-    if (next.has(id)) next.delete(id); else next.add(id);
-    selectedIds = next;
+    if (selectedIds.has(id)) selectedIds.delete(id); else selectedIds.add(id);
   }
 
-  function selectAll() { selectedIds = new Set(filtered.map((a) => a.id)); }
-  function selectNone() { selectedIds = new Set(); }
+  // Exactly what the search shows: a selection hidden by the filter would otherwise ride along
+  // into Restore or Delete unseen.
+  function selectAll() {
+    selectedIds.clear();
+    for (const a of filtered) selectedIds.add(a.id);
+  }
+  function selectNone() { selectedIds.clear(); }
 
   function selectGroup(items: ArchivedTab[]) {
-    const next = new Set(selectedIds);
-    const allSelected = items.every((i) => next.has(i.id));
+    const allSelected = items.every((i) => selectedIds.has(i.id));
     for (const item of items) {
-      if (allSelected) next.delete(item.id); else next.add(item.id);
+      if (allSelected) selectedIds.delete(item.id); else selectedIds.add(item.id);
     }
-    selectedIds = next;
   }
 
   function faviconUrl(item: ArchivedTab): string {
@@ -305,11 +303,12 @@
 </div>
 
 <style>
+  /* Colours and fonts are the app.css design tokens, so this page matches the popup; the
+     background, text colour and font are body's own. Sizes stay in px rather than Tailwind
+     utilities because app.css sets the root font size to 13px, which would shrink every rem
+     spacing step on this page to 13/16 of its size. */
   .archive-root {
     min-height: 100vh;
-    background: #0f0f1a;
-    color: #e4e4ef;
-    font-family: "Inter", system-ui, -apple-system, sans-serif;
   }
 
   /* Header */
@@ -317,9 +316,9 @@
     position: sticky;
     top: 0;
     z-index: 20;
-    background: rgba(15, 15, 26, 0.85);
+    background: color-mix(in oklab, var(--color-surface) 85%, transparent);
     backdrop-filter: blur(16px);
-    border-bottom: 1px solid rgba(99, 102, 241, 0.1);
+    border-bottom: 1px solid color-mix(in oklab, var(--color-primary) 10%, transparent);
   }
   .header-inner {
     max-width: 800px;
@@ -340,7 +339,7 @@
     font-size: 18px;
     font-weight: 700;
     letter-spacing: -0.02em;
-    background: linear-gradient(135deg, #e4e4ef, #a78bfa);
+    background: linear-gradient(135deg, var(--color-text), var(--color-accent-purple));
     background-clip: text;
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
@@ -352,8 +351,8 @@
     margin-top: 4px;
     padding-left: 32px;
   }
-  .stat { font-size: 12px; color: #9999b0; }
-  .stat-sep { font-size: 10px; color: #3b3b52; }
+  .stat { font-size: 12px; color: var(--color-text-muted); }
+  .stat-sep { font-size: 10px; color: var(--color-border); }
   .header-actions {
     display: flex;
     align-items: center;
@@ -375,32 +374,32 @@
     transition: all 0.15s;
   }
   .btn-restore {
-    background: rgba(74, 222, 128, 0.1);
-    color: #4ade80;
-    border-color: rgba(74, 222, 128, 0.2);
+    background: color-mix(in oklab, var(--color-accent-green) 10%, transparent);
+    color: var(--color-accent-green);
+    border-color: color-mix(in oklab, var(--color-accent-green) 20%, transparent);
   }
-  .btn-restore:hover { background: rgba(74, 222, 128, 0.2); }
+  .btn-restore:hover { background: color-mix(in oklab, var(--color-accent-green) 20%, transparent); }
   .btn-delete {
-    background: rgba(248, 113, 113, 0.1);
-    color: #f87171;
-    border-color: rgba(248, 113, 113, 0.2);
+    background: color-mix(in oklab, var(--color-accent-red) 10%, transparent);
+    color: var(--color-accent-red);
+    border-color: color-mix(in oklab, var(--color-accent-red) 20%, transparent);
   }
-  .btn-delete:hover { background: rgba(248, 113, 113, 0.2); }
+  .btn-delete:hover { background: color-mix(in oklab, var(--color-accent-red) 20%, transparent); }
   .btn-ghost {
     background: transparent;
-    color: #9999b0;
-    border-color: #3b3b52;
+    color: var(--color-text-muted);
+    border-color: var(--color-border);
   }
-  .btn-ghost:hover { background: rgba(255,255,255,0.04); color: #e4e4ef; }
+  .btn-ghost:hover { background: var(--color-surface-hover); color: var(--color-text); }
 
   /* Search */
   .search-bar {
     position: sticky;
     top: 72px;
     z-index: 15;
-    background: rgba(15, 15, 26, 0.9);
+    background: color-mix(in oklab, var(--color-surface) 90%, transparent);
     backdrop-filter: blur(12px);
-    border-bottom: 1px solid rgba(59, 59, 82, 0.3);
+    border-bottom: 1px solid color-mix(in oklab, var(--color-border) 30%, transparent);
   }
   .search-inner {
     max-width: 800px;
@@ -421,33 +420,33 @@
     left: 12px;
     width: 16px;
     height: 16px;
-    color: #9999b0;
+    color: var(--color-text-muted);
     pointer-events: none;
   }
   .search-input {
     width: 100%;
     padding: 10px 36px 10px 38px;
     border-radius: 10px;
-    border: 1px solid #3b3b52;
-    background: #1e1e2e;
-    color: #e4e4ef;
+    border: 1px solid var(--color-border);
+    background: var(--color-surface-hover);
+    color: var(--color-text);
     font-size: 13px;
     outline: none;
     transition: border-color 0.15s;
   }
-  .search-input::placeholder { color: #66668a; }
-  .search-input:focus { border-color: #6366f1; }
+  .search-input::placeholder { color: var(--color-text-muted); }
+  .search-input:focus { border-color: var(--color-primary); }
   .search-clear {
     position: absolute;
     right: 10px;
     background: none;
     border: none;
-    color: #9999b0;
+    color: var(--color-text-muted);
     cursor: pointer;
     font-size: 12px;
     padding: 4px;
   }
-  .search-clear:hover { color: #e4e4ef; }
+  .search-clear:hover { color: var(--color-text); }
   .search-actions {
     display: flex;
     align-items: center;
@@ -457,16 +456,16 @@
   .link-btn {
     background: none;
     border: none;
-    color: #6366f1;
+    color: var(--color-primary);
     cursor: pointer;
     font-size: 12px;
     padding: 2px;
     transition: color 0.15s;
   }
-  .link-btn:hover { color: #818cf8; }
+  .link-btn:hover { color: var(--color-primary-hover); }
   .search-count {
     font-size: 11px;
-    color: #9999b0;
+    color: var(--color-text-muted);
     padding-left: 4px;
   }
 
@@ -479,9 +478,9 @@
     z-index: 50;
     padding: 10px 20px;
     border-radius: 10px;
-    background: rgba(74, 222, 128, 0.15);
-    border: 1px solid rgba(74, 222, 128, 0.3);
-    color: #4ade80;
+    background: color-mix(in oklab, var(--color-accent-green) 15%, transparent);
+    border: 1px solid color-mix(in oklab, var(--color-accent-green) 30%, transparent);
+    color: var(--color-accent-green);
     font-size: 13px;
     font-weight: 500;
     backdrop-filter: blur(8px);
@@ -506,16 +505,16 @@
     text-align: center;
   }
   .empty-icon { margin-bottom: 24px; }
-  .empty-svg { width: 80px; height: 80px; color: #6366f1; }
+  .empty-svg { width: 80px; height: 80px; color: var(--color-primary); }
   .empty-title {
     font-size: 18px;
     font-weight: 600;
-    color: #e4e4ef;
+    color: var(--color-text);
     margin: 0 0 8px;
   }
   .empty-desc {
     font-size: 13px;
-    color: #9999b0;
+    color: var(--color-text-muted);
     margin: 0 0 32px;
   }
   .empty-hints {
@@ -529,22 +528,22 @@
     gap: 12px;
     padding: 10px 16px;
     border-radius: 10px;
-    background: #1e1e2e;
-    border: 1px solid #3b3b52;
+    background: var(--color-surface-hover);
+    border: 1px solid var(--color-border);
   }
   .hint-key {
-    font-family: "SF Mono", "Fira Code", monospace;
+    font-family: var(--font-family-mono);
     font-size: 12px;
     font-weight: 600;
-    color: #a78bfa;
+    color: var(--color-accent-purple);
     padding: 2px 8px;
     border-radius: 5px;
-    background: rgba(167, 139, 250, 0.1);
+    background: color-mix(in oklab, var(--color-accent-purple) 10%, transparent);
     white-space: nowrap;
   }
-  .hint-desc { font-size: 12px; color: #9999b0; }
+  .hint-desc { font-size: 12px; color: var(--color-text-muted); }
   .empty-icon-sm { font-size: 40px; margin-bottom: 12px; }
-  .empty-title-sm { font-size: 15px; font-weight: 600; color: #e4e4ef; margin: 0 0 4px; }
+  .empty-title-sm { font-size: 15px; font-weight: 600; color: var(--color-text); margin: 0 0 4px; }
 
   /* Date groups */
   .groups { display: flex; flex-direction: column; gap: 4px; }
@@ -563,7 +562,7 @@
   }
   .date-chevron {
     font-size: 12px;
-    color: #9999b0;
+    color: var(--color-text-muted);
     transition: transform 0.15s;
     width: 14px;
     text-align: center;
@@ -572,31 +571,31 @@
   .date-label {
     font-size: 12px;
     font-weight: 600;
-    color: #e4e4ef;
+    color: var(--color-text);
     text-transform: uppercase;
     letter-spacing: 0.04em;
   }
   .date-count {
     font-size: 11px;
-    color: #66668a;
+    color: var(--color-text-muted);
     font-weight: 400;
   }
   .date-line {
     flex: 1;
     height: 1px;
-    background: linear-gradient(to right, #3b3b52, transparent);
+    background: linear-gradient(to right, var(--color-border), transparent);
   }
   .date-select-btn {
     background: none;
     border: none;
-    color: #6366f1;
+    color: var(--color-primary);
     font-size: 11px;
     cursor: pointer;
     padding: 2px 6px;
     border-radius: 4px;
     transition: all 0.15s;
   }
-  .date-select-btn:hover { background: rgba(99, 102, 241, 0.1); }
+  .date-select-btn:hover { background: color-mix(in oklab, var(--color-primary) 10%, transparent); }
 
   /* Tab items */
   .tab-list {
@@ -616,12 +615,12 @@
     transition: all 0.12s;
   }
   .tab-item:hover {
-    background: rgba(255, 255, 255, 0.03);
-    border-color: rgba(59, 59, 82, 0.5);
+    background: var(--color-surface-hover);
+    border-color: color-mix(in oklab, var(--color-border) 50%, transparent);
   }
   .tab-item.selected {
-    background: rgba(99, 102, 241, 0.06);
-    border-color: rgba(99, 102, 241, 0.25);
+    background: color-mix(in oklab, var(--color-primary) 6%, transparent);
+    border-color: color-mix(in oklab, var(--color-primary) 25%, transparent);
   }
   .tab-checkbox {
     flex-shrink: 0;
@@ -632,7 +631,7 @@
     width: 15px;
     height: 15px;
     border-radius: 4px;
-    accent-color: #6366f1;
+    accent-color: var(--color-primary);
     cursor: pointer;
   }
   .tab-favicon {
@@ -654,7 +653,7 @@
   }
   .tab-title {
     font-size: 13px;
-    color: #e4e4ef;
+    color: var(--color-text);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -668,14 +667,14 @@
   }
   .tab-domain {
     font-size: 11px;
-    color: #66668a;
+    color: var(--color-text-muted);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
   .tab-time {
     font-size: 11px;
-    color: #4a4a6a;
+    color: color-mix(in oklab, var(--color-text-muted) 70%, transparent);
     flex-shrink: 0;
   }
   .tab-group-badge {
@@ -684,9 +683,9 @@
     border-radius: 6px;
     font-size: 10px;
     font-weight: 600;
-    background: rgba(167, 139, 250, 0.1);
-    color: #a78bfa;
-    border: 1px solid rgba(167, 139, 250, 0.15);
+    background: color-mix(in oklab, var(--color-accent-purple) 10%, transparent);
+    color: var(--color-accent-purple);
+    border: 1px solid color-mix(in oklab, var(--color-accent-purple) 15%, transparent);
     letter-spacing: 0.02em;
   }
 
@@ -713,10 +712,10 @@
     transition: all 0.12s;
   }
   .action-btn svg { width: 14px; height: 14px; }
-  .action-btn.restore { color: #4ade80; }
-  .action-btn.restore:hover { background: rgba(74, 222, 128, 0.1); }
-  .action-btn.delete { color: #f87171; }
-  .action-btn.delete:hover { background: rgba(248, 113, 113, 0.1); }
+  .action-btn.restore { color: var(--color-accent-green); }
+  .action-btn.restore:hover { background: color-mix(in oklab, var(--color-accent-green) 10%, transparent); }
+  .action-btn.delete { color: var(--color-accent-red); }
+  .action-btn.delete:hover { background: color-mix(in oklab, var(--color-accent-red) 10%, transparent); }
 
   @media (max-width: 640px) {
     .header-inner, .search-inner, .content { padding-left: 16px; padding-right: 16px; }

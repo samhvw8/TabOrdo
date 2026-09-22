@@ -1,30 +1,32 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { getAllTabs, switchToTab, closeTabs, sortTabsInWindow, sortTabsInGroup, groupTabsByDomain, ungroupAll, removeDuplicates, mergeAllWindows, extractGroupToWindow, discardTabs, closeTabsToLeft, closeTabsToRight, closeTabsSameSite, closeOldTabs, shuffleTabs, uniteDomain, isolateDomain, splitWindow, splitByDomain, stackWindows, pinCurrentTab, unpinCurrentTab, outlineBranch, type TabInfo } from "../../lib/tabs/index.ts";
+  import { SvelteSet } from "svelte/reactivity";
+  import { getAllTabs, switchToTab, closeTabs, pinCurrentTab, unpinCurrentTab, outlineBranch, type TabInfo } from "../../lib/tabs/index.ts";
   import { getPinnedTabs, getPinForTab, type PinnedTabEntry } from "../../lib/pin.ts";
   import { getArchiveCount } from "../../lib/archive.ts";
-  import { search, tabsToSearchItems, searchBookmarks, searchHistory, parseCommand, type SearchResult } from "../../lib/search.ts";
+  import { tabsToSearchItems, searchBookmarks, searchHistory, parseCommand, type SearchResult } from "../../lib/search.ts";
   import { createTabSearch, type TabSearch } from "../../lib/tabsearch.ts";
+  import { resolveView, readingListRows, duplicateTabs, firstSelectable, nextSelectable, ACTION_PREFIXES, type ViewContext } from "../../lib/views.ts";
   import { createDebouncer } from "../../lib/debounce.ts";
-  import { getAutoGroup, setAutoGroup, getAutoUngroup, setAutoUngroup, getUseRules, setUseRules, getAutoSort, setAutoSort, getAutoPinFollow, setAutoPinFollow, getAutoDiscard, setAutoDiscard, setSwitchToExisting } from "../../lib/rules.ts";
-  import { matchCommands, ALL_COMMANDS, ACTION_COMMANDS, TRIAGE_COMMANDS, CATEGORY_STYLES, groupCommands, type CommandDefinition, type CommandCategory } from "../../lib/commands.ts";
-  import { snapshotBeforeGroup, executeUndo, peekUndo, loadUndoStack, touchesUndoStack } from "../../lib/undo.ts";
-  import { focusMode, unfocusMode, hasSavedWorkspace, exportTabsToFile, loadTabsFromText } from "../../lib/workspace.ts";
-  import { addTabsToReadingList, isReadingListAvailable, getReadingList } from "../../lib/readinglist.ts";
+  import { updateConfig, type AutomationFlag, type AutomationFlags } from "../../lib/rules.ts";
+  import { matchCommands, ALL_COMMANDS, TRIAGE_COMMANDS, type CommandDefinition } from "../../lib/commands.ts";
+  import { snapshotBeforeGroup, executeUndo, hasUndo, touchesUndoStack } from "../../lib/undo.ts";
+  import { hasSavedWorkspace, loadTabsFromText } from "../../lib/workspace.ts";
+  import { getReadingList } from "../../lib/readinglist.ts";
   import { getRecentlyClosed } from "../../lib/sessions.ts";
   import { withBulkLock } from "../../lib/bulklock.ts";
-  import { checkAIAvailability, getAIProgress, defaultProgress, AI_PROGRESS_KEY, type AIGroupProgress } from "../../lib/ai.ts";
+  import { getAIProgress, defaultProgress, AI_PROGRESS_KEY, type AIGroupProgress } from "../../lib/ai.ts";
   import { getActionLog, ACTION_LOG_KEY, type ActionLogEntry } from "../../lib/actionLog.ts";
-  import { runAction, mergeStatus, FEEDBACK_URL } from "../../lib/actions.ts";
-  import { DASHBOARD_ACTION_POOL, ACTION_POOL_MAP, DEFAULT_DASHBOARD_IDS, ALT_MODE, MORE_SECTIONS,
-           UNPIN_ICON, PIN_TOP_ICON, type DashActionDef, type MoreItem } from "../../lib/dashboard.ts";
+  import { groupDotClass, groupBorderClass, groupBgClass, relTime } from "../../lib/format.ts";
+  import { createFlash } from "../../lib/flash.ts";
+  import { runAction, runTile, sortGroup, extractGroup, type ActionContext, type ActionResult } from "../../lib/actions.ts";
+  import { TILE_BY_ID, DEFAULT_DASHBOARD_IDS, MORE_SECTIONS, UNLOCK_FACE, type Tile, type TileFace } from "../../lib/dashboard.ts";
   import SearchInput from "../../components/SearchInput.svelte";
   import ResultList from "../../components/ResultList.svelte";
   import CommandHints from "../../components/CommandHints.svelte";
   import ActionButton from "../../components/ActionButton.svelte";
   import TabCard from "../../components/TabCard.svelte";
   import Sidebar, { type SidebarSection } from "../../components/Sidebar.svelte";
-  import OverflowMenu from "../../components/OverflowMenu.svelte";
   import LazyRows from "../../components/LazyRows.svelte";
 
   // Same component serves two surfaces: the popup is a fixed 450x600 sheet, the side panel is
@@ -52,22 +54,31 @@
 
   let showHelp = $state(false);
   let activeSection = $state<SidebarSection>("dashboard");
-  let showActions = $state(false);
 
-  let autoGroupEnabled = $state(false);
-  let autoUngroupEnabled = $state(false);
-  let useRulesEnabled = $state(false);
-  let autoSortEnabled = $state(false);
-  let autoPinFollowEnabled = $state(false);
-  let autoDiscardEnabled = $state(false);
-  let switchToExistingEnabled = $state(false);
+  /** The dashboard's automation switches, in two clusters: how tabs get grouped, then the rest. */
+  const AUTOMATION_TOGGLES: { key: AutomationFlag; label: string; tip: string }[][] = [
+    [
+      { key: "useRules", label: "Rules", tip: "Custom rules for grouping" },
+      { key: "autoGroup", label: "Auto", tip: "Auto-group new tabs" },
+      { key: "autoUngroup", label: "Ungroup", tip: "Dissolve a group when only one tab is left. Named groups only — untitled ones are left alone, since another extension may still be filling them." },
+    ],
+    [
+      { key: "autoSort", label: "Sort", tip: "Auto-sort on load" },
+      { key: "autoPinFollow", label: "Pin", tip: "Sync pins across windows" },
+      { key: "autoDiscard", label: "Discard", tip: "Auto-discard 45min+" },
+      { key: "switchToExisting", label: "Switch", tip: "Jump to existing tab instead of duplicate" },
+    ],
+  ];
+
+  // Those flags as rulesConfig holds them: read at mount, then kept current by the storage
+  // subscription, so a switch flipped in the other surface shows here too. RulesEditor's
+  // auto-group switch reads and flips this same record.
+  let automation = $state(Object.fromEntries(AUTOMATION_TOGGLES.flat().map((t) => [t.key, false])) as AutomationFlags);
   let hasWorkspace = $state(false);
+  // The panel persists, so grabbing focus on open would yank it off the page the user is reading.
   // `fluid` is fixed per mount — the popup and side-panel entrypoints each pass a literal — so
   // seeding from it once is the intent, not a missed derived. Silenced rather than left to sit,
-  // because two standing warnings train you to skim past the next real one.
-  // svelte-ignore state_referenced_locally
-  let inputFocused = $state(!fluid);
-  // The panel persists, so grabbing focus on open would yank it off the page the user is reading.
+  // because a standing warning trains you to skim past the next real one.
   // svelte-ignore state_referenced_locally
   let searchAutofocus = $state(!fluid);
   let canUndo = $state(false);
@@ -84,18 +95,8 @@
   // The toggles below run background daemons that move tabs while the popup is shut. Until now
   // the only record of that was buried in Settings, so "why did my tab move" had no answer
   // anywhere near the switches that caused it.
-  let anyAutomationOn = $derived(
-    useRulesEnabled || autoGroupEnabled || autoUngroupEnabled || autoSortEnabled ||
-    autoPinFollowEnabled || autoDiscardEnabled || switchToExistingEnabled
-  );
+  let anyAutomationOn = $derived(Object.values(automation).some(Boolean));
   let lastAutomation = $derived(actionLog[0] ?? null);
-
-  function relTime(ts: number): string {
-    const diff = Date.now() - ts;
-    if (diff < 60_000) return "just now";
-    if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
-    return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  }
 
   let onboardingDismissed = $state(true);
   let helpFilter = $state("");
@@ -103,7 +104,7 @@
 
 
   let dashboardActionIds = $state<string[]>([...DEFAULT_DASHBOARD_IDS]);
-  let dashboardActions = $derived(dashboardActionIds.map(id => ACTION_POOL_MAP.get(id)).filter((a): a is DashActionDef => !!a));
+  let dashboardActions = $derived(dashboardActionIds.map(id => TILE_BY_ID.get(id)).filter((t): t is Tile => !!t));
 
   let activeTabPin = $derived.by(() => {
     const active = dashboardTabs.find(t => t.active && t.windowId === currentWindowId);
@@ -111,32 +112,23 @@
     return getPinForTab(active.url, active.groupTitle, pinnedTabs, active.id) ?? null;
   });
 
-  let pinDisplay = $derived.by(() => {
-    if (altPressed) {
-      if (activeTabPin && activeTabPin.position === 0) return { label: "Unlock", icon: UNPIN_ICON, tooltip: "Release this tab's held position." };
-      return { label: "Lock Top", icon: PIN_TOP_ICON, tooltip: "Hold tab at the first position in its group." };
-    }
-    if (activeTabPin) return { label: "Unlock", icon: UNPIN_ICON, tooltip: "Release this tab's held position." };
-    return { label: "Lock Tab", icon: ACTION_POOL_MAP.get("pin")!.icon, tooltip: "Hold current tab at its position in the group." };
+  // Mirrors handlePinCurrent: a held tab releases, unless Alt can still move it to the top.
+  let pinDisplay = $derived.by((): TileFace => {
+    const lock = TILE_BY_ID.get("pin")!;
+    if (activeTabPin && !(altPressed && activeTabPin.position !== 0)) return UNLOCK_FACE;
+    return altPressed ? lock.alt! : lock;
   });
 
-  // Rebuilding a carried group can fail (Chrome refuses tab edits mid-drag, for one), which
-  // used to leave tabs loose or in a grey untitled group while the status bar still said
-  // "Merged". Say so instead.
   /**
-   * Live text for a More-panel row. MORE_SECTIONS is static data; these three rows read state
-   * the catalogue can't know — whether a workspace is saved, how big the archive is, and
-   * whether the active tab is already locked.
+   * What a tile shows right now, on the grid and in the More panel alike. The table holds each
+   * tile's resting face; Lock Tab and Focus also read state it can't know (is the tab held, is
+   * a workspace saved), and Alt swaps in the alt-click's face.
    */
-  function moreRowText(item: MoreItem): { label: string; tip: string } {
-    if (item.action === "pin") return { label: pinDisplay.label, tip: pinDisplay.tooltip };
-    if (item.action === "focus") {
-      return hasWorkspace
-        ? { label: "Unfocus", tip: "Restore saved tabs" }
-        : { label: "Focus", tip: "Save tabs & start fresh" };
-    }
-    if (item.action === "archive") return { label: item.label, tip: `${archiveCount} saved` };
-    return { label: item.label, tip: item.tip };
+  function tileFace(tile: Tile, withAlt: boolean): TileFace {
+    if (tile.id === "pin") return pinDisplay;
+    if (withAlt && tile.alt) return tile.alt;
+    if (tile.id === "focus" && hasWorkspace) return { ...tile, label: "Unfocus", tooltip: "Restore saved tabs." };
+    return tile;
   }
 
   function smallIcon(svg: string): string {
@@ -153,30 +145,34 @@
     await chrome.storage.local.set({ dashboardActionIds: [...dashboardActionIds] });
   }
 
-  function confirmAction(id: string, action: () => void) {
+  /**
+   * The two-click guard on buttons that close tabs or scatter the window. The first click arms
+   * `id` for 3 s and returns false; a second click on the same id inside that window disarms it
+   * and returns true.
+   */
+  function confirmed(id: string): boolean {
+    clearTimeout(confirmTimer);
     if (pendingConfirm === id) {
-      clearTimeout(confirmTimer);
       pendingConfirm = null;
-      action();
-    } else {
-      pendingConfirm = id;
-      clearTimeout(confirmTimer);
-      confirmTimer = setTimeout(() => { pendingConfirm = null; }, 3000);
+      return true;
     }
+    pendingConfirm = id;
+    confirmTimer = setTimeout(() => { pendingConfirm = null; }, 3000);
+    return false;
   }
-
-  // Lock helper lives in lib/bulklock.ts — it releases only the lease this call took, so a
-  // quick popup action can no longer unlock a long-running background AI grouping run.
 
   // Every status message goes through here so none can strand on screen. The triage views
   // used to set statusMessage with no timer of their own, leaving "Reading List is empty"
   // pinned under the search bar until an unrelated action happened to overwrite it.
-  let statusTimer: ReturnType<typeof setTimeout> | undefined;
+  const flashStatus = createFlash((msg) => { statusMessage = msg; }, 3000);
 
-  function flashStatus(msg: string, ms = 3000) {
-    statusMessage = msg;
-    clearTimeout(statusTimer);
-    statusTimer = setTimeout(() => { statusMessage = ""; }, ms);
+  // hasUndo lists key names only, so it is cheap to ask after every action and storage change.
+  // Only the newest answer lands: an older one resolving late would light or dim the button for
+  // a stack that has changed since.
+  let undoCheck = 0;
+  function refreshCanUndo(): void {
+    const seq = ++undoCheck;
+    void hasUndo().then((v) => { if (seq === undoCheck) canUndo = v; }, () => {});
   }
 
   async function handleUndo() {
@@ -191,21 +187,26 @@
       // message, no undo, and an unhandled rejection in the console.
       flashStatus(`Undo failed: ${e instanceof Error ? e.message : "unknown error"}`, 5000);
     } finally {
-      canUndo = !!peekUndo();
+      refreshCanUndo();
       busy = false;
     }
   }
-  let collapsedGroups = $state<Set<number>>(new Set());
+  const collapsedGroups = new SvelteSet<number>();
 
-  function setCollapsed(s: Set<number>) {
-    collapsedGroups = s;
-    chrome.storage.local.set({ collapsedGroups: [...s] });
+  // Storage holds JSON, so the set is saved as an array.
+  function saveCollapsed() {
+    chrome.storage.local.set({ collapsedGroups: [...collapsedGroups] });
+  }
+
+  function setCollapsed(keys: Iterable<number>) {
+    collapsedGroups.clear();
+    for (const k of keys) collapsedGroups.add(k);
+    saveCollapsed();
   }
 
   function toggleGroupCollapse(groupId: number) {
-    const next = new Set(collapsedGroups);
-    if (next.has(groupId)) next.delete(groupId); else next.add(groupId);
-    setCollapsed(next);
+    if (collapsedGroups.has(groupId)) collapsedGroups.delete(groupId); else collapsedGroups.add(groupId);
+    saveCollapsed();
   }
 
   // $state.raw, and a plain let for the search, deliberately. A deep $state proxy puts a trap
@@ -228,7 +229,7 @@
 
   let windows = $state.raw<WindowData[]>([]);
   let dashboardTabs = $state.raw<TabInfo[]>([]);
-  let selectedTabs = $state<Set<number>>(new Set());
+  const selectedTabs = new SvelteSet<number>();
   let currentWindowId = $state(0);
 
   // Strictly query-driven: the dashboard (and its action pad) stays put until you actually type.
@@ -250,22 +251,6 @@
       ? `${RESULTS_LISTBOX_ID}-option-${selectedIndex}`
       : undefined
   );
-
-  const groupColors: Record<string, string> = {
-    blue: "border-accent-blue/40", cyan: "border-accent-cyan/40", green: "border-accent-green/40",
-    yellow: "border-accent-yellow/40", orange: "border-accent-orange/40", pink: "border-accent-pink/40",
-    purple: "border-accent-purple/40", red: "border-accent-red/40", grey: "border-border",
-  };
-  const groupBg: Record<string, string> = {
-    blue: "bg-accent-blue/5", cyan: "bg-accent-cyan/5", green: "bg-accent-green/5",
-    yellow: "bg-accent-yellow/5", orange: "bg-accent-orange/5", pink: "bg-accent-pink/5",
-    purple: "bg-accent-purple/5", red: "bg-accent-red/5", grey: "bg-surface-hover",
-  };
-  const dotColors: Record<string, string> = {
-    blue: "bg-accent-blue", cyan: "bg-accent-cyan", green: "bg-accent-green",
-    yellow: "bg-accent-yellow", orange: "bg-accent-orange", pink: "bg-accent-pink",
-    purple: "bg-accent-purple", red: "bg-accent-red", grey: "bg-border",
-  };
 
   async function loadTabs() {
     // Three independent reads; serialising them cost three round-trips for no ordering reason.
@@ -316,6 +301,11 @@
       if (b.isCurrent) return 1;
       return b.tabCount - a.tabCount;
     });
+
+    // The empty-query list is what the "Back to" hint shows and Enter opens, so it must not
+    // keep a tab an action just closed. A typed query keeps its list: handleClose trims that
+    // one itself and keeps the selection where Ctrl+Delete left it.
+    if (!query) updateResults();
   }
 
   /**
@@ -325,6 +315,12 @@
    */
   function warmWhenIdle(search: TabSearch) {
     requestIdleCallback(() => { if (tabSearch === search) search.warm(); }, { timeout: 1000 });
+  }
+
+  /** Change the query from code. Setting `query` alone leaves the list ranked for the old one. */
+  function setQuery(q: string) {
+    query = q;
+    updateResults();
   }
 
   async function updateResults() {
@@ -372,11 +368,11 @@
             ...(bookmarkResults.length > 0 ? [{ type: "divider" as const, id: "div-bookmarks", title: "Bookmarks", url: "" }, ...bookmarkResults] : []),
             ...(historyResults.length > 0 ? [{ type: "divider" as const, id: "div-history", title: "History", url: "" }, ...historyResults] : []),
           ];
-          selectedIndex = firstSelectable();
+          selectedIndex = firstSelectable(results);
         });
       }
     }
-    selectedIndex = firstSelectable();
+    selectedIndex = firstSelectable(results);
   }
 
   /**
@@ -398,7 +394,7 @@
         const found = await (prefix === "b" ? searchBookmarks(searchQuery) : searchHistory(searchQuery));
         if (query !== capturedQuery) return;
         results = found;
-        selectedIndex = firstSelectable();
+        selectedIndex = firstSelectable(results);
       } finally {
         if (query === capturedQuery) loading = false;
       }
@@ -422,175 +418,41 @@
     return prefixSource!.rows;
   }
 
+  /**
+   * The Chrome reads a view needs beyond the loaded tabs, made for that view alone. Reading
+   * List rows are mapped inside the read, so every keystroke ranks the same row objects and
+   * rankView keeps their haystack.
+   */
+  const VIEW_READS = new Map<string, () => Promise<Partial<ViewContext>>>([
+    ["rl", async () => ({ source: await sourceOnce("rl", async () => readingListRows(await getReadingList())) })],
+    ["rc", async () => ({ source: await sourceOnce("rc", () => getRecentlyClosed()) })],
+    ["@b", async () => ({ branch: await activeBranch() })],
+    ["@shared", async () => ({ groups: await chrome.tabGroups.query({}) })],
+  ]);
+
+  async function activeBranch(): Promise<{ id: number; depth: number }[]> {
+    const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+    return active?.id ? outlineBranch(active.id) : [];
+  }
+
   async function handlePrefixSearch(prefix: string, searchQuery: string) {
     loading = true;
     try {
-      // Triage views are table-driven: they only differ by which tabs they select, and the
-      // eight hand-copied switch arms this replaces are what let a broken "@shared" hide.
-      //
-      // Every view below ranks through tabSearch.rankView, keyed by the view. Each used to build
-      // a fresh haystack from its rows on every keystroke (719 entries of diacritic stripping
-      // and pinyin for "@u", 2.6 ms a key at 1000 tabs); rankView keeps one until the rows change.
-      const view = TRIAGE_BY_PREFIX.get(prefix);
-      if (view) {
-        const viewTabs = await view.tabs();
-        results = searchQuery ? tabSearch.rankView(prefix, viewTabs, searchQuery) : viewTabs;
-        if (viewTabs.length === 0 && view.empty) flashStatus(view.empty);
-        return;
-      }
-
-      switch (prefix) {
-        // /w and /g read the tabs this popup already loaded. /w used to call
-        // getCurrentWindowTabs() on every keystroke: tabs.query over every tab in every window
-        // plus tabGroups.query and windows.getCurrent, three IPC round-trips to keep a slice of
-        // what allTabs holds. The dashboard, @ views and plain search all work from the same load.
-        case "w": {
-          results = tabSearch.rankView("w", allTabs.filter((t) => t.windowId === currentWindowId), searchQuery);
-          break;
-        }
-        case "p": {
-          results = tabSearch.rankView("p", allTabs.filter((t) => t.pinned), searchQuery);
-          break;
-        }
-        case "g": {
-          const activeTab = dashboardTabs.find((t) => t.active && t.windowId === currentWindowId);
-          const activeGroupId = activeTab?.groupId ?? -1;
-          const groupTabs = activeGroupId !== -1
-            ? allTabs.filter((t) => t.groupId === activeGroupId)
-            : allTabs.filter((t) => !t.groupId || t.groupId === -1);
-          results = tabSearch.rankView("g", groupTabs, searchQuery);
-          break;
-        }
-        case "@": {
-          const triageResults: SearchResult[] = [];
-          for (const cat of TRIAGE_OVERVIEW) {
-            const catTabs = await cat.overviewTabs!();
-            if (catTabs.length === 0) continue;
-            const matched = searchQuery ? tabSearch.rankView(cat.id, catTabs, searchQuery) : catTabs;
-            if (matched.length === 0) continue;
-            triageResults.push({ type: "divider", id: cat.id, title: `${cat.title} (${matched.length})`, url: "" });
-            triageResults.push(...matched);
-          }
-          results = triageResults;
-          if (triageResults.length === 0) {
-            flashStatus(searchQuery ? "No triage matches" : "All clear — no tabs need attention");
-          }
-          break;
-        }
-        case "rl": {
-          if (!isReadingListAvailable()) { results = []; flashStatus("Reading List not available (Chrome 120+)"); break; }
-          // Mapped inside the fetch, so every keystroke gets the same row objects and rankView
-          // keeps its haystack.
-          const rlResults = await sourceOnce("rl", async () => (await getReadingList()).map((item, i) => ({
-            type: "bookmark" as const, id: `rl-${i}`, title: `${item.hasBeenRead ? "✓ " : ""}${item.title}`, url: item.url,
-          })));
-          results = searchQuery ? tabSearch.rankView("rl", rlResults, searchQuery) : rlResults;
-          if (rlResults.length === 0) flashStatus("Reading List is empty");
-          break;
-        }
-        case "rc": {
-          const rcItems = await sourceOnce("rc", () => getRecentlyClosed());
-          results = searchQuery ? tabSearch.rankView("rc", rcItems, searchQuery) : rcItems;
-          if (rcItems.length === 0) flashStatus("No recently closed tabs");
-          break;
-        }
-        case "re": {
-          const indices = search(tabSearch.haystack(), searchQuery, "regex", 50, tabSearch.recency);
-          results = indices.map((i) => tabSearch.items[i]);
-          break;
-        }
-        default:
-          if (ACTION_PREFIXES.has(prefix)) {
-            results = searchQuery ? tabSearch.rank(searchQuery) : [];
-          } else {
-            results = tabSearch.rank(`/${prefix} ${searchQuery}`);
-          }
-      }
+      const read = VIEW_READS.get(prefix);
+      const extra = read ? await read() : undefined;
+      // Assembled after the read, so the view resolves against the latest tab load.
+      const view = resolveView(prefix, searchQuery, {
+        search: tabSearch,
+        currentWindowId,
+        activeGroupId: dashboardTabs.find((t) => t.active && t.windowId === currentWindowId)?.groupId ?? -1,
+        ...extra,
+      });
+      results = view.rows;
+      if (view.empty) flashStatus(view.empty);
     } finally {
       loading = false;
-      selectedIndex = firstSelectable();
+      selectedIndex = firstSelectable(results);
     }
-  }
-
-  const ACTION_PREFIXES = new Set(ACTION_COMMANDS.map((c) => c.prefix));
-
-  interface TriageCategory {
-    prefix: string;
-    id: string;
-    title: string;
-    tabs: () => SearchResult[] | Promise<SearchResult[]>;
-    /** Status line when the dedicated @-view comes back empty. */
-    empty?: string;
-    /** Whether the bare "@" overview lists this category, and with what (shorter) list. */
-    overviewTabs?: () => SearchResult[] | Promise<SearchResult[]>;
-  }
-
-  // One definition per category, driving both the dedicated "@x" views and the bare "@"
-  // overview. Overview order follows this list.
-  const TRIAGE_CATEGORIES: TriageCategory[] = [
-    { prefix: "@a", id: "div-triage-audio", title: "Playing Audio",
-      tabs: () => allTabs.filter((t) => t.audible), overviewTabs: () => allTabs.filter((t) => t.audible) },
-    { prefix: "@m", id: "div-triage-muted", title: "Muted",
-      tabs: () => allTabs.filter((t) => t.muted), overviewTabs: () => allTabs.filter((t) => t.muted) },
-    { prefix: "@d", id: "div-triage-dupes", title: "Duplicates",
-      tabs: () => findDuplicateTabs(allTabs), overviewTabs: () => findDuplicateTabs(allTabs) },
-    // The dedicated view goes deeper than the overview section, which is one of six.
-    { prefix: "@r", id: "div-triage-recent", title: "Recently Active",
-      tabs: () => mostRecentTabs(20), overviewTabs: () => mostRecentTabs(15) },
-    // "Unloaded" is what /discard produces: dropped from memory, reloads when you return.
-    // "Paused by Chrome" is Chrome's own Memory Saver freeze — TabOrdo never sets it, so this
-    // view is an observation, not a result of anything the user did here.
-    { prefix: "@s", id: "div-triage-suspended", title: "Unloaded",
-      tabs: () => allTabs.filter((t) => t.discarded), overviewTabs: () => allTabs.filter((t) => t.discarded) },
-    { prefix: "@f", id: "div-triage-frozen", title: "Paused by Chrome", empty: "Chrome hasn't paused any tabs",
-      tabs: () => allTabs.filter((t) => t.frozen), overviewTabs: () => allTabs.filter((t) => t.frozen) },
-    { prefix: "@u", id: "div-triage-ungrouped", title: "Ungrouped", empty: "All tabs are grouped",
-      tabs: () => allTabs.filter((t) => !t.groupId || t.groupId === -1) },
-    // What /branch would gather, before gathering it — and the place to see why it grabbed
-    // (or missed) a tab. Contextual like @u, so it stays out of the bare "@" overview.
-    { prefix: "@b", id: "div-triage-branch", title: "Branch", empty: "No tabs were opened from this one",
-      tabs: branchViewTabs },
-    { prefix: "@shared", id: "div-triage-shared", title: "Shared Groups", empty: "No shared group tabs",
-      tabs: sharedGroupTabs },
-  ];
-
-  // A Map, not an object literal: an object lookup would hit Object.prototype, so a command
-  // like /constructor or /toString would resolve to a truthy non-category and throw.
-  const TRIAGE_BY_PREFIX = new Map(TRIAGE_CATEGORIES.map((c) => [c.prefix, c]));
-  const TRIAGE_OVERVIEW = TRIAGE_CATEGORIES.filter((c) => c.overviewTabs);
-
-  function mostRecentTabs(limit: number): SearchResult[] {
-    return [...allTabs]
-      .filter((t) => t.type === "tab")
-      .sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0))
-      .slice(0, limit);
-  }
-
-  /**
-   * The active tab's branch as an outline: the root first, everything opened from it indented
-   * beneath, in tree order. Depth is drawn into the title with a non-breaking indent — the
-   * row component has no notion of nesting, and this is a view, not a data change.
-   */
-  async function branchViewTabs(): Promise<SearchResult[]> {
-    const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!active?.id) return [];
-    const outline = await outlineBranch(active.id);
-    // A lone root is not a branch; let the empty message say so.
-    if (outline.length < 2) return [];
-    const byId = new Map(allTabs.filter((t) => t.tabId !== undefined).map((t) => [t.tabId!, t]));
-    const rows: SearchResult[] = [];
-    for (const { id, depth } of outline) {
-      const t = byId.get(id);
-      if (!t) continue;
-      rows.push(depth === 0 ? t : { ...t, title: `${"\u00A0\u00A0".repeat(depth - 1)}\u21B3 ${t.title || "Untitled"}` });
-    }
-    return rows;
-  }
-
-  async function sharedGroupTabs(): Promise<SearchResult[]> {
-    const allGroups = await chrome.tabGroups.query({});
-    const sharedIds = new Set(allGroups.filter((g) => (g as any).shared === true).map((g) => g.id));
-    return allTabs.filter((t) => t.groupId && sharedIds.has(t.groupId));
   }
 
   /**
@@ -604,21 +466,6 @@
     const out: T[][] = [];
     for (let i = 0; i < items.length; i += ROWS_PER_CHUNK) out.push(items.slice(i, i + ROWS_PER_CHUNK));
     return out;
-  }
-
-  function findDuplicateTabs(tabs: SearchResult[]): SearchResult[] {
-    const urlMap = new Map<string, SearchResult[]>();
-    for (const tab of tabs) {
-      if (tab.type !== "tab" || !tab.url) continue;
-      const existing = urlMap.get(tab.url);
-      if (existing) existing.push(tab);
-      else urlMap.set(tab.url, [tab]);
-    }
-    const dupes: SearchResult[] = [];
-    for (const group of urlMap.values()) {
-      if (group.length > 1) dupes.push(...group);
-    }
-    return dupes;
   }
 
   // Read-only. The background owns the AI progress state machine end to end: runAIGroup's
@@ -656,7 +503,7 @@
       flashStatus("Could not save an undo point — AI grouping cancelled", 5000);
       return;
     }
-    canUndo = !!peekUndo();
+    refreshCanUndo();
 
     activeSection = "ai";
     aiProgress = { ...defaultProgress(), status: "checking" };
@@ -681,85 +528,31 @@
 
   let groupCount = $derived(windows.reduce((n, w) => n + w.groups.size, 0));
   let audioCount = $derived(dashboardTabs.filter((t) => t.audible && !t.mutedInfo?.muted).length);
-  let dupeCount = $derived(findDuplicateTabs(allTabs).length);
+  let dupeCount = $derived(duplicateTabs(allTabs).length);
   let frozenCount = $derived(dashboardTabs.filter((t) => t.frozen).length);
   let suspendedCount = $derived(dashboardTabs.filter((t) => t.discarded && !t.frozen).length);
 
-  // A single click on a dashboard/overflow button should never close tabs outright. Typing the
-  // equivalent slash command is deliberate enough to skip the second tap, and undo covers both.
-  const CONFIRM_ACTIONS = new Set(["merge", "dedup", "closeleft", "closeright", "closeold", "closesite", "focus"]);
-
+  // Which tiles confirm is the table's call (TileDef.confirm in lib/commands.ts).
   function needsConfirm(action: string): boolean {
     // "Focus" toggles: the unfocus direction restores tabs, so only arm the closing one.
     if (action === "focus") return !hasWorkspace;
-    return CONFIRM_ACTIONS.has(action);
+    return TILE_BY_ID.get(action)?.confirm ?? false;
   }
 
   async function handleOverflowAction(action: string) {
-    if (needsConfirm(action)) {
-      if (pendingConfirm === action) {
-        clearTimeout(confirmTimer);
-        pendingConfirm = null;
-      } else {
-        pendingConfirm = action;
-        clearTimeout(confirmTimer);
-        confirmTimer = setTimeout(() => { pendingConfirm = null; }, 3000);
-        return;
-      }
-    }
+    if (needsConfirm(action) && !confirmed(action)) return;
     const goBack = () => { activeSection = "dashboard"; };
+    // Every tile runs its handler from the action table unless it needs something only the
+    // component has: workspace or lock state, the palette, or the AI hand-off before the lock.
     switch (action) {
-      case "collapse": goBack(); dashCommand("collapse"); break;
-      case "extract": goBack(); dashCommand("extract"); break;
-      case "branch": goBack(); dashCommand("branch"); break;
-      case "branchup": goBack(); dashCommand("branchup"); break;
-      case "restore": goBack(); dashCommand("restore"); break;
-      case "mute": goBack(); dashCommand("mute"); break;
-      case "unmute": goBack(); dashCommand("unmute"); break;
-      case "freeze": goBack(); dashCommand("freeze"); break;
-      case "pingroup": goBack(); dashCommand("pingroup"); break;
-      case "split": goBack(); dashCommand("split"); break;
-      case "regroup": goBack(); dashAction(async () => { await snapshotBeforeGroup(); await groupTabsByDomain("rebuild"); return "Regrouped"; }); break;
-      case "ungroup": goBack(); dashAction(async () => { await snapshotBeforeGroup(); await ungroupAll(); return "Ungrouped all"; }); break;
-      case "shuffle": goBack(); dashAction(async () => { await snapshotBeforeGroup(); await shuffleTabs(); return "Shuffled"; }); break;
-      case "unite": goBack(); dashAction(async () => { const n = await uniteDomain(); return n > 0 ? `United ${n}` : "None to unite"; }); break;
-      case "isolate": goBack(); dashAction(async () => { const n = await isolateDomain(); return n > 0 ? `Isolated ${n}` : "Not enough tabs"; }); break;
-      case "splitv": goBack(); dashAction(async () => { await snapshotBeforeGroup(); await splitWindow("vertical"); return "Split V"; }); break;
-      case "splith": goBack(); dashAction(async () => { await snapshotBeforeGroup(); await splitWindow("horizontal"); return "Split H"; }); break;
-      case "splitdomain": goBack(); dashAction(async () => { await snapshotBeforeGroup(); const n = await splitByDomain(); return n > 0 ? `${n + 1} windows` : "One domain"; }); break;
-      case "stack": goBack(); dashAction(async () => { await stackWindows(); return "Stacked"; }); break;
-      case "closeleft": goBack(); dashAction(async () => { const n = await closeTabsToLeft(); return n > 0 ? `Closed ${n} left` : "None to close"; }); break;
-      case "closeright": goBack(); dashAction(async () => { const n = await closeTabsToRight(); return n > 0 ? `Closed ${n} right` : "None to close"; }); break;
-      case "closeold": goBack(); dashAction(async () => { const n = await closeOldTabs(); return n > 0 ? `Closed ${n} old` : "No old tabs"; }); break;
-      case "closesite": goBack(); dashAction(async () => { const n = await closeTabsSameSite(); return n > 0 ? `Closed ${n} same-site` : "No other tabs"; }); break;
-      case "focus":
-        goBack(); dashAction(async () => {
-          if (hasWorkspace) { const n = await unfocusMode(); hasWorkspace = await hasSavedWorkspace(); return n > 0 ? `Restored ${n}` : "No workspace"; }
-          else { const n = await focusMode(); hasWorkspace = await hasSavedWorkspace(); return n > 0 ? `Saved ${n}, focused` : "No tabs to save"; }
-        }); break;
-      case "save": goBack(); exportTabsToFile(); flashStatus("Exporting...", 2000); break;
-      case "load": requestFilePicker(); break;
-      case "archive": chrome.tabs.create({ url: chrome.runtime.getURL("/archive.html") }); break;
-      case "feedback": chrome.tabs.create({ url: FEEDBACK_URL }); break;
-      case "sort": goBack(); dashAction(async () => { await snapshotBeforeGroup(); await sortTabsInWindow(currentWindowId); return "Sorted"; }); break;
-      case "group": goBack(); dashAction(async () => { await snapshotBeforeGroup(); await groupTabsByDomain("additive"); return "Grouped"; }); break;
-      case "dedup": goBack(); dashAction(async () => { const n = await removeDuplicates(); return n > 0 ? `${n} removed` : "No dupes"; }); break;
-      case "merge": goBack(); dashAction(async () => { await snapshotBeforeGroup(); return mergeStatus(await mergeAllWindows()); }); break;
+      case "focus": goBack(); dashCommand(hasWorkspace ? "unfocus" : "focus"); break;
       case "pin": goBack(); handlePinCurrent(new MouseEvent("click", { altKey: altPressed })); break;
       case "aigroup": goBack(); await startAIGroup(); break;
-      case "readlater": goBack(); dashAction(async () => {
-        if (!isReadingListAvailable()) return "Reading List not available (Chrome 120+)";
-        const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
-        if (active?.url && active.title) { await addTabsToReadingList([{ url: active.url, title: active.title }]); return "Added to Reading List"; }
-        return "No active tab";
-      }); break;
+      case "archive": openArchive(); break;
       // updateResults() can't populate this one: "recent" is an action prefix, so it would
       // fall through to an empty tab search. Run the action itself to fill the list.
       case "recent": goBack(); query = "/recent "; paletteMode = "search"; commandHints = []; await handleActionCommand("recent", ""); break;
-      case "sidepanel":
-        if (chrome.sidePanel) { chrome.sidePanel.open({ windowId: currentWindowId }); }
-        else { flashStatus("Side Panel not available (Chrome 114+)"); }
-        break;
+      default: goBack(); dashTile(action);
     }
   }
 
@@ -773,11 +566,9 @@
     if (!ACTION_PREFIXES.has(prefix)) return;
     if (busy) return;
 
-    // Handled before the lock, deliberately. Inside withBulkLock the background's own
-    // acquire lost to the UI lease we were still holding, and our release then cleared the
-    // lock outright — leaving the entire AI run with no suppression at all.
+    // Outside the lock, like every start of a run: the background takes its own (see startAIGroup).
     if (prefix === "aigroup") {
-      query = "";
+      setQuery("");
       await startAIGroup();
       return;
     }
@@ -786,15 +577,7 @@
 
     try {
       await withBulkLock(async () => {
-        const matchingTabs = rankTabs(searchQuery);
-        const outcome = await runAction(prefix, {
-          query: searchQuery,
-          matchingTabs,
-          tabIds: matchingTabs.map((t) => t.tabId!),
-          currentWindowId,
-          rankTabs,
-          requestFilePicker,
-        });
+        const outcome = await runAction(prefix, actionContext(searchQuery, rankTabs(searchQuery)));
         if (!outcome) return;
 
         // The handler switched tabs (/parent): leave the way picking a result does.
@@ -807,8 +590,8 @@
         if (outcome.workspaceChanged) hasWorkspace = await hasSavedWorkspace();
 
         if (outcome.acted) {
-          query = "";
-          canUndo = !!peekUndo();
+          setQuery("");
+          refreshCanUndo();
           await loadTabs();
         }
       });
@@ -819,34 +602,18 @@
     }
   }
 
-  /**
-   * Step the palette selection one row in `dir`, stepping over the divider rows that the
-   * bookmark/history tail and the @triage overview interleave. Dividers aren't selectable —
-   * landing on one hides the highlight and makes Enter a no-op — so walk past them, and at
-   * either end stay on a real row rather than come to rest on a label.
-   */
-  /** Same rule for a fresh list: @triage and a bookmarks-only match both open on a divider. */
-  function firstSelectable(): number {
-    const i = results.findIndex((r) => r.type !== "divider");
-    return i < 0 ? 0 : i;
-  }
-
-  function nextSelectable(from: number, dir: 1 | -1): number {
-    for (let i = from + dir; i >= 0 && i < results.length; i += dir) {
-      if (results[i].type !== "divider") return i;
-    }
-    if (results[from]?.type !== "divider") return from;
-    // Already parked on a divider (a triage list opens on one) with nothing past it — take
-    // the nearest real row the other way instead of sitting there.
-    for (let i = from - dir; i >= 0 && i < results.length; i -= dir) {
-      if (results[i].type !== "divider") return i;
-    }
-    return from;
-  }
-
   async function handleSelect(item: SearchResult) {
-    if (item.tabId) { await switchToTab(item.tabId); window.close(); }
-    else if (item.url) { await chrome.tabs.create({ url: item.url }); window.close(); }
+    try {
+      if (item.tabId) { await switchToTab(item.tabId); window.close(); }
+      else if (item.url) { await chrome.tabs.create({ url: item.url }); window.close(); }
+    } catch (e) {
+      // A row can outlive its tab (the side panel stays open while tabs close elsewhere).
+      // Unhandled, Enter looked like it did nothing at all. The reload drops the dead row;
+      // loadTabs re-ranks an empty query itself, so only a typed one is re-ranked here.
+      flashStatus(`Error: ${e instanceof Error ? e.message : "Could not open"}`, 5000);
+      await loadTabs().catch(() => {});
+      if (query) updateResults();
+    }
   }
 
   async function handleClose(item: SearchResult) {
@@ -873,27 +640,20 @@
   }
 
   function handleCommandSelect(cmd: CommandDefinition) {
-    query = cmd.prefix.startsWith("@") ? `${cmd.prefix} ` : `/${cmd.prefix} `;
-    paletteMode = "search";
-    commandHints = [];
-    updateResults();
+    setQuery(cmd.prefix.startsWith("@") ? `${cmd.prefix} ` : `/${cmd.prefix} `);
   }
 
   function toggleSelect(tabId: number) {
-    const next = new Set(selectedTabs);
-    if (next.has(tabId)) next.delete(tabId); else next.add(tabId);
-    selectedTabs = next;
+    if (selectedTabs.has(tabId)) selectedTabs.delete(tabId); else selectedTabs.add(tabId);
   }
 
   function toggleSelectGroup(tabIds: number[]) {
     const allSelected = tabIds.every((id) => selectedTabs.has(id));
-    const next = new Set(selectedTabs);
     if (allSelected) {
-      for (const id of tabIds) next.delete(id);
+      for (const id of tabIds) selectedTabs.delete(id);
     } else {
-      for (const id of tabIds) next.add(id);
+      for (const id of tabIds) selectedTabs.add(id);
     }
-    selectedTabs = next;
   }
 
   async function dashAction(fn: () => Promise<string | void>) {
@@ -905,44 +665,48 @@
       // after the next action replaced the message, so a dash action followed by an undo
       // blanked the undo's confirmation early. flashStatus owns the single timer.
       if (msg) flashStatus(msg);
-      selectedTabs = new Set();
+      selectedTabs.clear();
     } catch (e) {
       flashStatus(`Error: ${e instanceof Error ? e.message : "Action failed"}`, 5000);
     } finally {
       // Refresh on failure too: a bulk close that Chrome refused one tab of has still closed
       // the others and pushed an undo entry, and the strip on screen has to say so.
-      canUndo = !!peekUndo();
+      refreshCanUndo();
       await loadTabs().catch(() => {});
       busy = false;
     }
   }
 
+  /** What a handler runs against. `matchingTabs` is what the query, or a selection, resolved to. */
+  function actionContext(query: string, matchingTabs: SearchResult[]): ActionContext {
+    return { query, matchingTabs, tabIds: matchingTabs.map((t) => t.tabId!), currentWindowId, rankTabs, requestFilePicker };
+  }
+
   /**
-   * Run a palette action from a dashboard or menu button. Routes through the same handler
-   * the slash command uses, so a button and its command can't drift into reporting different
-   * things for the same work. `tabs` stands in for the palette's matched list, for the
-   * selection buttons.
+   * Run a slash command's handler from a button, so a button and its command can't drift into
+   * reporting different things for the same work. `tabs` stands in for the palette's matched
+   * list, for the selection buttons.
    */
   function dashCommand(prefix: string, commandQuery = "", tabs: TabInfo[] = []) {
-    return dashAction(async () => {
-      const matchingTabs = tabsToSearchItems(tabs);
-      const outcome = await runAction(prefix, {
-        query: commandQuery,
-        matchingTabs,
-        tabIds: matchingTabs.map((t) => t.tabId!),
-        currentWindowId,
-        rankTabs,
-        requestFilePicker,
-      });
-      if (outcome?.workspaceChanged) hasWorkspace = await hasSavedWorkspace();
-      return outcome?.message;
-    });
+    return dashAction(() => settle(runAction(prefix, actionContext(commandQuery, tabsToSearchItems(tabs)))));
+  }
+
+  /** Run a tile. Not dashCommand: Group+ is tile id "group", and /group does something else. */
+  function dashTile(id: string) {
+    return dashAction(() => settle(runTile(id, actionContext("", []))));
+  }
+
+  /** A handler's outcome as dashAction wants it: the status line, workspace state re-read. */
+  async function settle(pending: Promise<ActionResult | null>): Promise<string | undefined> {
+    const outcome = await pending;
+    if (outcome?.workspaceChanged) hasWorkspace = await hasSavedWorkspace();
+    return outcome?.message;
   }
 
   /** Dashboard tile click: Lock Tab keeps its bespoke state toggle, everything else may have an alt mode. */
   function dashButtonClick(id: string, e: MouseEvent) {
     if (id === "pin") { handlePinCurrent(e); return; }
-    const alt = (e.altKey || e.ctrlKey) ? ALT_MODE[id] : undefined;
+    const alt = (e.altKey || e.ctrlKey) ? TILE_BY_ID.get(id)?.alt : undefined;
     if (alt?.query !== undefined) { dashCommand(alt.action, alt.query); return; }
     handleOverflowAction(alt?.action ?? id);
   }
@@ -985,13 +749,13 @@
 
   function applyConfig(rc: Record<string, unknown> | undefined) {
     if (!rc) return;
-    autoGroupEnabled = rc.autoGroup === true;
-    autoUngroupEnabled = rc.autoUngroup === true;
-    useRulesEnabled = rc.useRules === true;
-    autoSortEnabled = rc.autoSort === true;
-    autoPinFollowEnabled = rc.autoPinFollow === true;
-    autoDiscardEnabled = rc.autoDiscard === true;
-    switchToExistingEnabled = rc.switchToExisting === true;
+    for (const key of Object.keys(automation) as AutomationFlag[]) automation[key] = rc[key] === true;
+  }
+
+  async function toggleAutomation(key: AutomationFlag) {
+    automation[key] = !automation[key];
+    const on = automation[key];
+    await updateConfig((config) => { config[key] = on; });
   }
 
   // Every cross-realm value used to be read once at mount and never again, which is what let
@@ -1019,29 +783,11 @@
           if (p.status === "done") loadTabs();
         }
       }
-      // Another surface pushed or popped. The reload lists key names and reads only metadata
-      // this realm hasn't seen, never a snapshot. The mirror has to follow, not just the button:
-      // every other `canUndo = !!peekUndo()` in this file reads it.
-      if (touchesUndoStack(changes)) {
-        void loadUndoStack().then(() => { canUndo = !!peekUndo(); });
-      }
+      // Another surface pushed or popped.
+      if (touchesUndoStack(changes)) refreshCanUndo();
     };
     chrome.storage.onChanged.addListener(listener);
     return () => chrome.storage.onChanged.removeListener(listener);
-  });
-
-  $effect(() => {
-    const onKeyDown = (e: KeyboardEvent) => { if (e.key === "Alt") altPressed = true; };
-    const onKeyUp = (e: KeyboardEvent) => { if (e.key === "Alt") altPressed = false; };
-    const onBlur = () => { altPressed = false; };
-    window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("keyup", onKeyUp);
-    window.addEventListener("blur", onBlur);
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("keyup", onKeyUp);
-      window.removeEventListener("blur", onBlur);
-    };
   });
 
   onMount(async () => {
@@ -1049,25 +795,22 @@
     // closed mid-operation, but it also wiped the background's lock during an AI run —
     // and Chrome closes the popup on every focus loss. Lease expiry handles the stranded
     // case now, without one realm clobbering another's lock.
-    // These used to await one after another — a dozen IPC round-trips before the popup was
-    // populated, each waiting on a result the next one did not need. Chrome tears the popup
-    // down on every focus loss, so that cost is paid on every single open. Nothing here
-    // depends on anything else here, so it all goes out at once, and the two storage reads
-    // are batched into one call per area instead of four.
+    //
     // Two tiers, deliberately. Everything used to await in series — a dozen IPC round-trips
     // before anything appeared — and then briefly all in one Promise.all, which is concurrent
     // but still ONE barrier: the tab list waited on the archive count. Chrome tears the popup
     // down on every focus loss, so this is paid on every open.
     //
-    // Tier 1 is what the first useful frame needs. Tier 2 feeds badges and panels that are
-    // off-screen or secondary; each lands on its own and re-renders the one thing it owns.
+    // Tier 1 is what the first useful frame needs, with its storage reads batched into one call
+    // per area. Tier 2 feeds badges and panels that are off-screen or secondary; each lands on
+    // its own and re-renders the one thing it owns.
     const critical = Promise.all([
       loadTabs(),
       chrome.storage.local.get(["rulesConfig", "collapsedGroups", "dashboardActionIds", "onboardingDismissed"]),
       chrome.storage.session.get("openMode").catch(() => ({}) as Record<string, unknown>),
     ]);
 
-    void loadUndoStack().then(() => { canUndo = !!peekUndo(); });
+    refreshCanUndo();
     void hasSavedWorkspace().then((v) => { hasWorkspace = v; });
     void getArchiveCount().then((v) => { archiveCount = v; });
     void getActionLog().then((v) => { actionLog = v; });
@@ -1078,16 +821,15 @@
 
     const [, config, session] = await critical;
     applyConfig(config.rulesConfig);
-    if (config.collapsedGroups) collapsedGroups = new Set(config.collapsedGroups);
+    if (config.collapsedGroups) for (const k of config.collapsedGroups) collapsedGroups.add(k);
     if (Array.isArray(config.dashboardActionIds)) dashboardActionIds = config.dashboardActionIds;
     onboardingDismissed = !!config.onboardingDismissed;
     if (session.openMode === "dashboard") {
       searchAutofocus = false;
-      inputFocused = false;
       chrome.storage.session.remove("openMode").catch(() => {});
     }
-    // Populate the empty-query MRU list. Without this `results` stayed empty until the first
-    // keystroke, so Cmd+E → Enter (jump to the previous tab) silently did nothing.
+    // loadTabs ranks an empty query itself. A query typed before the tabs arrived was ranked
+    // against none, and would show nothing until the next keystroke.
     updateResults();
     // After the first paint, so the panels' code stays off the path to it (see loadRulesEditor).
     requestIdleCallback(() => { void loadRulesEditor(); void loadPinsPanel(); void loadSettingsPanel(); }, { timeout: 2000 });
@@ -1102,6 +844,14 @@
   }
 </script>
 
+<!-- Holding Alt shows each tile's alt-click face. Blur clears it: an Alt released while another
+     window has focus never sends this one a keyup. -->
+<svelte:window
+  onkeydown={(e) => { if (e.key === "Alt") altPressed = true; }}
+  onkeyup={(e) => { if (e.key === "Alt") altPressed = false; }}
+  onblur={() => { altPressed = false; }}
+/>
+
 <div class="{fluid ? 'w-full h-screen' : 'w-[450px] h-[600px]'} flex flex-col overflow-hidden">
   <!-- Search bar — always visible -->
   <div class="flex items-center gap-1.5 px-3 pt-3 pb-2">
@@ -1114,7 +864,6 @@
       listboxId={RESULTS_LISTBOX_ID}
       expanded={paletteVisible && paletteMode === "search" && results.length > 0}
       activeDescendant={activeOptionId}
-      onfocuschange={(f) => { inputFocused = f; }}
       onkeydown={(e) => {
         // Mid-composition the IME owns these keys: arrows walk the pinyin candidate list and
         // Enter commits the word. Acting on them here moved the result selection and switched
@@ -1131,12 +880,12 @@
           e.preventDefault();
           selectedIndex = paletteMode === "commands"
             ? Math.min(selectedIndex + 1, commandHints.length - 1)
-            : nextSelectable(selectedIndex, 1);
+            : nextSelectable(results, selectedIndex, 1);
         } else if (e.key === "ArrowUp") {
           e.preventDefault();
           selectedIndex = paletteMode === "commands"
             ? Math.max(selectedIndex - 1, 0)
-            : nextSelectable(selectedIndex, -1);
+            : nextSelectable(results, selectedIndex, -1);
         } else if (e.key === "Enter") {
           e.preventDefault();
           const { prefix, query: searchQuery } = parseCommand(query);
@@ -1159,8 +908,7 @@
           handleUndo();
         } else if (e.key === "Escape" && query) {
           e.preventDefault();
-          query = "";
-          onQueryChange();
+          setQuery("");
         }
       }}
     />
@@ -1177,7 +925,7 @@
     />
   {#if activeSection === "rules"}
     {#await loadRulesEditor() then { default: RulesEditor }}
-      <RulesEditor onclose={() => { activeSection = "dashboard"; }} />
+      <RulesEditor {automation} ontoggle={toggleAutomation} onclose={() => { activeSection = "dashboard"; }} />
     {/await}
   {:else if activeSection === "pins"}
     {#await loadPinsPanel() then { default: PinsPanel }}
@@ -1185,7 +933,7 @@
     {/await}
   {:else if activeSection === "settings"}
     {#await loadSettingsPanel() then { default: SettingsPanel }}
-      <SettingsPanel />
+      <SettingsPanel {actionLog} />
     {/await}
   {:else if activeSection === "ai"}
     <div class="flex-1 overflow-y-auto px-3 py-2 min-h-0">
@@ -1288,27 +1036,27 @@
         {/if}
         <div class="px-2 pt-1.5 pb-1 text-[9px] font-semibold uppercase tracking-wider text-text-muted/70">{section.title}</div>
         <div class="grid gap-0.5">
-          {#each section.items as item}
-            {@const poolEntry = ACTION_POOL_MAP.get(item.action)}
-            {@const row = moreRowText(item)}
+          {#each section.tiles as tile}
+            {@const face = tileFace(tile, false)}
             <div
-              class="w-full text-left flex items-start gap-2.5 px-2 py-1.5 rounded-md hover:bg-surface-hover active:bg-surface-active transition-colors group cursor-pointer {pendingConfirm === item.action ? 'bg-accent-red/10 ring-1 ring-accent-red/30' : ''}"
+              class="w-full text-left flex items-start gap-2.5 px-2 py-1.5 rounded-md hover:bg-surface-hover active:bg-surface-active transition-colors group cursor-pointer {pendingConfirm === tile.id ? 'bg-accent-red/10 ring-1 ring-accent-red/30' : ''}"
               role="button" tabindex="0"
-              onclick={() => handleOverflowAction(item.action)}
-              onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleOverflowAction(item.action); } }}
+              onclick={() => handleOverflowAction(tile.id)}
+              onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleOverflowAction(tile.id); } }}
             >
               <span class="shrink-0 w-5 h-5 rounded bg-surface-active/60 flex items-center justify-center mt-px group-hover:bg-primary/15 group-hover:text-primary transition-colors">
-                {#if poolEntry}{@html smallIcon(item.action === "pin" ? pinDisplay.icon : poolEntry.icon)}{/if}
+                {@html smallIcon(face.icon)}
               </span>
               <div class="flex-1 min-w-0">
-                <div class="text-xs font-medium {pendingConfirm === item.action ? 'text-accent-red' : 'text-text'}">{pendingConfirm === item.action ? "Click again to confirm" : row.label}</div>
-                <div class="text-[10px] text-text-muted/70 leading-tight">{row.tip}</div>
+                <div class="text-xs font-medium {pendingConfirm === tile.id ? 'text-accent-red' : 'text-text'}">{pendingConfirm === tile.id ? "Click again to confirm" : face.label}</div>
+                <!-- The archive's size is worth a row's subtitle; on the grid the tooltip says what the tile does. -->
+                <div class="text-[10px] text-text-muted/70 leading-tight">{tile.id === "archive" ? `${archiveCount} saved` : face.tooltip}</div>
               </div>
               <button
-                class="shrink-0 self-center text-sm leading-none transition-[color,opacity] hover:scale-110 {dashboardActionIds.includes(item.action) ? 'text-primary' : 'text-text-muted/30 opacity-0 group-hover:opacity-100'}"
-                onclick={(e) => { e.stopPropagation(); toggleDashboardAction(item.action); }}
-                title={dashboardActionIds.includes(item.action) ? "Remove from dashboard" : "Add to dashboard"}
-              >{dashboardActionIds.includes(item.action) ? "★" : "☆"}</button>
+                class="shrink-0 self-center text-sm leading-none transition-[color,opacity] hover:scale-110 {dashboardActionIds.includes(tile.id) ? 'text-primary' : 'text-text-muted/30 opacity-0 group-hover:opacity-100'}"
+                onclick={(e) => { e.stopPropagation(); toggleDashboardAction(tile.id); }}
+                title={dashboardActionIds.includes(tile.id) ? "Remove from dashboard" : "Add to dashboard"}
+              >{dashboardActionIds.includes(tile.id) ? "★" : "☆"}</button>
             </div>
           {/each}
         </div>
@@ -1330,30 +1078,8 @@
         <kbd class="px-1 py-0.5 rounded bg-surface text-[9px] text-center">^Del</kbd><span class="text-[10px] text-text-muted">Close tab</span><span></span>
         <kbd class="px-1 py-0.5 rounded bg-surface text-[9px] text-center">⌘Z</kbd><span class="text-[10px] text-text-muted">Undo</span><span></span>
       </div>
-      {#each (["search", "action", "view"] as CommandCategory[]) as cat}
-        {@const catCmds = filteredCmds.filter(c => c.category === cat)}
-        {#if catCmds.length > 0}
-        <div class="flex items-center gap-2 mb-1 mt-2">
-          <span class="text-[10px] font-semibold uppercase tracking-wider {CATEGORY_STYLES[cat].color}">{CATEGORY_STYLES[cat].label}</span>
-          <div class="flex-1 h-px bg-border/50"></div>
-        </div>
-        {@const buckets = groupCommands(catCmds)}
-        {#each buckets as bucket}
-          {#if bucket.group && buckets.length > 1}
-            <div class="px-2 pt-1.5 pb-0.5 text-[9px] font-medium uppercase tracking-wider text-text-muted/60">{bucket.group}</div>
-          {/if}
-          {#each bucket.commands as cmd}
-            <button
-              class="w-full flex items-center gap-2 px-2 py-1 rounded hover:bg-surface-hover transition-colors text-left focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface"
-              onclick={() => { query = cmd.prefix.startsWith("@") ? `${cmd.prefix} ` : `/${cmd.prefix} `; showHelp = false; helpFilter = ""; updateResults(); }}
-            >
-              <span class="font-mono text-xs font-medium w-16 shrink-0 {cmd.color}">{cmd.label}</span>
-              <span class="text-xs text-text-muted">{cmd.description}</span>
-            </button>
-          {/each}
-        {/each}
-        {/if}
-      {/each}
+      <!-- The palette's command list, with no row highlighted: the help list has no cursor. -->
+      <CommandHints commands={filteredCmds} selectedIndex={-1} onselect={(cmd) => { showHelp = false; helpFilter = ""; handleCommandSelect(cmd); }} />
     </div>
   {:else if showPalette}
     <!-- Command palette mode -->
@@ -1415,14 +1141,14 @@
       {#if dashboardActions.length > 0}
         <div class="grid grid-cols-3 gap-1.5 px-3 pb-2 {busy ? 'opacity-50 pointer-events-none' : ''}"
           aria-busy={busy}>
-          {#each dashboardActions as action}
-            {@const alt = altPressed && action.id !== "pin" ? ALT_MODE[action.id] : undefined}
+          {#each dashboardActions as tile}
+            {@const face = tileFace(tile, altPressed)}
             <ActionButton
-              label={pendingConfirm === action.id ? "Confirm" : alt ? alt.label : action.id === "focus" ? (hasWorkspace ? "Unfocus" : "Focus") : action.id === "pin" ? pinDisplay.label : action.label}
-              icon={alt ? (alt.icon ?? ACTION_POOL_MAP.get(alt.action)?.icon ?? action.icon) : action.id === "pin" ? pinDisplay.icon : action.icon}
-              tooltip={alt ? alt.tooltip : action.id === "pin" ? pinDisplay.tooltip : action.tooltip}
-              confirming={pendingConfirm === action.id}
-              onclick={(e) => dashButtonClick(action.id, e)}
+              label={pendingConfirm === tile.id ? "Confirm" : face.label}
+              icon={face.icon}
+              tooltip={face.tooltip}
+              confirming={pendingConfirm === tile.id}
+              onclick={(e) => dashButtonClick(tile.id, e)}
             />
           {/each}
         </div>
@@ -1437,7 +1163,7 @@
         <div class="flex items-center gap-1.5 px-3 pb-2">
           <span class="text-[10px] text-text-muted">{selectedTabs.size} sel:</span>
           <button class="px-2 py-0.5 rounded text-[10px] font-medium bg-accent-red/10 text-accent-red border border-accent-red/20 hover:bg-accent-red/20 transition-colors"
-            onclick={() => confirmAction("closeSel", () => dashCommand("close", "", dashboardTabs.filter((t) => selectedTabs.has(t.id))))}>
+            onclick={() => { if (confirmed("closeSel")) dashCommand("close", "", dashboardTabs.filter((t) => selectedTabs.has(t.id))); }}>
             {pendingConfirm === "closeSel" ? "Confirm" : "Close"}
           </button>
           <!-- Through the /archive handler, not a copy of it: this copy closed every selected
@@ -1445,31 +1171,23 @@
           <button class="px-2 py-0.5 rounded text-[10px] font-medium bg-surface-hover text-text-muted border border-border hover:text-text transition-colors"
             onclick={() => dashCommand("archive", "", dashboardTabs.filter((t) => selectedTabs.has(t.id)))}>Archive</button>
           <button class="px-2 py-0.5 rounded text-[10px] font-medium bg-surface-hover text-text-muted border border-border hover:text-text transition-colors"
-            onclick={() => dashAction(async () => { await discardTabs([...selectedTabs]); return `Discarded ${selectedTabs.size}`; })}>Discard</button>
+            onclick={() => dashCommand("discard", "", dashboardTabs.filter((t) => selectedTabs.has(t.id)))}>Discard</button>
         </div>
       {/if}
 
       <!-- Toggles -->
       <div class="flex items-center gap-1 px-3 pb-2 text-[10px]">
-        {#each [{label: "Rules", enabled: useRulesEnabled, toggle: async () => { useRulesEnabled = !useRulesEnabled; await setUseRules(useRulesEnabled); }, tip: "Custom rules for grouping"},
-                {label: "Auto", enabled: autoGroupEnabled, toggle: async () => { autoGroupEnabled = !autoGroupEnabled; await setAutoGroup(autoGroupEnabled); }, tip: "Auto-group new tabs"},
-                {label: "Ungroup", enabled: autoUngroupEnabled, toggle: async () => { autoUngroupEnabled = !autoUngroupEnabled; await setAutoUngroup(autoUngroupEnabled); }, tip: "Dissolve a group when only one tab is left. Named groups only — untitled ones are left alone, since another extension may still be filling them."}] as t}
-          <button
-            class="px-1.5 py-0.5 rounded transition-colors border
-              {t.enabled ? 'bg-primary/15 text-primary border-primary/30 font-medium' : 'bg-surface-hover text-text-muted border-transparent hover:border-border'}"
-            onclick={t.toggle} title={t.tip} aria-pressed={t.enabled}
-          >{t.enabled ? "✓ " : ""}{t.label}</button>
-        {/each}
-        <div class="w-px h-3 bg-border/40 mx-0.5"></div>
-        {#each [{label: "Sort", enabled: autoSortEnabled, toggle: async () => { autoSortEnabled = !autoSortEnabled; await setAutoSort(autoSortEnabled); }, tip: "Auto-sort on load"},
-                {label: "Pin", enabled: autoPinFollowEnabled, toggle: async () => { autoPinFollowEnabled = !autoPinFollowEnabled; await setAutoPinFollow(autoPinFollowEnabled); }, tip: "Sync pins across windows"},
-                {label: "Discard", enabled: autoDiscardEnabled, toggle: async () => { autoDiscardEnabled = !autoDiscardEnabled; await setAutoDiscard(autoDiscardEnabled); }, tip: "Auto-discard 45min+"},
-                {label: "Switch", enabled: switchToExistingEnabled, toggle: async () => { switchToExistingEnabled = !switchToExistingEnabled; await setSwitchToExisting(switchToExistingEnabled); }, tip: "Jump to existing tab instead of duplicate"}] as t}
-          <button
-            class="px-1.5 py-0.5 rounded transition-colors border
-              {t.enabled ? 'bg-primary/15 text-primary border-primary/30 font-medium' : 'bg-surface-hover text-text-muted border-transparent hover:border-border'}"
-            onclick={t.toggle} title={t.tip} aria-pressed={t.enabled}
-          >{t.enabled ? "✓ " : ""}{t.label}</button>
+        {#each AUTOMATION_TOGGLES as cluster, ci}
+          {#if ci > 0}
+            <div class="w-px h-3 bg-border/40 mx-0.5"></div>
+          {/if}
+          {#each cluster as t}
+            <button
+              class="px-1.5 py-0.5 rounded transition-colors border
+                {automation[t.key] ? 'bg-primary/15 text-primary border-primary/30 font-medium' : 'bg-surface-hover text-text-muted border-transparent hover:border-border'}"
+              onclick={() => toggleAutomation(t.key)} title={t.tip} aria-pressed={automation[t.key]}
+            >{automation[t.key] ? "✓ " : ""}{t.label}</button>
+          {/each}
         {/each}
       </div>
 
@@ -1496,17 +1214,17 @@
 
       <!-- Selection + collapse controls -->
       <div class="flex items-center gap-3 px-3 pb-1.5 text-xs">
-        <button onmousedown={(e) => { e.preventDefault(); selectedTabs = new Set(dashboardTabs.map((t) => t.id)); }} class="text-primary hover:text-primary-hover transition-colors">All</button>
-        <button onmousedown={(e) => { e.preventDefault(); selectedTabs = new Set(); }} class="text-text-muted hover:text-text transition-colors">None</button>
+        <button onmousedown={(e) => { e.preventDefault(); selectedTabs.clear(); for (const t of dashboardTabs) selectedTabs.add(t.id); }} class="text-primary hover:text-primary-hover transition-colors">All</button>
+        <button onmousedown={(e) => { e.preventDefault(); selectedTabs.clear(); }} class="text-text-muted hover:text-text transition-colors">None</button>
         {#if selectedTabs.size > 0}
           <span class="text-text-muted">{selectedTabs.size} selected</span>
         {/if}
         <div class="flex-1"></div>
         <button
-          onmousedown={(e) => { e.preventDefault(); const all = new Set<number>(); windows.forEach(w => { w.groups.forEach((_, k) => all.add(k)); all.add(-(w.windowId + 100000)); }); setCollapsed(all); }}
+          onmousedown={(e) => { e.preventDefault(); setCollapsed(windows.flatMap((w) => [...w.groups.keys(), -(w.windowId + 100000)])); }}
           class="text-text-muted hover:text-text transition-colors">Fold</button>
         <button
-          onmousedown={(e) => { e.preventDefault(); setCollapsed(new Set()); }}
+          onmousedown={(e) => { e.preventDefault(); setCollapsed([]); }}
           class="text-text-muted hover:text-text transition-colors">Unfold</button>
       </div>
 
@@ -1514,7 +1232,7 @@
         {@const audioTabs = dashboardTabs.filter((t) => t.audible && !t.mutedInfo?.muted)}
         <button
           class="mx-3 mb-2 flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-accent-red/30 bg-accent-red/5 hover:bg-accent-red/10 transition-colors w-[calc(100%-1.5rem)] text-left"
-          onclick={() => { query = "@a "; paletteMode = "search"; updateResults(); }}
+          onclick={() => setQuery("@a ")}
           title="Click to view all tabs playing audio"
         >
           <svg class="w-3.5 h-3.5 shrink-0 text-accent-red" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
@@ -1522,6 +1240,54 @@
           <span class="text-[10px] text-text-muted truncate ml-1">{audioTabs.map((t) => t.title || t.url).join(", ")}</span>
         </button>
       {/if}
+
+      <!-- One block of the tab list: a tab group, or, with no group, the window's ungrouped tabs.
+           `key` is the block's collapse key: the group's id, or -windowId for ungrouped tabs. -->
+      {#snippet tabBlock(key: number, tabs: TabInfo[], group: { title: string; color: string } | null)}
+        {@const collapsed = collapsedGroups.has(key)}
+        {@const allSelected = tabs.every((t) => selectedTabs.has(t.id))}
+        {@const someSelected = tabs.some((t) => selectedTabs.has(t.id))}
+        {@const border = (group && groupBorderClass[group.color]) || "border-border"}
+        <div class="mx-3 mb-2 border rounded-lg overflow-hidden {border} {group ? groupBgClass[group.color] || 'bg-surface-hover' : ''}">
+          <div class="w-full flex items-center gap-2 px-2.5 py-1.5 text-left transition-colors {group ? 'hover:brightness-110' : 'hover:bg-surface-hover'} cursor-pointer
+            {collapsed ? '' : 'border-b'} {border}">
+            <input type="checkbox" checked={allSelected} indeterminate={someSelected && !allSelected}
+              onchange={() => toggleSelectGroup(tabs.map(t => t.id))} onclick={(e) => e.stopPropagation()}
+              class="shrink-0 w-3 h-3 rounded accent-primary" title={group ? "Select all tabs in this group" : "Select all ungrouped tabs"} />
+            <button class="flex items-center gap-2 flex-1 min-w-0 focus-visible:ring-2 focus-visible:ring-primary focus-visible:rounded" aria-expanded={!collapsed} onclick={() => toggleGroupCollapse(key)}>
+              <svg class="w-3 h-3 text-text-muted transition-transform shrink-0 {collapsed ? '' : 'rotate-90'}" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+              {#if group}
+                <span class="w-2 h-2 rounded-full shrink-0 {groupDotClass[group.color] || 'bg-border'}"></span>
+                <span class="text-xs font-medium text-text truncate">{group.title}</span>
+              {:else}
+                <span class="text-xs font-medium text-text-muted">Ungrouped</span>
+              {/if}
+              <span class="text-[10px] text-text-muted shrink-0">({tabs.length})</span>
+            </button>
+            {#if group}
+              <button class="text-[10px] text-text-muted hover:text-text transition-colors shrink-0 focus-visible:ring-2 focus-visible:ring-primary focus-visible:rounded"
+                onclick={() => dashAction(() => extractGroup(key))}>Extract</button>
+              <button class="text-[10px] text-text-muted hover:text-text transition-colors shrink-0 focus-visible:ring-2 focus-visible:ring-primary focus-visible:rounded"
+                onclick={() => dashAction(() => sortGroup(key, group.title))}>Sort</button>
+            {/if}
+          </div>
+          {#if !collapsed}
+            <div class="p-1 grid gap-0.5">
+              {#each chunkRows(tabs) as rows}
+                <LazyRows rows={rows.length}>
+                  {#each rows as tab (tab.id)}
+                    <TabCard {tab} selected={selectedTabs.has(tab.id)}
+                      positionPinned={!!group && !!getPinForTab(tab.url, group.title, pinnedTabs)}
+                      ontoggle={() => toggleSelect(tab.id)}
+                      onclose={() => dashAction(async () => { await closeTabs([tab.id]); })}
+                      onmute={() => loadTabs()} />
+                  {/each}
+                </LazyRows>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      {/snippet}
 
       {#each windows as w, wi}
         {@const winCollapseKey = -(w.windowId + 100000)}
@@ -1548,81 +1314,10 @@
 
         {#if !winCollapsed}
         {#each [...w.groups.entries()] as [groupId, group]}
-          {@const collapsed = collapsedGroups.has(groupId)}
-          {@const allSelected = group.tabs.every((t) => selectedTabs.has(t.id))}
-          {@const someSelected = group.tabs.some((t) => selectedTabs.has(t.id))}
-          <div class="mx-3 mb-2 border rounded-lg overflow-hidden {groupColors[group.color] || 'border-border'} {groupBg[group.color] || 'bg-surface-hover'}">
-            <div class="w-full flex items-center gap-2 px-2.5 py-1.5 text-left transition-colors hover:brightness-110 cursor-pointer
-              {collapsed ? '' : 'border-b'} {groupColors[group.color] || 'border-border'}">
-              <input type="checkbox" checked={allSelected} indeterminate={someSelected && !allSelected}
-                onchange={() => toggleSelectGroup(group.tabs.map(t => t.id))} onclick={(e) => e.stopPropagation()}
-                class="shrink-0 w-3 h-3 rounded accent-primary" title="Select all tabs in this group" />
-              <button class="flex items-center gap-2 flex-1 min-w-0 focus-visible:ring-2 focus-visible:ring-primary focus-visible:rounded" aria-expanded={!collapsed} onclick={() => toggleGroupCollapse(groupId)}>
-                <svg class="w-3 h-3 text-text-muted transition-transform shrink-0 {collapsed ? '' : 'rotate-90'}" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
-                <span class="w-2 h-2 rounded-full shrink-0 {dotColors[group.color] || 'bg-border'}"></span>
-                <span class="text-xs font-medium text-text truncate">{group.title}</span>
-                <span class="text-[10px] text-text-muted shrink-0">({group.tabs.length})</span>
-              </button>
-              <span class="text-[10px] text-text-muted hover:text-text transition-colors shrink-0 cursor-pointer"
-                onclick={(e) => { e.stopPropagation(); dashAction(async () => { const n = await extractGroupToWindow(groupId); return `Extracted ${n} tab(s)`; }); }}
-                role="button" tabindex="0" onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); dashAction(async () => { const n = await extractGroupToWindow(groupId); return `Extracted ${n} tab(s)`; }); } }}>Extract</span>
-              <span class="text-[10px] text-text-muted hover:text-text transition-colors shrink-0 cursor-pointer"
-                onclick={(e) => { e.stopPropagation(); dashAction(async () => { await sortTabsInGroup(groupId); return `Sorted "${group.title}"`; }); }}
-                role="button" tabindex="0" onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); dashAction(async () => { await sortTabsInGroup(groupId); return `Sorted "${group.title}"`; }); } }}>Sort</span>
-            </div>
-            {#if !collapsed}
-              <div class="p-1 grid gap-0.5">
-                {#each chunkRows(group.tabs) as rows}
-                  <LazyRows rows={rows.length}>
-                    <!-- Keyed: TabCard owns per-instance state (an open volume slider), so an
-                         unkeyed list re-binds that slider to whatever tab lands on the index
-                         after an action reorders things. -->
-                    {#each rows as tab (tab.id)}
-                      <TabCard {tab} selected={selectedTabs.has(tab.id)}
-                        positionPinned={!!getPinForTab(tab.url, group.title, pinnedTabs)}
-                        ontoggle={() => toggleSelect(tab.id)}
-                        onclose={() => dashAction(async () => { await closeTabs([tab.id]); })}
-                        onmute={() => loadTabs()} />
-                    {/each}
-                  </LazyRows>
-                {/each}
-              </div>
-            {/if}
-          </div>
+          {@render tabBlock(groupId, group.tabs, group)}
         {/each}
-
         {#if w.ungrouped.length > 0}
-          {@const ungroupedKey = -w.windowId}
-          {@const ungroupedCollapsed = collapsedGroups.has(ungroupedKey)}
-          {@const allUngroupedSelected = w.ungrouped.every((t) => selectedTabs.has(t.id))}
-          {@const someUngroupedSelected = w.ungrouped.some((t) => selectedTabs.has(t.id))}
-          <div class="mx-3 mb-2 border border-border rounded-lg overflow-hidden">
-            <div class="w-full flex items-center gap-2 px-2.5 py-1.5 text-left transition-colors hover:bg-surface-hover cursor-pointer
-              {ungroupedCollapsed ? '' : 'border-b border-border'}">
-              <input type="checkbox" checked={allUngroupedSelected} indeterminate={someUngroupedSelected && !allUngroupedSelected}
-                onchange={() => toggleSelectGroup(w.ungrouped.map(t => t.id))} onclick={(e) => e.stopPropagation()}
-                class="shrink-0 w-3 h-3 rounded accent-primary" title="Select all ungrouped tabs" />
-              <button class="flex items-center gap-2 flex-1 focus-visible:ring-2 focus-visible:ring-primary focus-visible:rounded" aria-expanded={!ungroupedCollapsed} onclick={() => toggleGroupCollapse(ungroupedKey)}>
-                <svg class="w-3 h-3 text-text-muted transition-transform {ungroupedCollapsed ? '' : 'rotate-90'}" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
-                <span class="text-xs font-medium text-text-muted">Ungrouped</span>
-                <span class="text-[10px] text-text-muted">({w.ungrouped.length})</span>
-              </button>
-            </div>
-            {#if !ungroupedCollapsed}
-              <div class="p-1 grid gap-0.5">
-                {#each chunkRows(w.ungrouped) as rows}
-                  <LazyRows rows={rows.length}>
-                    {#each rows as tab (tab.id)}
-                      <TabCard {tab} selected={selectedTabs.has(tab.id)}
-                        ontoggle={() => toggleSelect(tab.id)}
-                        onclose={() => dashAction(async () => { await closeTabs([tab.id]); })}
-                        onmute={() => loadTabs()} />
-                    {/each}
-                  </LazyRows>
-                {/each}
-              </div>
-            {/if}
-          </div>
+          {@render tabBlock(-w.windowId, w.ungrouped, null)}
         {/if}
         {/if}
       {/each}

@@ -21,11 +21,10 @@
   --font-family-mono: ui-monospace, "SF Mono", "Cascadia Code", "Segoe UI Mono", monospace;
 }
 
+/* No size here: this sheet is shared by the popup, the side panel and the archive page. The
+   popup fixes its 450x600 box inline in its own index.html; the other two fill their viewport. */
 html, body {
   margin: 0;
-  width: 450px;
-  height: 600px;
-  overflow: hidden;
   background: var(--color-surface);
   color: var(--color-text);
   font-family: var(--font-family-sans);
@@ -36,8 +35,6 @@ html, body {
 }
 
 #app {
-  height: 100%;
-  overflow: hidden;
   position: relative;
 }
 

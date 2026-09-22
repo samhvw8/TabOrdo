@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { domainMatches, matchDomainToRule, ruleMatches, ruleToRegex, longestCommonSubstring, generalizePatterns, isIgnoredGroupName, isCompiledPattern, MAX_PATTERN_LENGTH, pathMatches, sortPathOf, buildSortRanker, noSortRanking, globMatches, rankPositionsOf, UNRANKED, type IgnoreRule, type GroupRule, type SortRule } from "./rules.ts";
+import { domainMatches, matchDomainToRule, ruleMatches, ruleToRegex, longestCommonSubstring, generalizePatterns, isIgnoredGroupName, MAX_PATTERN_LENGTH, pathMatches, sortPathOf, buildSortRanker, noSortRanking, globMatches, rankPositionsOf, UNRANKED, type IgnoreRule, type GroupRule, type SortRule } from "./rules.ts";
 
 describe("domainMatches", () => {
   it("exact match", () => {
@@ -302,12 +302,6 @@ describe("pattern length cap", () => {
   it("matches a long literal domain, but not a long wildcard one", () => {
     expect(domainMatches(long, long)).toBe(true);
     expect(domainMatches("x.com", "*" + "a".repeat(MAX_PATTERN_LENGTH))).toBe(false);
-  });
-
-  it("classifies which patterns are subject to the cap", () => {
-    expect(isCompiledPattern({ pattern: "abc", isRegex: false })).toBe(false);
-    expect(isCompiledPattern({ pattern: "a*c", isRegex: false })).toBe(true);
-    expect(isCompiledPattern({ pattern: "abc", isRegex: true })).toBe(true);
   });
 });
 

@@ -12,10 +12,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
+      # Node comes from mise.toml, the same pin local dev uses, so CI and a checkout never differ.
+      - uses: jdx/mise-action@v4
 
       - run: npm ci
 

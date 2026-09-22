@@ -5,9 +5,14 @@ import { getAllTabs } from "./query.ts";
 import { closeTabs } from "./close.ts";
 import { getPinnedTabs, type PinnedTabEntry } from "../pin.ts";
 
-export async function findDuplicates(): Promise<Map<string, TabInfo[]>> {
-  const tabs = await getAllTabs();
-  const urlMap = new Map<string, TabInfo[]>();
+/**
+ * Copies of one page, keyed by normalised URL, in first-seen order — only keys with two or
+ * more tabs. This is the one definition of a duplicate: /dedup closes all but one of each
+ * group, and the popup's dupe badge and @d view list them, so the badge can't count a copy
+ * /dedup would leave, or miss one it would close.
+ */
+export function findDuplicateGroups<T extends { url: string }>(tabs: readonly T[]): Map<string, T[]> {
+  const urlMap = new Map<string, T[]>();
 
   for (const tab of tabs) {
     const normalized = normalizeUrl(tab.url);
@@ -16,11 +21,15 @@ export async function findDuplicates(): Promise<Map<string, TabInfo[]>> {
     urlMap.get(normalized)!.push(tab);
   }
 
-  const duplicates = new Map<string, TabInfo[]>();
+  const duplicates = new Map<string, T[]>();
   for (const [url, group] of urlMap) {
     if (group.length > 1) duplicates.set(url, group);
   }
   return duplicates;
+}
+
+export async function findDuplicates(): Promise<Map<string, TabInfo[]>> {
+  return findDuplicateGroups(await getAllTabs());
 }
 
 /**
