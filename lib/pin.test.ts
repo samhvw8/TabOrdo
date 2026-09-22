@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { installChromeStub, type ChromeStub } from "./testing/chrome-stub.ts";
 import {
   groupStartIndex, buildGroupOrder, pinTab, unpinTab, getPinnedTabs, syncPinUrl, clearPinTabIds, PIN_BADGE,
-  applyGroupPinsToWindow, lockedGroupOrder,
+  applyGroupPinsToWindow, lockedGroupOrder, applyPinsToGroup,
 } from "./pin.ts";
 
 // 2 pinned tabs, then group A (1), group B (2), group C (3).
@@ -272,5 +272,40 @@ describe("applyGroupPinsToWindow", () => {
     lock(["A", 0], ["C", 2]);
     expect(await applyGroupPinsToWindow(1)).toBe(0);
     expect(stub.groupMoves).toEqual([]);
+  });
+});
+
+describe("applyPinsToGroup", () => {
+  let stub: ChromeStub;
+
+  beforeEach(() => {
+    stub = installChromeStub();
+    // A loose tab, then group Work: x, a, b, p.
+    stub.openTabs = [
+      { id: 9, url: "https://loose.com", pinned: false, windowId: 1, groupId: -1, index: 0 },
+      ...["x", "a", "b", "p"].map((name, i) => ({
+        id: i + 1, url: `https://${name}.com`, pinned: false, windowId: 1, groupId: 50, index: i + 1,
+      })),
+    ];
+    stub.groups = [{ id: 50, title: "Work", windowId: 1 }];
+  });
+
+  const order = () => [...stub.openTabs].sort((a, b) => a.index! - b.index!).map((t) => t.id);
+
+  // Placing one lock at a time let the later move shift the earlier lock off its slot: p went
+  // to slot 1, then x leaving slot 0 for slot 2 dragged p back to slot 0.
+  it("puts every locked tab in its slot and keeps the rest in their order, in one move", async () => {
+    await pinTab("https://p.com", "Work", 1, "p", 4);
+    await pinTab("https://x.com", "Work", 2, "x", 1);
+    await applyPinsToGroup(50, "Work");
+    expect(order()).toEqual([9, 2, 4, 1, 3]);
+    expect(stub.moves).toEqual([{ ids: [2, 4, 1, 3], index: 1, windowId: undefined }]);
+    expect(stub.openTabs.filter((t) => t.groupId === 50)).toHaveLength(4);
+  });
+
+  it("does nothing when the locked tabs already hold their slots", async () => {
+    await pinTab("https://x.com", "Work", 0, "x", 1);
+    await applyPinsToGroup(50, "Work");
+    expect(stub.moves).toEqual([]);
   });
 });

@@ -1,7 +1,7 @@
 // Ordering tabs inside a window or a group, honouring position locks.
 
 import { getDomainMapper, type DomainMapper } from "../url.ts";
-import { getPinnedTabs, getPinnedGroups, lockedGroupOrder, type PinnedTabEntry } from "../pin.ts";
+import { getPinnedTabs, getPinnedGroups, lockedGroupOrder, pinAwareSortTabs } from "../pin.ts";
 import { getSortRules, buildSortRanker, noSortRanking, type SortRanker } from "../rules.ts";
 
 /**
@@ -29,9 +29,10 @@ export async function sortTabsInGroup(
   const group = (await chrome.tabGroups.query({})).find((g) => g.id === groupId);
   const domainOf = await getDomainMapper();
   const rank = await rankerFor(by);
+  const compare = (a: chrome.tabs.Tab, b: chrome.tabs.Tab) => compareTabs(a, b, by, domainOf, rank);
   const ordered = group?.title
-    ? pinAwareSortTabs(tabs, group.title, await getPinnedTabs(), by, domainOf, rank)
-    : tabs.sort((a, b) => compareTabs(a, b, by, domainOf, rank));
+    ? pinAwareSortTabs(tabs, group.title, await getPinnedTabs(), compare)
+    : tabs.sort(compare);
   const ids = ordered.map((t) => t.id!);
   if (ids.length > 0) {
     // Back into the group's own slot, not index -1: every id sits at or right of the group's
@@ -76,12 +77,13 @@ export async function organizeWindow(
   // already in its slot costs nothing, like any other block planLayout finds in place.
   const sortedGroups = lockedGroupOrder(byTitle.map((e) => e.group), groupPins).map((g) => groupMap.get(g.id)!);
 
+  const compare = (a: chrome.tabs.Tab, b: chrome.tabs.Tab) => compareTabs(a, b, by, domainOf, rank);
   for (const entry of sortedGroups) {
     entry.tabs = entry.group.title
-      ? pinAwareSortTabs(entry.tabs, entry.group.title, allPins, by, domainOf, rank)
-      : entry.tabs.sort((a, b) => compareTabs(a, b, by, domainOf, rank));
+      ? pinAwareSortTabs(entry.tabs, entry.group.title, allPins, compare)
+      : entry.tabs.sort(compare);
   }
-  ungrouped.sort((a, b) => compareTabs(a, b, by, domainOf, rank));
+  ungrouped.sort(compare);
 
   const blocks: Block[] = sortedGroups.map((entry) => ({ ids: entry.tabs.map((t) => t.id!), groupId: entry.group.id }));
   if (ungrouped.length > 0) blocks.push({ ids: ungrouped.map((t) => t.id!), groupId: -1 });
@@ -174,56 +176,6 @@ function placeBlocks(strip: number[], blocks: Block[], pinnedCount: number): Lay
 
 const callCount = (steps: LayoutStep[]) =>
   steps.reduce((n, s) => n + (s.groupId === -1 ? 1 : 2), 0);
-
-function pinAwareSortTabs(
-  tabs: chrome.tabs.Tab[],
-  groupTitle: string,
-  allPins: PinnedTabEntry[],
-  by: "title" | "url" | "domain",
-  domainOf: DomainMapper,
-  rank: SortRanker
-): chrome.tabs.Tab[] {
-  const groupPins = allPins.filter((p) => p.groupName === groupTitle);
-  if (groupPins.length === 0) return tabs.sort((a, b) => compareTabs(a, b, by, domainOf, rank));
-
-  const tabIdMap = new Map(groupPins.filter((p) => p.tabId).map((p) => [p.tabId!, p.position]));
-  const urlMap = new Map(groupPins.map((p) => [p.url, p.position]));
-  const pinned: { tab: chrome.tabs.Tab; pos: number }[] = [];
-  const unpinned: chrome.tabs.Tab[] = [];
-
-  for (const tab of tabs) {
-    const pos = tabIdMap.get(tab.id!) ?? urlMap.get(tab.url ?? "");
-    if (pos !== undefined) {
-      pinned.push({ tab, pos });
-    } else {
-      unpinned.push(tab);
-    }
-  }
-
-  // Two locks on one slot: the tab id settles which holds it. Strip order did, so the pair traded
-  // places on every sort.
-  pinned.sort((a, b) => a.pos - b.pos || a.tab.id! - b.tab.id!);
-  unpinned.sort((a, b) => compareTabs(a, b, by, domainOf, rank));
-
-  const result: chrome.tabs.Tab[] = [];
-  let ui = 0;
-  const pinnedByPos = new Map(pinned.map((p) => [p.pos, p.tab]));
-  const totalLen = tabs.length;
-
-  for (let i = 0; i < totalLen; i++) {
-    if (pinnedByPos.has(i)) {
-      result.push(pinnedByPos.get(i)!);
-    } else if (ui < unpinned.length) {
-      result.push(unpinned[ui++]);
-    }
-  }
-  while (ui < unpinned.length) result.push(unpinned[ui++]);
-  for (const p of pinned) {
-    if (!result.includes(p.tab)) result.push(p.tab);
-  }
-
-  return result;
-}
 
 function compareTabs(
   a: chrome.tabs.Tab,

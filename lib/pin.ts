@@ -168,40 +168,71 @@ export async function clearPinTabIds(): Promise<void> {
   if (changed) await savePinnedTabs(pins);
 }
 
-export async function applyPinsToGroup(
-  groupId: number,
-  groupTitle: string
-): Promise<number> {
-  const pins = await getPinnedTabs();
-  const groupPins = pins.filter((p) => p.groupName === groupTitle);
-  if (groupPins.length === 0) return 0;
+/** One group's `tabs` with each locked tab at its slot and the rest in `compare` order around
+ *  them. A lock resolves by tabId before URL, so it follows its tab through a navigation. */
+export function pinAwareSortTabs(
+  tabs: chrome.tabs.Tab[],
+  groupTitle: string,
+  allPins: PinnedTabEntry[],
+  compare: (a: chrome.tabs.Tab, b: chrome.tabs.Tab) => number
+): chrome.tabs.Tab[] {
+  const groupPins = allPins.filter((p) => p.groupName === groupTitle);
+  if (groupPins.length === 0) return tabs.sort(compare);
 
-  let tabs = (await chrome.tabs.query({ groupId })).sort((a, b) => a.index - b.index);
-  if (tabs.length === 0) return 0;
+  const tabIdMap = new Map(groupPins.filter((p) => p.tabId).map((p) => [p.tabId!, p.position]));
+  const urlMap = new Map(groupPins.map((p) => [p.url, p.position]));
+  const pinned: { tab: chrome.tabs.Tab; pos: number }[] = [];
+  const unpinned: chrome.tabs.Tab[] = [];
 
-  let moved = 0;
-
-  const sorted = [...groupPins].sort((a, b) => a.position - b.position);
-  for (const pin of sorted) {
-    const tab = (pin.tabId && tabs.find((t) => t.id === pin.tabId)) || tabs.find((t) => t.url === pin.url);
-    if (!tab) continue;
-    const baseIndex = tabs[0].index;
-    const targetIndex = Math.min(baseIndex + pin.position, baseIndex + tabs.length - 1);
-    if (tab.index !== targetIndex) {
-      await chrome.tabs.move(tab.id!, { index: targetIndex });
-      moved++;
-      // Moving a tab shifts every index after it. Re-read before placing the next pin,
-      // otherwise pins 2..n are positioned against indices that no longer exist.
-      tabs = (await chrome.tabs.query({ groupId })).sort((a, b) => a.index - b.index);
+  for (const tab of tabs) {
+    const pos = tabIdMap.get(tab.id!) ?? urlMap.get(tab.url ?? "");
+    if (pos !== undefined) {
+      pinned.push({ tab, pos });
+    } else {
+      unpinned.push(tab);
     }
   }
 
-  if (moved > 0) {
-    const freshTabs = await chrome.tabs.query({ groupId });
-    await chrome.tabs.group({ tabIds: freshTabs.map((t) => t.id!), groupId });
+  // Two locks on one slot: the tab id settles which holds it. Strip order did, so the pair traded
+  // places on every sort.
+  pinned.sort((a, b) => a.pos - b.pos || a.tab.id! - b.tab.id!);
+  unpinned.sort(compare);
+
+  const result: chrome.tabs.Tab[] = [];
+  let ui = 0;
+  const pinnedByPos = new Map(pinned.map((p) => [p.pos, p.tab]));
+  const totalLen = tabs.length;
+
+  for (let i = 0; i < totalLen; i++) {
+    if (pinnedByPos.has(i)) {
+      result.push(pinnedByPos.get(i)!);
+    } else if (ui < unpinned.length) {
+      result.push(unpinned[ui++]);
+    }
+  }
+  while (ui < unpinned.length) result.push(unpinned[ui++]);
+  for (const p of pinned) {
+    if (!result.includes(p.tab)) result.push(p.tab);
   }
 
-  return moved;
+  return result;
+}
+
+/** Puts a group's locked tabs at their slots, the rest keeping their order: the sort's own
+ *  placement, in one move. Placing one lock at a time let each move shift the locks already
+ *  placed, and cost a query per lock. */
+export async function applyPinsToGroup(groupId: number, groupTitle: string): Promise<void> {
+  const pins = await getPinnedTabs();
+  if (!pins.some((p) => p.groupName === groupTitle)) return;
+
+  const tabs = (await chrome.tabs.query({ groupId })).sort((a, b) => a.index - b.index);
+  const ordered = pinAwareSortTabs([...tabs], groupTitle, pins, (a, b) => a.index - b.index);
+  if (ordered.every((t, i) => t.id === tabs[i].id)) return;
+
+  const ids = ordered.map((t) => t.id!);
+  // To the group's own first index: every id sits at or right of it, so the batch lands in order.
+  await chrome.tabs.move(ids, { index: tabs[0].index });
+  await chrome.tabs.group({ tabIds: ids, groupId });
 }
 
 export interface PinnedGroupEntry {
