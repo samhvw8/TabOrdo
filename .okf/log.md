@@ -1,6 +1,8 @@
 # Update Log
 
 ## 2026-09-22
+* **Update**: Performance pass measured in Chrome for Testing. Auto-sort is scheduled per window, once per burst of loads; the rules and lock-list read caches are gone and those lists are read from storage, once per lock-sync event; the activity log writes through one queue — [background automation](/features/background-automation.md), [grouping rules](/features/grouping-rules.md), [position locks](/features/position-locks.md), [overview](/architecture/overview.md), [Chrome stub](/testing/chrome-stub.md).
+* **Update**: The palette keeps its selected row visible without a forced layout, and views opened with nothing typed list 100 rows at most — [command palette](/features/command-palette.md).
 * **Update**: Review pass. `/aigroup` sends its instructions through `initialPrompts` with a response schema and caps the tab list to the model's context — [AI grouping](/features/ai-grouping.md).
 * **Update**: Group locks are laid by one placement rule, fixing the two recorded placement bugs; the replayed lock pass and its recorded end state are gone — [position locks](/features/position-locks.md), [sort priority](/features/sort-priority.md).
 * **Update**: The background worker is wiring only; its listener bodies are lib modules with tests. Locks are re-matched to tabs after a restart, icon-menu Group/Sort take an undo snapshot, and one discard rule serves every path — [background automation](/features/background-automation.md), [position locks](/features/position-locks.md), [Chrome stub](/testing/chrome-stub.md), [overview](/architecture/overview.md).
