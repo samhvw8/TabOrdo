@@ -3,7 +3,7 @@
   import { getAllTabs, switchToTab, closeTabs, sortTabsInWindow, sortTabsInGroup, groupTabsByDomain, ungroupAll, removeDuplicates, mergeAllWindows, extractGroupToWindow, discardTabs, closeTabsToLeft, closeTabsToRight, closeTabsSameSite, closeOldTabs, shuffleTabs, uniteDomain, isolateDomain, splitWindow, splitByDomain, stackWindows, pinCurrentTab, unpinCurrentTab, outlineBranch, type TabInfo } from "../../lib/tabs/index.ts";
   import { getPinnedTabs, getPinForTab, type PinnedTabEntry } from "../../lib/pin.ts";
   import { getArchiveCount } from "../../lib/archive.ts";
-  import { search, tabsToSearchItems, searchBookmarks, searchHistory, parseCommand, type SearchResult } from "../../lib/search.ts";
+  import { regexSearch, tabsToSearchItems, searchBookmarks, searchHistory, parseCommand, type SearchResult } from "../../lib/search.ts";
   import { createTabSearch, type TabSearch } from "../../lib/tabsearch.ts";
   import { createDebouncer } from "../../lib/debounce.ts";
   import { updateConfig } from "../../lib/rules.ts";
@@ -492,7 +492,7 @@
           break;
         }
         case "re": {
-          const indices = search(tabSearch.haystack(), searchQuery, "regex", 50, tabSearch.recency);
+          const indices = regexSearch(tabSearch.haystack(), searchQuery, 50, tabSearch.recency);
           results = indices.map((i) => tabSearch.items[i]);
           break;
         }

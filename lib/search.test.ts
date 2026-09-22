@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { search, rankedSearch, parseCommand, buildSearchHaystack, buildTitleHaystack, buildHaystacks, recencyOrder, stripDiacritics } from "./search.ts";
+import { regexSearch, rankedSearch, parseCommand, buildSearchHaystack, buildTitleHaystack, buildHaystacks, recencyOrder, stripDiacritics } from "./search.ts";
 import { pinyinVariants } from "./pinyin.ts";
 
 const haystack = [
@@ -10,62 +10,49 @@ const haystack = [
 ];
 const recency = [100, 400, 300, 200];
 
-describe("empty query", () => {
+describe("regexSearch with an empty pattern", () => {
   it("returns MRU order when recency provided", () => {
-    expect(search(haystack, "", "fuzzy", 50, recency)).toEqual([1, 2, 3, 0]);
+    expect(regexSearch(haystack, "", 50, recency)).toEqual([1, 2, 3, 0]);
   });
 
   it("respects limit", () => {
-    expect(search(haystack, "", "fuzzy", 2, recency)).toEqual([1, 2]);
+    expect(regexSearch(haystack, "", 2, recency)).toEqual([1, 2]);
   });
 
   it("falls back to positional order without recency", () => {
-    expect(search(haystack, "")).toEqual([0, 1, 2, 3]);
+    expect(regexSearch(haystack, "")).toEqual([0, 1, 2, 3]);
   });
 });
 
-describe("recency ordering for score-less modes", () => {
-  it("orders exact matches by recency", () => {
-    expect(search(haystack, "docs", "exact", 50, recency)).toEqual([1, 3, 0]);
-  });
-
-  it("orders prefix matches by recency", () => {
-    expect(search(haystack, "do", "prefix", 50, recency)).toEqual([1, 3, 0]);
-  });
-
-  it("orders regex matches by recency", () => {
-    expect(search(haystack, "docs", "regex", 50, recency)).toEqual([1, 3, 0]);
+describe("regexSearch recency ordering", () => {
+  it("orders matches by recency", () => {
+    expect(regexSearch(haystack, "docs", 50, recency)).toEqual([1, 3, 0]);
   });
 
   it("surfaces a recent match that sits beyond the limit window", () => {
     const big = Array.from({ length: 10 }, (_, i) => `Docs page ${i}`);
     const rec = big.map((_, i) => (i === 9 ? 999 : i));
-    expect(search(big, "docs", "exact", 3, rec)[0]).toBe(9);
+    expect(regexSearch(big, "docs", 3, rec)[0]).toBe(9);
   });
 
-  it("keeps positional order without recency (legacy behavior)", () => {
-    expect(search(haystack, "docs", "exact")).toEqual([0, 1, 3]);
-  });
-
-  it("fuzzy keeps uFuzzy relevance order over recency", () => {
-    const res = search(haystack, "docs", "fuzzy", 50, recency);
-    expect([...res].sort((a, b) => a - b)).toEqual([0, 1, 3]);
+  it("keeps positional order without recency", () => {
+    expect(regexSearch(haystack, "docs")).toEqual([0, 1, 3]);
   });
 });
 
 // /re compiles whatever the user types. The 50ms deadline in regexSearch only helps between
 // tests — a single test against a nested quantifier never returns to be timed.
-describe("regex mode ReDoS guard", () => {
+describe("regexSearch ReDoS guard", () => {
   const bait = ["a".repeat(40) + "!"];
 
   it("returns nothing for a nested quantifier instead of hanging", () => {
-    expect(search(bait, "(a+)+$", "regex")).toEqual([]);
-    expect(search(bait, "(a*)*$", "regex")).toEqual([]);
+    expect(regexSearch(bait, "(a+)+$")).toEqual([]);
+    expect(regexSearch(bait, "(a*)*$")).toEqual([]);
   });
 
   it("still runs ordinary patterns", () => {
-    expect(search(bait, "a+!", "regex")).toEqual([0]);
-    expect(search(haystack, "(Alpha|Beta) Docs", "regex")).toEqual([0, 1]);
+    expect(regexSearch(bait, "a+!")).toEqual([0]);
+    expect(regexSearch(haystack, "(Alpha|Beta) Docs")).toEqual([0, 1]);
   });
 });
 
