@@ -7,7 +7,7 @@ import { getSortRules, buildSortRanker, noSortRanking, type SortRanker } from ".
 /**
  * Sort rules only reorder *within* a domain block and *between* domains, so they mean nothing
  * to a flat title or url sort. Skipping the build there also skips a storage read on the
- * auto-sort path, which fires on every tab that finishes loading.
+ * auto-sort path, which runs after every burst of tab loads.
  */
 async function rankerFor(by: "title" | "url" | "domain"): Promise<SortRanker> {
   if (by !== "domain") return noSortRanking;
@@ -111,7 +111,7 @@ interface LayoutStep {
 /**
  * The moves that turn the window into `blocks` laid end to end after the Chrome-pinned tabs.
  *
- * This runs on every tab that finishes loading, and it used to move and regroup every block
+ * This runs after every burst of tab loads, and it used to move and regroup every block
  * whether or not anything was out of place: 2 calls per group plus one for the loose tabs, 121
  * of them on a 1000-tab window that was already sorted. Each block is now checked against a
  * local copy of the strip and skipped when its tabs already sit at its index in order; the copy

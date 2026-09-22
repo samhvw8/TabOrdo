@@ -4,7 +4,7 @@ title: Background automation
 description: The service worker's tab listeners (auto-group, auto-ungroup, auto-sort, pin follow, auto-discard, switch-to-existing, context menus), the lib modules that hold their bodies, and the guards that keep them from fighting other extensions or each other.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/entrypoints/background/index.ts
 tags: [background, service-worker, automation, auto-group, coexistence]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-22T18:00:00Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-22T20:00:00Z }
 sources:
   - id: bg-index
     resource: https://github.com/samhvw8/TabOrdo/blob/main/entrypoints/background/index.ts
@@ -137,7 +137,7 @@ Every automation is off by default and driven by a flag in the shared `rulesConf
 |------|--------------|---------|--------|
 | `autoGroup` (+ `useRules`) | Auto (+ Rules) | `tabs.onUpdated` with a URL change | Put the tab in a rule or domain group |
 | `autoUngroup` | Ungroup | tab removed/detached, `groupId` change, after auto-group, flag switched on | Dissolve **named** single-tab groups |
-| `autoSort` | Sort | `tabs.onUpdated` with `status: "complete"` | `sortTabsInWindow(windowId)` (domain sort) |
+| `autoSort` | Sort | `tabs.onUpdated` with `status: "complete"`, and auto-group putting a tab in a group | `sortTabsInWindow(windowId)` (domain sort), 250 ms after the window's last such event |
 | `autoPinFollow` | Pin | `changeInfo.pinned` | Apply the same Chrome pin state to every other tab with the identical URL |
 | `autoDiscard` | Discard | `autoDiscard` alarm, every 5 min | Discard tabs not accessed for 45 min |
 | `switchToExisting` | Switch | first navigation of a new foreground tab | Focus an open copy, close the new tab |
@@ -152,7 +152,7 @@ A failed domain join used to fall back to a group of the tab alone, the same way
 
 **Auto-ungroup.** Debounced 150 ms per window. `planAutoUngroup` is the pure decision: for each group with exactly one tab it skips shared groups, groups younger than 2 s, untitled groups, groups named after a rule while `useRules` is on, and names on the ignore list. A young group is looked at again once the first young group in the window has settled.[^automation] Only named groups are touched because untitled single-tab groups made by other tools (the commit names Claude-in-Chrome MCP) were dissolved at once, and the other tool then deleted and recreated them in a loop. TabOrdo's own groups always have titles.[^commit-untitled] Because rule-named groups are exempt, a one-tab group created by a rule is left alone.
 
-**Auto-sort.** This runs in the same listener as auto-group, after it. Auto-group is awaited first so the sort sees the group it just made; split into two listeners, the two would interleave.[^automation] Locks and sort priority apply ([position locks](/features/position-locks.md), [sort priority](/features/sort-priority.md)).
+**Auto-sort.** Scheduled, not run: each load restarts a 250 ms timer for its window (`scheduleAutoSort`), and only one sort of a window runs at a time; a load that lands during a sort earns that window one more sort, not one per load. It used to run a full sort per finished tab, and Chrome does not await listeners, so a burst of loads ran several sorts of one window at once, each moving blocks the others had just moved: opening 200 tabs in bursts of 10 cost 1,208 tab moves and 998 regroups. The timer also means the sort lands after auto-group, and auto-group schedules a sort of its own when it puts a tab in a group, so a page that finished loading before it was grouped still gets sorted into place. The flag and the bulk lock are checked when the timer fires.[^automation] Locks and sort priority apply ([position locks](/features/position-locks.md), [sort priority](/features/sort-priority.md)).
 
 **Pin follow** (`followPinState`). This has its own listener, because folding it into the grouping listener cost two storage round-trips per pin toggle. The copies it updates are marked on the `pinSelfWrites` ledger first, so their `onUpdated` echoes, which Chrome delivers after the update has resolved, start no second pass.[^automation] A `pinSyncInProgress` flag used to sit beside the ledger. It could not catch those late echoes, and what it did catch was a real pin toggle on another tab arriving mid-pass, which it dropped.[^automation-test]
 
@@ -187,23 +187,24 @@ The settle window and the self-write ledger came in as a pair: the first general
 # Invariants
 
 - Every listener is registered through `register(what, fn)`. The listeners run at the top level of the worker, so a throw while registering one used to stop every listener after it from registering; `register` catches and logs it instead.[^bg-index][^commit-guards]
-- `register` only guards registration. Errors inside an async callback need the callback's own try/catch. Most have one, but `getConfig()` and the auto-sort call in `onTabNavigated`, and `discardIdleTabs`, run outside any try.[^automation][^discard]
+- `register` only guards registration. Errors inside an async callback need the callback's own try/catch. Most have one, but `getConfig()` in `onTabNavigated`, and `discardIdleTabs`, run outside any try; the scheduled auto-sort catches its own.[^automation][^discard]
 - The ignored-URL check guards only the grouping. It used to wrap auto-ungroup and auto-sort too.[^automation][^changelog]
 - Each tab close goes through `closeTabs`.[^close]
 - The listener bodies take their state as a parameter and hold none at module level, so each test builds a fresh `AutomationState`.[^automation][^automation-test]
 
 # Gotchas
 
-- Auto-sort re-plans the whole window every time any tab finishes loading: it queries the window's tabs and groups each time. It only moves the blocks that are out of place, though, so a window that is already sorted costs no moves ([sort priority](/features/sort-priority.md)).
+- Auto-sort lands 250 ms after the window's last load, not straight after each one. It re-plans the whole window each time it runs, but only moves the blocks that are out of place, so a window that is already sorted costs no moves ([sort priority](/features/sort-priority.md)).
+- The sort timers live in memory. A worker torn down inside the 250 ms loses the pending sort; the next load in that window schedules another.
 - Switch-to-existing compares raw URLs, while [dedup](/features/dedup.md) normalises them, so the two disagree on tracking parameters.
 - `groupCreatedAt` lives in memory, so after a worker restart older groups count as settled.
 
 # Tests that guard it
 
-- `lib/automation.test.ts`: `planAutoUngroup` (a titled single-tab group goes; untitled, shared, rule-named and ignored names stay; a young group waits and the first to settle sets the retry), the auto-ungroup run (ungroups, marks the ledger, logs, stands down under the bulk lock, comes back once a group settles), both auto-group paths (join the rule's group, make a one-tab rule group, never join a shared group, join the site's group, make a group only with a partner), its guards (Chrome-pinned tab, bulk lock, the grace and re-read, an ignored URL still scheduling auto-ungroup), auto-sort on load only, the `groupId` listener skipping our own echoes, switch-to-existing, and pin follow with the stub's `onUpdated` echoes wired up (no second pass from its own echoes, a toggle on another tab mid-pass still followed).[^automation-test]
+- `lib/automation.test.ts`: `planAutoUngroup` (a titled single-tab group goes; untitled, shared, rule-named and ignored names stay; a young group waits and the first to settle sets the retry), the auto-ungroup run (ungroups, marks the ledger, logs, stands down under the bulk lock, comes back once a group settles), both auto-group paths (join the rule's group, make a one-tab rule group, never join a shared group, join the site's group, make a group only with a partner), its guards (Chrome-pinned tab, bulk lock, the grace and re-read, an ignored URL still scheduling auto-ungroup), auto-sort on load only, once per window per burst, one follow-up for loads during a running sort, after auto-group moves a tab into a group, and not under the bulk lock, the `groupId` listener skipping our own echoes, switch-to-existing, and pin follow with the stub's `onUpdated` echoes wired up (no second pass from its own echoes, a toggle on another tab mid-pass still followed).[^automation-test]
 - `lib/discard.test.ts`: the discard rule, the idle cutoff, frozen tabs discardable, the toggle.[^discard-test] `lib/menus.test.ts`: menu Group and Sort leave an undo entry that restores the strip, Discard uses the shared rule, Dedup leaves its close entry.[^menus-test]
 - `lib/aigroup.test.ts`, `lib/locksync.test.ts` and `lib/selfwrite.test.ts` cover the AI runner, the lock sync and the ledger.
-- Logic the automations call: `lib/tabs/group.test.ts` "planDomainGroup" and "domainGroupPartners",[^group] `lib/bounce.test.ts` (Duplicate-Tab skip, most-recent copy, http(s) only),[^bounce-test] `lib/actionLog.test.ts` (newest first, cap of 20, never throws),[^action-log-test] plus the bulk lock, rules and `closeTabs` suites.
+- Logic the automations call: `lib/tabs/group.test.ts` "planDomainGroup" and "domainGroupPartners",[^group] `lib/bounce.test.ts` (Duplicate-Tab skip, most-recent copy, http(s) only),[^bounce-test] `lib/actionLog.test.ts` (newest first, cap of 20, a burst kept whole in one or two writes, never throws),[^action-log-test] plus the bulk lock, rules and `closeTabs` suites.
 - Nothing imports the entrypoint itself: `defineBackground` is a WXT global, and what is left there is registration.
 
 # Related

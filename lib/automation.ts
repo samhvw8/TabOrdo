@@ -24,6 +24,10 @@ const RECENT_TAB_MS = 2000;
 
 const UNGROUP_DEBOUNCE_MS = 150;
 
+// Auto-sort waits this long after the last tab in a window finishes loading, so a burst of
+// loads sorts the window once rather than once per tab.
+export const SORT_SETTLE_MS = 250;
+
 /** What the worker remembers between events. Memory only: MV3 tears the worker down on idle. */
 export interface AutomationState {
   /** Tab ids TabOrdo itself just grouped/ungrouped, so listeners can tell our own echoes
@@ -39,6 +43,11 @@ export interface AutomationState {
   /** Tabs created in the last RECENT_TAB_MS, with when. */
   recentTabs: Map<number, number>;
   ungroupTimers: Map<number, ReturnType<typeof setTimeout>>;
+  /** Pending auto-sort per window, the windows being sorted now, and those owed one more
+   *  sort because a load landed while theirs ran. */
+  sortTimers: Map<number, ReturnType<typeof setTimeout>>;
+  sortRunning: Set<number>;
+  sortAgain: Set<number>;
 }
 
 export function createAutomationState(): AutomationState {
@@ -48,6 +57,9 @@ export function createAutomationState(): AutomationState {
     groupCreatedAt: new Map(),
     recentTabs: new Map(),
     ungroupTimers: new Map(),
+    sortTimers: new Map(),
+    sortRunning: new Set(),
+    sortAgain: new Set(),
   };
 }
 
@@ -227,28 +239,28 @@ async function tryJoinGroup(selfWrites: SelfWriteLedger, tabId: number, groupId:
 }
 
 /** The rule path: join the window's group named after the rule, or make it, one tab or not. */
-async function groupByRule(selfWrites: SelfWriteLedger, tabId: number, windowId: number, rule: GroupRule): Promise<void> {
+async function groupByRule(selfWrites: SelfWriteLedger, tabId: number, windowId: number, rule: GroupRule): Promise<boolean> {
   const existingGroups = await chrome.tabGroups.query({ windowId });
   const match = existingGroups.find((g) => g.title === rule.name && !isSharedGroup(g));
-  if (match && (await tryJoinGroup(selfWrites, tabId, match.id, rule.name))) return;
+  if (match && (await tryJoinGroup(selfWrites, tabId, match.id, rule.name))) return true;
   selfWrites.mark([tabId]);
   const groupId = await chrome.tabs.group({ tabIds: [tabId] }).catch((e) => { console.error("[TabOrdo] rule group create:", e); return null; });
-  if (groupId) {
-    await safeGroupUpdate(groupId, { title: rule.name, color: rule.color });
-    await logAction("Created group", `"${rule.name}" (rule)`);
-  }
+  if (!groupId) return false;
+  await safeGroupUpdate(groupId, { title: rule.name, color: rule.color });
+  await logAction("Created group", `"${rule.name}" (rule)`);
+  return true;
 }
 
 /** The domain path: join the site's group, or make one only with another loose tab of the site. */
-async function groupByDomain(selfWrites: SelfWriteLedger, tabId: number, url: string, windowId: number, config: RulesConfig): Promise<void> {
+async function groupByDomain(selfWrites: SelfWriteLedger, tabId: number, url: string, windowId: number, config: RulesConfig): Promise<boolean> {
   const [domainOf, nameOf, windowGroups] = await Promise.all([
     getDomainMapper(),
     getGroupNameMapper(),
     chrome.tabGroups.query({ windowId }),
   ]);
   const plan = planDomainGroup(url, windowGroups, domainOf, nameOf);
-  if (!plan) return;
-  if (plan.joinGroupId !== undefined && (await tryJoinGroup(selfWrites, tabId, plan.joinGroupId, plan.title))) return;
+  if (!plan) return false;
+  if (plan.joinGroupId !== undefined && (await tryJoinGroup(selfWrites, tabId, plan.joinGroupId, plan.title))) return true;
   // Tabs only once a join is off the table, and only the loose ones: this runs on every URL
   // change, and a join needs no tabs at all.
   const partnerIds = domainGroupPartners(
@@ -258,40 +270,75 @@ async function groupByDomain(selfWrites: SelfWriteLedger, tabId: number, url: st
     nameOf,
     config.ignorePatterns
   );
-  if (partnerIds.length === 0) return;
+  if (partnerIds.length === 0) return false;
   const memberIds = [tabId, ...partnerIds];
   selfWrites.mark(memberIds);
   const groupId = await chrome.tabs.group({ tabIds: memberIds }).catch((e) => { console.error("[TabOrdo] domain group create:", e); return null; });
-  if (groupId) {
-    await safeGroupUpdate(groupId, { title: plan.title, color: plan.color });
-    await logAction("Created group", `"${plan.title}" (${memberIds.length} tabs)`);
-  }
+  if (!groupId) return false;
+  await safeGroupUpdate(groupId, { title: plan.title, color: plan.color });
+  await logAction("Created group", `"${plan.title}" (${memberIds.length} tabs)`);
+  return true;
 }
 
 /**
- * Group one loose tab by rule, or else by domain. `chrome://` and ignored URLs are left alone.
- * An ignored URL only opts out of *grouping*: the auto-ungroup and auto-sort that follow in
- * onTabNavigated still run for it, as they do for a URL with no hostname.
+ * Group one loose tab by rule, or else by domain; true when the tab went into a group.
+ * `chrome://` and ignored URLs are left alone. An ignored URL only opts out of *grouping*: the
+ * auto-ungroup and auto-sort that follow in onTabNavigated still run for it, as they do for a
+ * URL with no hostname.
  */
-async function autoGroupTab(selfWrites: SelfWriteLedger, tabId: number, url: string, windowId: number, config: RulesConfig): Promise<void> {
+async function autoGroupTab(selfWrites: SelfWriteLedger, tabId: number, url: string, windowId: number, config: RulesConfig): Promise<boolean> {
   const hostname = getFullHostname(url);
-  if (!hostname || url.startsWith("chrome://") || isIgnoredUrl(url, config.ignorePatterns)) return;
+  if (!hostname || url.startsWith("chrome://") || isIgnoredUrl(url, config.ignorePatterns)) return false;
   if (config.useRules) {
     const rule = matchDomainToRule(hostname, config.rules);
-    if (rule) {
-      await groupByRule(selfWrites, tabId, windowId, rule);
-      return;
-    }
+    if (rule) return groupByRule(selfWrites, tabId, windowId, rule);
   }
-  await groupByDomain(selfWrites, tabId, url, windowId, config);
+  return groupByDomain(selfWrites, tabId, url, windowId, config);
+}
+
+// --- Auto-sort ------------------------------------------------------------------------------
+
+/**
+ * Sort the window once loads in it have settled. Restarting the timer on every load turns a
+ * burst into one sort; before, each tab that finished loading started a full sort of its own,
+ * and with Chrome not awaiting listeners ten loads ran ten sorts at once, each moving blocks the
+ * others had just moved: 1,208 tab moves and 998 regroups to open 200 tabs.
+ */
+export function scheduleAutoSort(state: AutomationState, windowId: number, delayMs = SORT_SETTLE_MS): void {
+  const existing = state.sortTimers.get(windowId);
+  if (existing) clearTimeout(existing);
+  state.sortTimers.set(windowId, setTimeout(() => {
+    state.sortTimers.delete(windowId);
+    void runAutoSort(state, windowId);
+  }, delayMs));
+}
+
+/** One sort per window at a time. A load that lands meanwhile earns one more, not one each. */
+async function runAutoSort(state: AutomationState, windowId: number): Promise<void> {
+  if (state.sortRunning.has(windowId)) {
+    state.sortAgain.add(windowId);
+    return;
+  }
+  state.sortRunning.add(windowId);
+  try {
+    // Read when the timer fires, not when it was set: the flag may have been turned off, or a
+    // bulk action may have taken the lock, during the wait.
+    const config = await getConfig();
+    if (config.autoSort && !(await isBulkLocked())) await sortTabsInWindow(windowId);
+  } catch (e) {
+    console.error("[TabOrdo] auto-sort error:", e);
+  } finally {
+    state.sortRunning.delete(windowId);
+    if (state.sortAgain.delete(windowId)) scheduleAutoSort(state, windowId, 0);
+  }
 }
 
 /**
  * tabs.onUpdated: auto-group on a URL change, then auto-sort once the tab has loaded.
  *
- * Auto-sort stays in this listener rather than its own: it is ordering-coupled to auto-group,
- * which is awaited first so the sort sees the group that was just created. Chrome does not await
- * listeners, so splitting them would let the two interleave.
+ * The sort is scheduled, not run: it lands after the window's loads settle, so it sees the
+ * groups auto-group made, including one made for a tab whose page had already finished loading,
+ * which schedules a sort of its own.
  */
 export async function onTabNavigated(
   state: AutomationState,
@@ -317,7 +364,8 @@ export async function onTabNavigated(
       // Re-read after the wait: Chrome, or another extension, may have grouped it meanwhile.
       const freshTab = await chrome.tabs.get(tabId).catch(() => null);
       if (freshTab && freshTab.groupId === -1) {
-        await autoGroupTab(state.selfWrites, tabId, freshTab.url || tab.url, tab.windowId, config);
+        const grouped = await autoGroupTab(state.selfWrites, tabId, freshTab.url || tab.url, tab.windowId, config);
+        if (grouped && config.autoSort) scheduleAutoSort(state, tab.windowId);
       }
       if (config.autoUngroup) scheduleAutoUngroup(state, tab.windowId);
     } catch (e) {
@@ -325,9 +373,7 @@ export async function onTabNavigated(
     }
   }
 
-  if (config.autoSort && isComplete && !(await isBulkLocked())) {
-    await sortTabsInWindow(tab.windowId);
-  }
+  if (config.autoSort && isComplete) scheduleAutoSort(state, tab.windowId);
 }
 
 // --- Switch to existing ---------------------------------------------------------------------

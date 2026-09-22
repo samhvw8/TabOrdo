@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { installChromeStub, type ChromeStub, type StubTab } from "./testing/chrome-stub.ts";
 import {
   createAutomationState, planAutoUngroup, autoUngroupSingleTabGroups, onTabNavigated, onTabRegrouped,
-  switchToExisting, followPinState, GROUP_SETTLE_MS, NEW_TAB_GRACE_MS, type AutomationState,
+  switchToExisting, followPinState, GROUP_SETTLE_MS, NEW_TAB_GRACE_MS, SORT_SETTLE_MS, type AutomationState,
 } from "./automation.ts";
 import { acquireBulkLock, newLockOwner } from "./bulklock.ts";
 import { getActionLog } from "./actionLog.ts";
@@ -231,11 +231,90 @@ describe("onTabNavigated: auto-group", () => {
 });
 
 describe("onTabNavigated: auto-sort", () => {
-  it("sorts the window once a tab finishes loading", async () => {
+  // organizeWindow reads the window's groups once per run, so this counts sorts per window.
+  function countSorts(): Map<number, number> {
+    const runs = new Map<number, number>();
+    const query = chrome.tabGroups.query.bind(chrome.tabGroups);
+    (chrome.tabGroups as { query: unknown }).query = (q: chrome.tabGroups.QueryInfo) => {
+      if (q.windowId !== undefined) runs.set(q.windowId, (runs.get(q.windowId) ?? 0) + 1);
+      return query(q);
+    };
+    return runs;
+  }
+  const complete = (t: StubTab) => onTabNavigated(state, t.id, { status: "complete" }, asTab(t));
+
+  it("sorts the window once a tab finishes loading and the burst settles", async () => {
+    vi.useFakeTimers();
     setConfig({ autoSort: true });
     stub.openTabs = [tab({ id: 1, url: "https://b.com", index: 0 }), tab({ id: 2, url: "https://a.com", index: 1 })];
-    await onTabNavigated(state, 1, { status: "complete" }, asTab(stub.openTabs[0]));
+    await complete(stub.openTabs[0]);
+    expect(stub.moves).toEqual([]);
+    await vi.advanceTimersByTimeAsync(SORT_SETTLE_MS);
     expect([...stub.openTabs].sort((x, y) => x.index! - y.index!).map((t) => t.id)).toEqual([2, 1]);
+  });
+
+  // Chrome does not await listeners, so ten tabs finishing together used to start ten sorts of
+  // the same window at once, each moving blocks the others had just moved.
+  it("sorts a burst of loads in one window once", async () => {
+    vi.useFakeTimers();
+    setConfig({ autoSort: true });
+    stub.openTabs = Array.from({ length: 10 }, (_, i) => tab({ id: i + 1, url: `https://s${9 - i}.com`, index: i }));
+    const runs = countSorts();
+    await Promise.all(stub.openTabs.map(complete));
+    await vi.advanceTimersByTimeAsync(SORT_SETTLE_MS);
+    expect(runs.get(1)).toBe(1);
+  });
+
+  it("sorts each window of a burst once", async () => {
+    vi.useFakeTimers();
+    setConfig({ autoSort: true });
+    stub.openTabs = [tab({ id: 1, windowId: 1 }), tab({ id: 2, windowId: 1 }), tab({ id: 3, windowId: 2 })];
+    const runs = countSorts();
+    await Promise.all(stub.openTabs.map(complete));
+    await vi.advanceTimersByTimeAsync(SORT_SETTLE_MS);
+    expect([runs.get(1), runs.get(2)]).toEqual([1, 1]);
+  });
+
+  it("runs one follow-up, not one per load, for loads that land while a sort is running", async () => {
+    vi.useFakeTimers();
+    setConfig({ autoSort: true });
+    stub.openTabs = [tab({ id: 1, url: "https://b.com", index: 0 }), tab({ id: 2, url: "https://a.com", index: 1 })];
+    const runs = countSorts();
+    const move = chrome.tabs.move.bind(chrome.tabs);
+    (chrome.tabs as { move: unknown }).move = async (...a: Parameters<typeof move>) => {
+      await new Promise((r) => setTimeout(r, 100));
+      return move(...a);
+    };
+    await complete(stub.openTabs[0]);
+    await vi.advanceTimersByTimeAsync(SORT_SETTLE_MS + 10); // first sort is now inside its slow move
+    await complete(stub.openTabs[1]);
+    await complete(stub.openTabs[0]);
+    await vi.advanceTimersByTimeAsync(SORT_SETTLE_MS * 4);
+    expect(runs.get(1)).toBe(2);
+  });
+
+  // A page that finished loading before auto-group put it in its group would otherwise stay at
+  // the group's end until some other tab in the window loaded.
+  it("sorts after auto-group moves a tab into a group", async () => {
+    vi.useFakeTimers();
+    setConfig({ autoGroup: true, autoSort: true });
+    stub.openTabs = [tab({ id: 1, url: "https://github.com/z", groupId: 10 }), tab({ id: 2, url: "https://github.com/a", index: 1 })];
+    stub.groups = [{ id: 10, title: "github", windowId: 1 }];
+    await onTabNavigated(state, 2, { url: "https://github.com/a" }, asTab(stub.openTabs[1]));
+    const runs = countSorts(); // from here: grouping itself also reads the window's groups
+    await vi.advanceTimersByTimeAsync(SORT_SETTLE_MS);
+    expect(stub.openTabs[1].groupId).toBe(10);
+    expect(runs.get(1)).toBe(1);
+  });
+
+  it("skips the sort when a bulk action holds the lock as the timer fires", async () => {
+    vi.useFakeTimers();
+    setConfig({ autoSort: true });
+    stub.openTabs = [tab({ id: 1, url: "https://b.com", index: 0 }), tab({ id: 2, url: "https://a.com", index: 1 })];
+    await complete(stub.openTabs[0]);
+    await acquireBulkLock(newLockOwner(), 60_000);
+    await vi.advanceTimersByTimeAsync(SORT_SETTLE_MS);
+    expect(stub.moves).toEqual([]);
   });
 
   it("does not sort on a URL change alone", async () => {
