@@ -575,7 +575,7 @@
 
     // Outside the lock, like every start of a run: the background takes its own (see startAIGroup).
     if (prefix === "aigroup") {
-      query = "";
+      setQuery("");
       await startAIGroup();
       return;
     }
@@ -597,7 +597,7 @@
         if (outcome.workspaceChanged) hasWorkspace = await hasSavedWorkspace();
 
         if (outcome.acted) {
-          query = "";
+          setQuery("");
           refreshCanUndo();
           await loadTabs();
         }
