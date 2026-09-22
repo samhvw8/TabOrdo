@@ -1277,6 +1277,54 @@
         </button>
       {/if}
 
+      <!-- One block of the tab list: a tab group, or, with no group, the window's ungrouped tabs.
+           `key` is the block's collapse key: the group's id, or -windowId for ungrouped tabs. -->
+      {#snippet tabBlock(key: number, tabs: TabInfo[], group: { title: string; color: string } | null)}
+        {@const collapsed = collapsedGroups.has(key)}
+        {@const allSelected = tabs.every((t) => selectedTabs.has(t.id))}
+        {@const someSelected = tabs.some((t) => selectedTabs.has(t.id))}
+        {@const border = (group && groupBorderClass[group.color]) || "border-border"}
+        <div class="mx-3 mb-2 border rounded-lg overflow-hidden {border} {group ? groupBgClass[group.color] || 'bg-surface-hover' : ''}">
+          <div class="w-full flex items-center gap-2 px-2.5 py-1.5 text-left transition-colors {group ? 'hover:brightness-110' : 'hover:bg-surface-hover'} cursor-pointer
+            {collapsed ? '' : 'border-b'} {border}">
+            <input type="checkbox" checked={allSelected} indeterminate={someSelected && !allSelected}
+              onchange={() => toggleSelectGroup(tabs.map(t => t.id))} onclick={(e) => e.stopPropagation()}
+              class="shrink-0 w-3 h-3 rounded accent-primary" title={group ? "Select all tabs in this group" : "Select all ungrouped tabs"} />
+            <button class="flex items-center gap-2 flex-1 min-w-0 focus-visible:ring-2 focus-visible:ring-primary focus-visible:rounded" aria-expanded={!collapsed} onclick={() => toggleGroupCollapse(key)}>
+              <svg class="w-3 h-3 text-text-muted transition-transform shrink-0 {collapsed ? '' : 'rotate-90'}" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+              {#if group}
+                <span class="w-2 h-2 rounded-full shrink-0 {groupDotClass[group.color] || 'bg-border'}"></span>
+                <span class="text-xs font-medium text-text truncate">{group.title}</span>
+              {:else}
+                <span class="text-xs font-medium text-text-muted">Ungrouped</span>
+              {/if}
+              <span class="text-[10px] text-text-muted shrink-0">({tabs.length})</span>
+            </button>
+            {#if group}
+              <button class="text-[10px] text-text-muted hover:text-text transition-colors shrink-0 focus-visible:ring-2 focus-visible:ring-primary focus-visible:rounded"
+                onclick={() => dashAction(() => extractGroup(key))}>Extract</button>
+              <button class="text-[10px] text-text-muted hover:text-text transition-colors shrink-0 focus-visible:ring-2 focus-visible:ring-primary focus-visible:rounded"
+                onclick={() => dashAction(() => sortGroup(key, group.title))}>Sort</button>
+            {/if}
+          </div>
+          {#if !collapsed}
+            <div class="p-1 grid gap-0.5">
+              {#each chunkRows(tabs) as rows}
+                <LazyRows rows={rows.length}>
+                  {#each rows as tab (tab.id)}
+                    <TabCard {tab} selected={selectedTabs.has(tab.id)}
+                      positionPinned={!!group && !!getPinForTab(tab.url, group.title, pinnedTabs)}
+                      ontoggle={() => toggleSelect(tab.id)}
+                      onclose={() => dashAction(async () => { await closeTabs([tab.id]); })}
+                      onmute={() => loadTabs()} />
+                  {/each}
+                </LazyRows>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      {/snippet}
+
       {#each windows as w, wi}
         {@const winCollapseKey = -(w.windowId + 100000)}
         {@const winCollapsed = collapsedGroups.has(winCollapseKey)}
@@ -1302,76 +1350,10 @@
 
         {#if !winCollapsed}
         {#each [...w.groups.entries()] as [groupId, group]}
-          {@const collapsed = collapsedGroups.has(groupId)}
-          {@const allSelected = group.tabs.every((t) => selectedTabs.has(t.id))}
-          {@const someSelected = group.tabs.some((t) => selectedTabs.has(t.id))}
-          <div class="mx-3 mb-2 border rounded-lg overflow-hidden {groupBorderClass[group.color] || 'border-border'} {groupBgClass[group.color] || 'bg-surface-hover'}">
-            <div class="w-full flex items-center gap-2 px-2.5 py-1.5 text-left transition-colors hover:brightness-110 cursor-pointer
-              {collapsed ? '' : 'border-b'} {groupBorderClass[group.color] || 'border-border'}">
-              <input type="checkbox" checked={allSelected} indeterminate={someSelected && !allSelected}
-                onchange={() => toggleSelectGroup(group.tabs.map(t => t.id))} onclick={(e) => e.stopPropagation()}
-                class="shrink-0 w-3 h-3 rounded accent-primary" title="Select all tabs in this group" />
-              <button class="flex items-center gap-2 flex-1 min-w-0 focus-visible:ring-2 focus-visible:ring-primary focus-visible:rounded" aria-expanded={!collapsed} onclick={() => toggleGroupCollapse(groupId)}>
-                <svg class="w-3 h-3 text-text-muted transition-transform shrink-0 {collapsed ? '' : 'rotate-90'}" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
-                <span class="w-2 h-2 rounded-full shrink-0 {groupDotClass[group.color] || 'bg-border'}"></span>
-                <span class="text-xs font-medium text-text truncate">{group.title}</span>
-                <span class="text-[10px] text-text-muted shrink-0">({group.tabs.length})</span>
-              </button>
-              <button class="text-[10px] text-text-muted hover:text-text transition-colors shrink-0 focus-visible:ring-2 focus-visible:ring-primary focus-visible:rounded"
-                onclick={() => dashAction(() => extractGroup(groupId))}>Extract</button>
-              <button class="text-[10px] text-text-muted hover:text-text transition-colors shrink-0 focus-visible:ring-2 focus-visible:ring-primary focus-visible:rounded"
-                onclick={() => dashAction(() => sortGroup(groupId, group.title))}>Sort</button>
-            </div>
-            {#if !collapsed}
-              <div class="p-1 grid gap-0.5">
-                {#each chunkRows(group.tabs) as rows}
-                  <LazyRows rows={rows.length}>
-                    {#each rows as tab (tab.id)}
-                      <TabCard {tab} selected={selectedTabs.has(tab.id)}
-                        positionPinned={!!getPinForTab(tab.url, group.title, pinnedTabs)}
-                        ontoggle={() => toggleSelect(tab.id)}
-                        onclose={() => dashAction(async () => { await closeTabs([tab.id]); })}
-                        onmute={() => loadTabs()} />
-                    {/each}
-                  </LazyRows>
-                {/each}
-              </div>
-            {/if}
-          </div>
+          {@render tabBlock(groupId, group.tabs, group)}
         {/each}
-
         {#if w.ungrouped.length > 0}
-          {@const ungroupedKey = -w.windowId}
-          {@const ungroupedCollapsed = collapsedGroups.has(ungroupedKey)}
-          {@const allUngroupedSelected = w.ungrouped.every((t) => selectedTabs.has(t.id))}
-          {@const someUngroupedSelected = w.ungrouped.some((t) => selectedTabs.has(t.id))}
-          <div class="mx-3 mb-2 border border-border rounded-lg overflow-hidden">
-            <div class="w-full flex items-center gap-2 px-2.5 py-1.5 text-left transition-colors hover:bg-surface-hover cursor-pointer
-              {ungroupedCollapsed ? '' : 'border-b border-border'}">
-              <input type="checkbox" checked={allUngroupedSelected} indeterminate={someUngroupedSelected && !allUngroupedSelected}
-                onchange={() => toggleSelectGroup(w.ungrouped.map(t => t.id))} onclick={(e) => e.stopPropagation()}
-                class="shrink-0 w-3 h-3 rounded accent-primary" title="Select all ungrouped tabs" />
-              <button class="flex items-center gap-2 flex-1 focus-visible:ring-2 focus-visible:ring-primary focus-visible:rounded" aria-expanded={!ungroupedCollapsed} onclick={() => toggleGroupCollapse(ungroupedKey)}>
-                <svg class="w-3 h-3 text-text-muted transition-transform {ungroupedCollapsed ? '' : 'rotate-90'}" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
-                <span class="text-xs font-medium text-text-muted">Ungrouped</span>
-                <span class="text-[10px] text-text-muted">({w.ungrouped.length})</span>
-              </button>
-            </div>
-            {#if !ungroupedCollapsed}
-              <div class="p-1 grid gap-0.5">
-                {#each chunkRows(w.ungrouped) as rows}
-                  <LazyRows rows={rows.length}>
-                    {#each rows as tab (tab.id)}
-                      <TabCard {tab} selected={selectedTabs.has(tab.id)}
-                        ontoggle={() => toggleSelect(tab.id)}
-                        onclose={() => dashAction(async () => { await closeTabs([tab.id]); })}
-                        onmute={() => loadTabs()} />
-                    {/each}
-                  </LazyRows>
-                {/each}
-              </div>
-            {/if}
-          </div>
+          {@render tabBlock(-w.windowId, w.ungrouped, null)}
         {/if}
         {/if}
       {/each}
