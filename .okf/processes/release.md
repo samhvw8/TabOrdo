@@ -4,7 +4,7 @@ title: Releasing TabOrdo
 description: Steps to cut a TabOrdo release (version bump, dated CHANGELOG section, annotated tag, push, GitHub Release that triggers the Chrome Web Store publish), what each CI workflow does, the commit conventions, and what to do when the store publish fails.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/.github/workflows/publish.yml
 tags: [release, ci, chrome-web-store, versioning, git]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-22T12:00:00Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-22T23:00:00Z }
 sources:
   - id: claude-md
     resource: https://github.com/samhvw8/TabOrdo/blob/main/CLAUDE.md
@@ -54,6 +54,14 @@ sources:
     resource: https://github.com/samhvw8/TabOrdo/actions/runs/32646251724
     title: Publish to Chrome Web Store run for v0.7.2 (failed; v0.7.0 and v0.7.1 runs fail the same way)
     last_modified: 2026-08-23
+  - id: publish-run-073
+    resource: https://github.com/samhvw8/TabOrdo/actions/runs/35174579836
+    title: Publish to Chrome Web Store run for v0.7.3 (failed, 400 on the submit call)
+    last_modified: 2026-09-17
+  - id: publish-run-080
+    resource: https://github.com/samhvw8/TabOrdo/actions/runs/35740300825
+    title: Publish to Chrome Web Store run for v0.8.0 (uploaded and submitted for review)
+    last_modified: 2026-09-22
 ---
 
 # Overview
@@ -92,7 +100,8 @@ Conventional-commit subjects start in July 2026. Earlier history uses free-form 
 
 # When the store publish fails
 
-- **A green upload is not a release.** v0.7.0, v0.7.1 and v0.7.2 uploaded their ZIP, then the publish call returned 400 "Publish condition not met: … you must provide mandatory privacy information in the new Developer Dashboard", so none reached users.[^publish-run-072] Fix the listing as [the store listing page](/processes/chrome-web-store-listing.md) describes, then rerun the failed run with `gh run rerun <run-id>`; it rebuilds from the same tag.
+- **A green upload is not a release.** v0.7.0, v0.7.1 and v0.7.2 uploaded their ZIP, then the publish call returned 400 "Publish condition not met: … you must provide mandatory privacy information in the new Developer Dashboard", so none reached users.[^publish-run-072] v0.7.3 failed at the same call with another 400.[^publish-run-073] Fix the listing as [the store listing page](/processes/chrome-web-store-listing.md) describes, then rerun the failed run with `gh run rerun <run-id>`; it rebuilds from the same tag.
+- **v0.8.0 went through** (2026-09-22): the run's submit step logged "Uploading new ZIP file", then "Submitting for review" and passed. It still has to clear store review before users get it.[^publish-run-080]
 - Check the "Publish to Chrome Web Store" run after every release; nothing else reports a failed submission.[^publish-yml]
 - **The `v0.6.0` GitHub Release is still a draft**, so it never published.[^releases] 0.6.0 had been dated and documented without being tagged.[^commit-docs-060]
 
@@ -116,5 +125,7 @@ Conventional-commit subjects start in July 2026. Earlier history uses free-form 
 [^commit-docs-060]: commit dc267f2
 [^commit-artifact]: commit 1c7216c
 [^git-history]: git log / git tag
+[^publish-run-073]: GitHub Actions run 35174579836
+[^publish-run-080]: GitHub Actions run 35740300825
 [^releases]: gh release list
 [^publish-run-072]: GitHub Actions run 32646251724

@@ -1,6 +1,8 @@
 # Update Log
 
 ## 2026-09-22
+* **Creation**: The Chrome 138 floor as a standing decision, with what it removed and what it costs — [minimum Chrome 138](/decisions/minimum-chrome-138.md).
+* **Update**: Promo tiles for the store listing (Google's rules, the 2026-09-22 design, the render recipe); v0.7.3's failed and v0.8.0's successful store submissions; the Chrome 138 requirement on the product page; current popup chunk sizes — [store listing](/processes/chrome-web-store-listing.md), [release](/processes/release.md), [TabOrdo](/tabordo.md), [overview](/architecture/overview.md).
 * **Update**: Performance pass measured in Chrome for Testing. Auto-sort is scheduled per window, once per burst of loads; the rules and lock-list read caches are gone and those lists are read from storage, once per lock-sync event; the activity log writes through one queue — [background automation](/features/background-automation.md), [grouping rules](/features/grouping-rules.md), [position locks](/features/position-locks.md), [overview](/architecture/overview.md), [Chrome stub](/testing/chrome-stub.md).
 * **Update**: The palette keeps its selected row visible without a forced layout, and views opened with nothing typed list 100 rows at most — [command palette](/features/command-palette.md).
 * **Update**: Review pass. `/aigroup` sends its instructions through `initialPrompts` with a response schema and caps the tab list to the model's context — [AI grouping](/features/ai-grouping.md).

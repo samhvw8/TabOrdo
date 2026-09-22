@@ -1,9 +1,9 @@
 ---
 type: Playbook
 title: Chrome Web Store listing and privacy practices
-description: What the Chrome Web Store dashboard needs besides the uploaded build (privacy practices answers per permission, data disclosure, screenshots), why automation cannot fill it, and how the store screenshots are captured.
+description: What the Chrome Web Store dashboard needs besides the uploaded build (privacy practices answers per permission, data disclosure, screenshots, promo tiles), why automation cannot fill it, and how the store screenshots and promo tiles are made.
 tags: [release, chrome-web-store, privacy, permissions, screenshots]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-17T02:27:59Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-22T23:00:00Z }
 sources:
   - id: wxt-config
     resource: https://github.com/samhvw8/TabOrdo/blob/main/wxt.config.ts
@@ -86,11 +86,35 @@ The 2026-09-17 set was captured without the store version installed:
 3. Open `chrome-extension://<id>/popup.html` in a 450×600 tab at 2× scale; type into the search box for the search, `/` and `@` states. Capture `archive.html` at 1280×800.
 4. Frame each capture onto a 1280×800 canvas with a headline, and check every image by eye.
 
+# Promo tiles
+
+| Tile | Size | Required |
+|------|------|----------|
+| Small promo tile | 440×280 | Yes. An item without one is listed after items that have one.[^cws-images-docs] |
+| Marquee promo tile | 1400×560 | No. It is what a marquee feature would show.[^cws-images-docs] |
+
+Google's rules for both: they should communicate the brand rather than be a screenshot, carry little or no text, still work at half size, assume a light grey page around them, use saturated colours, fill the whole area, and have well-defined edges. JPEG or 24-bit PNG, no alpha.[^cws-images-docs]
+
+The 2026-09-22 set is `promo-small.png` and `promo-marquee.png` at the repo root, ignored by git like the screenshots. Its HTML source is not kept; this is the spec:
+
+- **Background:** the icon's indigo pushed toward violet, full bleed: `linear-gradient(135deg, #5b5ff0, #4f46e5 38%, #3f36c9 70%, #332aa8)`, a `#8b5cf6` glow top right, a `#1e1b4b` shade bottom left, and a faint white dot grid fading in toward the right.
+- **Brand:** the icon, outlined in 70% white with a deep shadow so it separates from the indigo, and "TabOrdo" in the system font at weight 800. The small tile carries no other text. The marquee adds "Every tab, in order."
+- **Art:** the icon's stacked bars as tabs, with loose ones tilted at the edges and the rest settled into an ordered stack. The marquee draws an abstract command palette instead: a search pill and five rows of group-colour dots and bars, with no real text.
+
+To render them:
+
+1. Lay each tile out in HTML at its exact CSS size.
+2. Capture at 2× through CDP (`Emulation.setDeviceMetricsOverride` with `deviceScaleFactor: 2`, then `Page.captureScreenshot`) in Chrome for Testing started with `--use-mock-keychain --password-store=basic`.
+3. Downscale to the target size with a Lanczos filter and save as RGB. That drops the alpha channel the store rejects.
+4. Look at both at half size on a light grey background before uploading.
+
 # Gotchas
 
+- Headless Chrome for Testing 153 hung on the command-line `--screenshot` flag and wrote nothing. Capture through CDP instead.
+- Without `--use-mock-keychain --password-store=basic`, every Chromium launch on macOS asks for the login keychain password ("Chromium Safe Storage").
 - `developer.chrome.com` titles its pages `browser.tabs` for any browser not branded Chrome; the capture rewrites them to the `chrome.tabs` title Chrome users see.
 - The archive page groups entries by UTC date but labels groups in local time, so seed afternoon timestamps or one local day shows under two headings.
-- The side panel clips its content at 400px wide; it is left out of the set.
+- The side panel is not in the 2026-09-17 set: it clipped at 400px wide then, because the shared stylesheet fixed its body at the popup's 450×600. 0.8.0 fixed that, so a side panel shot is now possible.
 
 # Related
 

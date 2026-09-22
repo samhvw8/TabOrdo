@@ -6,6 +6,8 @@ A keyboard-first tab manager for Chrome. Press `Cmd+E` to open a command palette
 
 [Chrome Web Store](https://chromewebstore.google.com/detail/tabOrdo/kkobnbbfolmicnhnnbmcmdbgilocpnbi)
 
+Requires Chrome 138 or later.
+
 ## Commands
 
 | Command | Description |
@@ -36,7 +38,7 @@ A keyboard-first tab manager for Chrome. Press `Cmd+E` to open a command palette
 | `/focus` | Save tabs and start fresh |
 | `/unfocus` | Restore saved workspace |
 | `/mute` `/unmute` | Control tab audio |
-| `/vol` | Set tab volume (e.g. `/vol 50`) |
+| `/vol` | Set tab volume (e.g. `/vol 50`); only the active tab can be reached |
 | `/split` `/splitv` `/splith` | Split tabs to new windows |
 | `/splitdomain` | One window per domain |
 | `/stack` | Stack windows to left |
@@ -60,28 +62,32 @@ A keyboard-first tab manager for Chrome. Press `Cmd+E` to open a command palette
 
 ## Keyboard Shortcuts
 
-| Shortcut | Action |
-|----------|--------|
-| `Cmd+E` | Open TabOrdo |
-| `Cmd+Shift+E` | Open TabOrdo (dashboard, no search focus) |
-| `↑↓` | Navigate results |
-| `Enter` | Open / run command |
-| `Ctrl+Del` | Close selected tab |
-| `Cmd+Z` | Undo last action |
+| Mac | Windows / Linux | Action |
+|-----|-----------------|--------|
+| `Cmd+E` | `Ctrl+Shift+E` | Open TabOrdo |
+| `Cmd+Shift+E` | `Ctrl+Shift+D` | Open TabOrdo (dashboard, no search focus) |
+| `↑↓` | `↑↓` | Navigate results |
+| `Enter` | `Enter` | Open / run command |
+| `Ctrl+Del` | `Ctrl+Del` | Close selected tab |
+| `Cmd+Z` | `Ctrl+Z` | Undo last action |
+
+Change them at `chrome://extensions/shortcuts`.
 
 ## Dashboard
 
-The dashboard shows a live 🔊 banner when any tabs are playing audio — click it to jump to `@a` triage. `/pin` and `/pingroup` positions persist across Group+ and Sort operations. The **Archive** button opens a full-page archive view with search, date grouping, bulk restore/delete, and group name filtering.
+The dashboard shows a live 🔊 banner when any tabs are playing audio — click it to jump to `@a` triage. Lock positions (`/lock`, `/lockgroup`) hold through Group+, Regroup and Sort. The **Archive** button opens a full-page archive view with search, date grouping, bulk restore/delete, and group name filtering.
 
-**Customizable actions** — the action buttons on the dashboard are configurable. Open the **More** sidebar panel and click ★ next to any action to add or remove it from the dashboard grid. Your selection persists across sessions.
+**Customizable actions** — the action buttons on the dashboard are configurable, and each one runs the same action as its slash command. Open the **More** sidebar panel and click ★ next to any action to add or remove it from the dashboard grid. Your selection persists across sessions.
 
-**Alt-click for the opposite** — several tiles carry a second mode. Hold `Alt` and the tile relabels to show what it will do; click to run it. One tile covers both directions, so you don't have to spend two dashboard slots on a pair.
+**Alt-click for the opposite** — several tiles carry a second mode. Hold `Alt` (or `Ctrl`) and the tile relabels to show what it will do; click to run it. One tile covers both directions, so you don't have to spend two dashboard slots on a pair.
 
 | Tile | Click | Alt-click |
 |------|-------|-----------|
-| Lock Tab | Hold at current position | Hold at first position |
+| Lock Tab | Hold at current position | Hold at first position (unlock if it already holds it) |
 | Lock Group | Hold group at current position | Hold group at first position |
 | Mute Tab | Mute active tab | Unmute active tab |
+| Branch | Group this tab's branch | Group the parent's whole branch |
+| Branch Up | Group the parent's whole branch | Group this tab's branch |
 | Close Left | Close tabs to the left | Close tabs to the right |
 | Close Right | Close tabs to the right | Close tabs to the left |
 | Split V | Side-by-side windows | Top/bottom windows |
@@ -100,7 +106,7 @@ The dashboard shows a live 🔊 banner when any tabs are playing audio — click
 | Rules | Custom grouping rules editor |
 | AI | On-device grouping with Gemini Nano |
 | More | All available actions with ★ toggle for dashboard |
-| Settings | Ignore lists for auto-group/ungroup |
+| Settings | Ignore lists for auto-group/ungroup, and the automation activity log |
 | Archive | Opens full-page archive in a new tab |
 
 ## Sort Priority
@@ -134,27 +140,33 @@ how many open tabs it currently matches, so a pattern that matches nothing says 
 
 | Command | Shows |
 |---------|-------|
-| `@` | Overview of every category below |
+| `@` | Overview: audio, muted, duplicate, recent, unloaded and paused tabs |
 | `@a` | Tabs playing audio |
 | `@d` | Duplicate tabs |
 | `@m` | Muted tabs |
 | `@r` | Recently active tabs |
-| `@s` | Suspended tabs |
+| `@s` | Unloaded (discarded) tabs |
 | `@u` | Ungrouped tabs |
 | `@b` | This tab's branch — everything opened from it, as an outline |
-| `@f` | Frozen (memory-suspended) tabs |
+| `@f` | Tabs Chrome has paused (frozen) |
 | `@shared` | Tabs in shared groups |
+
+Type after a view to search inside it (`@a youtube`). With nothing typed, a view lists its first 100 tabs; type to narrow.
 
 ## Development
 
 ```bash
+mise install         # Node version from mise.toml (CI uses the same file)
 npm install
 npm run dev          # dev mode with hot reload
-npm run build        # production build
+npm run build        # production build (minified)
+npm run build:dev    # unminified build with inline sourcemaps, for debugging
 npm run zip          # build + zip for CWS
 npm run check        # svelte type checking
 npm test             # unit tests
 ```
+
+Releases follow the steps in [CLAUDE.md](CLAUDE.md): version bump, dated CHANGELOG section, annotated tag, then a GitHub Release, which submits the build to the Chrome Web Store.
 
 ## Tech Stack
 
@@ -162,8 +174,11 @@ npm test             # unit tests
 |-------|------|
 | Framework | WXT (WebExtension Tooling) |
 | UI | Svelte 5, Tailwind CSS 4 |
-| Search | uFuzzy |
+| Search | uFuzzy, tiny-pinyin (Chinese pinyin matching) |
+| Domains | tldts-icann (public-suffix list, ICANN section) |
+| AI grouping | Chrome's built-in Prompt API (Gemini Nano, on-device) |
 | Build | Vite |
+| Tests | Vitest against a hand-written Chrome API stub |
 
 ## Privacy
 

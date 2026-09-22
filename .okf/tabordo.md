@@ -3,7 +3,7 @@ type: Product
 title: TabOrdo
 description: TabOrdo is a keyboard-first Chrome MV3 tab manager (command palette, dashboard, side panel, archive and background automations); this page covers its audience, surfaces, permissions, privacy stance and store listing, and links every other concept in the bundle.
 tags: [product, overview, chrome-extension, permissions, privacy]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-17T00:16:05Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-22T23:00:00Z }
 sources:
   - id: readme
     resource: https://github.com/samhvw8/TabOrdo/blob/main/README.md
@@ -76,11 +76,21 @@ sources:
     resource: https://github.com/samhvw8/TabOrdo/actions/runs/32646251724
     title: Publish to Chrome Web Store run for v0.7.2
     last_modified: 2026-08-23
+  - id: publish-run-073
+    resource: https://github.com/samhvw8/TabOrdo/actions/runs/35174579836
+    title: Publish to Chrome Web Store run for v0.7.3 (failed, 400 on the submit call)
+    last_modified: 2026-09-17
+  - id: publish-run-080
+    resource: https://github.com/samhvw8/TabOrdo/actions/runs/35740300825
+    title: Publish to Chrome Web Store run for v0.8.0 (uploaded and submitted for review)
+    last_modified: 2026-09-22
 ---
 
 # Overview
 
 TabOrdo ("TabOrdo - Tab Manager & Organizer") is a keyboard-first tab manager for Chrome. You press `Cmd+E` and use a command palette to search, sort, group, deduplicate, archive and triage tabs.[^readme] It is a Manifest V3 extension built with WXT, Svelte 5, TypeScript and Tailwind 4, tested with vitest, and currently at version `0.7.2`.[^claude-md][^package-json] The product name was chosen for store search (SEO).[^commit-name]
+
+It needs Chrome 138 or later ([minimum Chrome 138](/decisions/minimum-chrome-138.md)).[^wxt-config]
 
 # Audience and principles
 
@@ -129,7 +139,7 @@ There are **no `host_permissions`**. See [no host permissions](/decisions/no-hos
 
 - The listing is `chromewebstore.google.com/detail/tabOrdo/kkobnbbfolmicnhnnbmcmdbgilocpnbi`.[^readme] The manifest name is "TabOrdo - Tab Manager & Organizer" and its description is "Sort, group, deduplicate and manage your tabs with a command palette".[^wxt-config]
 - A published GitHub Release triggers `wxt submit`; see [release](/processes/release.md).
-- **Attention:** the publish runs for v0.7.0–v0.7.2 failed at the store with "Publish condition not met … mandatory privacy information in the new Developer Dashboard".[^publish-run-072] An unauthenticated fetch of the listing on 2026-09-17 returned "Item not available". Whether that means the item is unpublished or only hidden from signed-out visitors is unconfirmed.[^cws-listing]
+- **Attention:** the publish runs for v0.7.0–v0.7.3 all failed at the store's submit call: v0.7.0–v0.7.2 with "Publish condition not met … mandatory privacy information in the new Developer Dashboard",[^publish-run-072] and v0.7.3 with another 400.[^publish-run-073] v0.8.0 (2026-09-22) was the first since then to be uploaded and submitted for review, so it carries every 0.7.x change to users at once.[^publish-run-080] An unauthenticated fetch of the listing on 2026-09-17 returned "Item not available". Whether that means the item is unpublished or only hidden from signed-out visitors is unconfirmed.[^cws-listing]
 
 # Where to go next
 
@@ -140,7 +150,7 @@ There are **no `host_permissions`**. See [no host permissions](/decisions/no-hos
 - [Dedup](/features/dedup.md), [Branch lineage](/features/branch-lineage.md), [Focus workspaces](/features/focus-workspaces.md), [Archive](/features/archive.md), [AI grouping](/features/ai-grouping.md)
 - [Tab closing](/architecture/tab-closing.md), [Undo stack](/architecture/undo-stack.md), [Bulk lock](/architecture/bulk-lock.md): cross-cutting invariants
 - [Chrome stub](/testing/chrome-stub.md): how tests fake Chrome
-- [Release](/processes/release.md) and [No host permissions](/decisions/no-host-permissions.md)
+- [Release](/processes/release.md), [Chrome Web Store listing](/processes/chrome-web-store-listing.md), [No host permissions](/decisions/no-host-permissions.md) and [Minimum Chrome 138](/decisions/minimum-chrome-138.md)
 
 [^readme]: README.md
 [^product]: PRODUCT.md
@@ -160,3 +170,5 @@ There are **no `host_permissions`**. See [no host permissions](/decisions/no-hos
 [^commit-name]: commit 8332304
 [^cws-listing]: Chrome Web Store listing
 [^publish-run-072]: GitHub Actions run 32646251724
+[^publish-run-073]: GitHub Actions run 35174579836
+[^publish-run-080]: GitHub Actions run 35740300825
