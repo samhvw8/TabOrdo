@@ -4,12 +4,12 @@ title: Ranked search
 description: How lib/search.ts ranks tabs for the palette (literal tiers before approximate ones, title over URL, pinned and current-window then recency), plus regex, pinyin, Vietnamese, the non-tab sources, and the caching that keeps typing fast.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/search.ts
 tags: [search, palette, performance, i18n]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-17T09:54:06Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-22T05:33:12Z }
 sources:
   - id: search-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/search.ts
     title: Search engine
-    last_modified: 2026-09-17
+    last_modified: 2026-09-22
   - id: tabsearch-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabsearch.ts
     title: Popup search over one tab load
@@ -45,15 +45,15 @@ sources:
   - id: popup-app
     resource: https://github.com/samhvw8/TabOrdo/blob/main/entrypoints/popup/App.svelte
     title: Popup search wiring
-    last_modified: 2026-09-17
+    last_modified: 2026-09-22
   - id: search-test
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/search.test.ts
     title: Search tests
-    last_modified: 2026-09-17
+    last_modified: 2026-09-22
   - id: pinyin-test
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/pinyin.test.ts
     title: Pinyin and unicode query tests
-    last_modified: 2026-07-17
+    last_modified: 2026-09-22
   - id: highlight-test
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/highlight.test.ts
     title: Highlight tests
@@ -74,7 +74,7 @@ sources:
 
 # Overview
 
-The palette ranks tabs with `rankedSearch`, a single ordered search that replaced user-selected fuzzy/exact/prefix/regex modes in 0.5.0.[^changelog] The older `search(haystack, needle, mode)` survives for `/re`. Ranking runs over parallel string arrays ("haystacks"). The popup holds one `TabSearch` per tab load (`lib/tabsearch.ts`), which carries the rows, recency and priority, and builds the haystacks on first use.[^tabsearch-ts][^popup-app] What the palette does with a `/command` is covered in [command palette](/features/command-palette.md).
+The palette ranks tabs with `rankedSearch`, a single ordered search that replaced user-selected fuzzy/exact/prefix/regex modes in 0.5.0.[^changelog] Only `/re` takes a separate path, `regexSearch`. Ranking runs over parallel string arrays ("haystacks"). The popup holds one `TabSearch` per tab load (`lib/tabsearch.ts`), which carries the rows, recency and priority, and builds the haystacks on first use.[^tabsearch-ts][^popup-app] What the palette does with a `/command` is covered in [command palette](/features/command-palette.md).
 
 # Haystacks
 
@@ -111,7 +111,7 @@ Group titles sit in both haystacks, so a group-name hit ranks as a title hit, an
 
 # Regex, CJK, pinyin, Vietnamese
 
-- **`/re`**: `search(…, "regex", 50, recency)`, case-insensitive, over the full haystack. Patterns over 100 characters, nested quantifiers (`hasNestedQuantifier`, a best-effort heuristic from `lib/rules.ts`) and invalid patterns return nothing; a 50 ms deadline is checked between entries.[^search-ts][^rules-ts][^popup-app]
+- **`/re`**: `regexSearch(…, 50, recency)`, case-insensitive, over the full haystack, most recent match first. Patterns over 100 characters, nested quantifiers (`hasNestedQuantifier`, a best-effort heuristic from `lib/rules.ts`) and invalid patterns return nothing; a 50 ms deadline is checked between entries.[^search-ts][^rules-ts][^popup-app]
 - **CJK needles** (U+3400–4DBF, U+4E00–9FFF) skip every tier but substring, because uFuzzy's term matching only handles space-delimited scripts.[^pinyin-ts][^search-ts]
 - **Pinyin** (tiny-pinyin) adds spaced syllables, the joined form and initials for title and group title only. "知乎 - 首页" gains `zhi hu shou ye zhihushouye zhsy`, so `zhihu` and `zh` both find it.[^pinyin-ts]
 - **Vietnamese**: `stripDiacritics` applies NFD, drops U+0300–036F and maps `đ`/`Đ` to `d`. The literal and subsequence tiers match the needle as typed against a haystack that holds both forms; only the uFuzzy tier folds the needle too. `tieng viet` and `tiếng` both find "Tiếng Việt", and `hư` also fuzzy-matches ASCII rows containing `hu` ("Hugo", "github").[^search-ts][^pinyin-test][^search-test]
@@ -160,10 +160,10 @@ Every new query cancels a pending lookup and clears `loading`, so a plain query 
 
 | File | Guards |
 |------|--------|
-| `lib/search.test.ts` | Tier order, title over URL, priority boost, abbreviations, reserved approximate budget, accented and one-letter needles, `parseCommand`, regex ReDoS guard[^search-test] |
+| `lib/search.test.ts` | Tier order, title over URL, priority boost, abbreviations, reserved approximate budget, accented and one-letter needles, `parseCommand`, `regexSearch` recency order and ReDoS guard[^search-test] |
 | `lib/debounce.test.ts` | Last call wins, cancel, flush runs now and waits for a call in flight[^debounce-test] |
 | `lib/tabsearch.test.ts` | Lazy build ranks exactly as eager haystacks; empty query builds nothing; last query remembered; `rankView` matches a rebuilt haystack for subsets, reorders, foreign rows and changed rows; `without` keeps arrays aligned[^tabsearch-test] |
-| `lib/pinyin.test.ts` | Pinyin variants, CJK queries, Vietnamese with and without diacritics[^pinyin-test] |
+| `lib/pinyin.test.ts` | Pinyin variants; pinyin, CJK and Vietnamese (with and without diacritics) queries through `rankedSearch` over both haystacks, the path the palette takes[^pinyin-test] |
 | `lib/highlight.test.ts` | `matchRanges` and `highlightSegments`[^highlight-test] |
 
 # Related
