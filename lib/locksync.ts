@@ -1,7 +1,7 @@
 // The service worker's side of position locks (lib/pin.ts): keeping a lock on its tab through
 // navigation, and matching locks back to their tabs after a browser restart.
 
-import { syncPinUrl, clearPinTabIds, getPinnedTabs, savePinnedTabs, reconcilePins } from "./pin.ts";
+import { syncPinUrl, clearPinTabIds, getPinnedTabs, savePinnedTabs, reconcilePins, type PinnedTabEntry } from "./pin.ts";
 import { setTitleBadge } from "./tabs/index.ts";
 import { createDebouncer, type Debouncer } from "./debounce.ts";
 
@@ -34,7 +34,10 @@ export async function syncLockedTab(
     // flight. A sync that read the list first would match last session's id to whatever tab has
     // it now, and its write would put the id back after the reset.
     await state.reset;
-    const pin = await syncPinUrl(tabId, tab.url || "", tab.title);
+    // One read serves both the URL sync and the waiting-lock check below: this runs for every
+    // url, title and load event of every tab.
+    const pins = await getPinnedTabs();
+    const pin = await syncPinUrl(tabId, tab.url || "", tab.title, pins);
     // A full navigation tears down the injected MutationObserver with the page, leaving
     // the pin live but unbadged — re-apply once the new document has settled. Idempotent
     // in-page, so the title echo this causes converges instead of looping.
@@ -42,7 +45,7 @@ export async function syncLockedTab(
       if (navDone) await setTitleBadge(tabId, true);
       return;
     }
-    if (changeInfo.url || navDone) await noticeUrl(state, tab.url);
+    if ((changeInfo.url || navDone) && lockWaitsFor(pins, tab.url)) scheduleReconcile(state);
   } catch (e) {
     console.error("[TabOrdo] pin URL sync error:", e);
   }
@@ -59,9 +62,12 @@ export async function noticeTab(state: LockSyncState, tab: chrome.tabs.Tab): Pro
 
 /** Schedule a reconcile when a lock with no tab has this URL. */
 async function noticeUrl(state: LockSyncState, url: string | undefined): Promise<void> {
-  if (!url) return;
-  const pins = await getPinnedTabs();
-  if (pins.some((p) => p.tabId === undefined && p.url === url)) scheduleReconcile(state);
+  if (url && lockWaitsFor(await getPinnedTabs(), url)) scheduleReconcile(state);
+}
+
+/** Whether a lock with no tab (after a restart) has this URL. */
+function lockWaitsFor(pins: PinnedTabEntry[], url: string | undefined): boolean {
+  return !!url && pins.some((p) => p.tabId === undefined && p.url === url);
 }
 
 /**

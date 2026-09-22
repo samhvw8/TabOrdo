@@ -45,6 +45,15 @@ describe("syncLockedTab", () => {
     expect(stub.scriptedIds).toEqual([]);
     expect(await getPinnedTabs()).toMatchObject([{ url: "https://a.com/1" }]);
   });
+
+  // It runs for every url, title and load event of every tab. The URL sync and the check for a
+  // lock waiting on this URL each read the list, twice per event for a tab no lock tracks.
+  it("reads the lock list once per event", async () => {
+    stub.localData.pinnedTabs = [lock({ tabId: 7 })];
+    stub.storageReads.length = 0;
+    await syncLockedTab(state, 8, { url: "https://b.com", status: "complete" }, asTab(tab(8, "https://b.com")));
+    expect(stub.storageReads.filter((r) => r.keys.includes("pinnedTabs"))).toHaveLength(1);
+  });
 });
 
 // Tab ids do not survive a browser restart and the new session reuses them. Before, the only

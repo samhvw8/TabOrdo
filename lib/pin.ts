@@ -90,13 +90,19 @@ export function getPinForTab(url: string, groupName: string, pins: PinnedTabEntr
 
 /** Returns the pin tracking `tabId` (updated in place), or null if the tab isn't pinned —
  *  the caller uses that to know whether to re-apply the title badge after a navigation. Only a
- *  url or title that changed is written back. */
-export async function syncPinUrl(tabId: number, newUrl: string, newTitle?: string): Promise<PinnedTabEntry | null> {
+ *  url or title that changed is written back. A caller that has just read the list passes it
+ *  in, so one event costs one read. */
+export async function syncPinUrl(
+  tabId: number,
+  newUrl: string,
+  newTitle?: string,
+  pins?: PinnedTabEntry[]
+): Promise<PinnedTabEntry | null> {
   const cleanTitle = stripPinBadge(newTitle);
   const outdated = (pin: PinnedTabEntry) =>
     (!!newUrl && pin.url !== newUrl) || (!!cleanTitle && pin.title !== cleanTitle);
 
-  const pins = await getPinnedTabs();
+  pins ??= await getPinnedTabs();
   const pin = pins.find((p) => p.tabId === tabId);
   if (!pin) return null;
   if (!outdated(pin)) return pin;
