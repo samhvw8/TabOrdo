@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { installChromeStub, type ChromeStub } from "./testing/chrome-stub.ts";
 import {
   groupStartIndex, buildGroupOrder, pinTab, unpinTab, getPinnedTabs, syncPinUrl, clearPinTabIds, PIN_BADGE,
-  applyGroupPinsToWindow, applyAllGroupPins,
+  applyGroupPinsToWindow, lockedGroupOrder, applyPinsToGroup,
 } from "./pin.ts";
 
 // 2 pinned tabs, then group A (1), group B (2), group C (3).
@@ -32,9 +32,15 @@ describe("groupStartIndex", () => {
     expect(groupStartIndex(strip(), 3, 2, 2)).toBe(6);
   });
 
-  it("skips the group being moved when counting slots", () => {
-    // Moving group A (already first) to slot 1 lands it after group B.
-    expect(groupStartIndex(strip(), 1, 1, 2)).toBe(6);
+  // The index is read with the group lifted out, as tabGroups.move reads it. Counting it with A
+  // still in the strip gave 6, which lands A after C.
+  it("counts a rightward move with the group lifted out", () => {
+    // Moving group A (already first) to slot 1: after B, before C.
+    expect(groupStartIndex(strip(), 1, 1, 2)).toBe(4);
+  });
+
+  it("puts the last slot at the end of the strip without the group", () => {
+    expect(groupStartIndex(strip(), 1, 2, 2)).toBe(5);
   });
 
   it("treats slot 0 as right after pinned tabs even with leading ungrouped tabs", () => {
@@ -153,6 +159,46 @@ describe("clearPinTabIds", () => {
   });
 });
 
+describe("lockedGroupOrder", () => {
+  const groups = (...titles: string[]) =>
+    titles.map((title, i) => ({ id: i + 1, title })) as chrome.tabGroups.TabGroup[];
+  const pin = (groupTitle: string, position: number) => ({ id: groupTitle, groupTitle, position });
+  const titles = (order: chrome.tabGroups.TabGroup[]) => order.map((g) => g.title);
+
+  it("keeps the order it is given when nothing is locked", () => {
+    expect(titles(lockedGroupOrder(groups("A", "B", "C"), []))).toEqual(["A", "B", "C"]);
+  });
+
+  it("puts a locked group at its slot, left or right of where it was", () => {
+    expect(titles(lockedGroupOrder(groups("A", "B", "C", "D"), [pin("D", 1)]))).toEqual(["A", "D", "B", "C"]);
+    expect(titles(lockedGroupOrder(groups("A", "B", "C", "D"), [pin("A", 2)]))).toEqual(["B", "C", "A", "D"]);
+  });
+
+  it("clamps a slot past the end to the last one", () => {
+    expect(titles(lockedGroupOrder(groups("A", "B", "C"), [pin("A", 9)]))).toEqual(["B", "C", "A"]);
+  });
+
+  it("breaks a tie on the position asked for, then the title, then the order given", () => {
+    expect(titles(lockedGroupOrder(groups("A", "B", "C"), [pin("A", 9), pin("B", 4)]))).toEqual(["C", "B", "A"]);
+    expect(titles(lockedGroupOrder(groups("B", "A", "C"), [pin("B", 9), pin("A", 9)]))).toEqual(["C", "A", "B"]);
+    // One lock, two groups with its title: both obey it, in the order given.
+    const twins = [{ id: 7, title: "W" }, { id: 3, title: "A" }, { id: 5, title: "W" }] as chrome.tabGroups.TabGroup[];
+    expect(lockedGroupOrder(twins, [pin("W", 0)]).map((g) => g.id)).toEqual([7, 5, 3]);
+  });
+
+  it("lets a shared slot spill into the next one", () => {
+    expect(titles(lockedGroupOrder(groups("A", "B", "C", "D"), [pin("C", 1), pin("D", 1)])))
+      .toEqual(["A", "C", "D", "B"]);
+  });
+
+  // The sort and /lockgroup both run it, one on the strip the other left behind.
+  it("returns an order it leaves alone", () => {
+    const pins = [pin("A", 9), pin("B", 9), pin("E", 1), pin("F", 1)];
+    const once = lockedGroupOrder(groups("A", "B", "C", "D", "E", "F"), pins);
+    expect(lockedGroupOrder(once, pins)).toEqual(once);
+  });
+});
+
 describe("applyGroupPinsToWindow", () => {
   let stub: ChromeStub;
   let windowQueries = 0;
@@ -174,50 +220,92 @@ describe("applyGroupPinsToWindow", () => {
   });
 
   const order = () => [...stub.openTabs].sort((a, b) => a.index! - b.index!).map((t) => t.id);
+  const lock = (...pins: [string, number][]) => {
+    stub.localData.pinnedGroups = pins.map(([groupTitle, position]) => ({ id: groupTitle, groupTitle, position }));
+  };
 
-  // Each move shifts the indices after it. The pass used to re-query the whole window after
-  // every lock to find out where things now were; a leftward move is fully predictable.
-  it("follows its own moves with a local copy instead of re-querying per lock", async () => {
-    const pins = [
-      { id: "d", groupTitle: "D", position: 0 },
-      { id: "c", groupTitle: "C", position: 1 },
-      { id: "b", groupTitle: "B", position: 2 },
-    ];
-    expect(await applyGroupPinsToWindow(1, pins)).toBe(3);
+  // tabGroups.move keeps a group whole in either direction; a multi-tab tabs.move scatters a
+  // group moving right, because Chrome places the ids one at a time.
+  it("moves each locked group with tabGroups.move, planned on one query of the window", async () => {
+    lock(["D", 0], ["C", 1], ["B", 2]);
+    expect(await applyGroupPinsToWindow(1)).toBe(3);
     expect(order()).toEqual([4, 3, 2, 1, 9]);
+    expect(stub.moves).toEqual([]);
+    expect(stub.groupMoves).toHaveLength(3);
     expect(windowQueries).toBe(1);
   });
 
-  // A rightward move to a slot short of the last lands where only Chrome knows (see
-  // GroupPinMove.predictable), so that move alone is followed by a fresh query.
-  it("re-queries after a move only Chrome can place", async () => {
-    expect(await applyGroupPinsToWindow(1, [{ id: "a", groupTitle: "A", position: 1 }])).toBe(1);
-    expect(windowQueries).toBe(2);
+  it("lands a group locked to a slot on its right in that slot", async () => {
+    lock(["A", 1]);
+    expect(await applyGroupPinsToWindow(1)).toBe(1);
+    expect(order()).toEqual([2, 1, 3, 4, 9]);
   });
 
-  it("reads the lock list itself when not handed one", async () => {
-    stub.localData.pinnedGroups = [{ id: "d", groupTitle: "D", position: 0 }];
-    expect(await applyGroupPinsToWindow(1)).toBe(1);
-    expect(order()).toEqual([4, 1, 2, 3, 9]);
+  // The same place the sort gives it, so the auto-sort after /lockgroup $ leaves it alone.
+  it("puts a group locked to the last slot right after the other groups", async () => {
+    lock(["A", 3]);
+    await applyGroupPinsToWindow(1);
+    expect(order()).toEqual([2, 3, 4, 1, 9]);
+  });
+
+  it("moves only the locked group, not the ones it passes", async () => {
+    lock(["A", 2]);
+    await applyGroupPinsToWindow(1);
+    expect(stub.groupMoves).toEqual([{ groupId: 10, index: 2 }]);
+    expect(order()).toEqual([2, 3, 1, 4, 9]);
+  });
+
+  it("keeps a multi-tab group whole on a rightward move", async () => {
+    stub.openTabs = [
+      { id: 1, pinned: false, windowId: 1, groupId: 10, index: 0 },
+      { id: 2, pinned: false, windowId: 1, groupId: 10, index: 1 },
+      { id: 3, pinned: false, windowId: 1, groupId: 11, index: 2 },
+      { id: 4, pinned: false, windowId: 1, groupId: 12, index: 3 },
+    ];
+    stub.groups = [{ id: 10, title: "A", windowId: 1 }, { id: 11, title: "B", windowId: 1 }, { id: 12, title: "C", windowId: 1 }];
+    lock(["A", 1]);
+    await applyGroupPinsToWindow(1);
+    expect(order()).toEqual([3, 1, 2, 4]);
+  });
+
+  it("makes no call when every locked group is already in its slot", async () => {
+    lock(["A", 0], ["C", 2]);
+    expect(await applyGroupPinsToWindow(1)).toBe(0);
+    expect(stub.groupMoves).toEqual([]);
   });
 });
 
-describe("applyAllGroupPins", () => {
-  it("reads the lock list once, not once per window", async () => {
-    const stub = installChromeStub();
-    stub.windows = [{ id: 1 }, { id: 2 }, { id: 3 }];
-    stub.openTabs = [1, 2, 3].flatMap((w) => [
-      { id: w * 10, url: "https://a.com", pinned: false, windowId: w, groupId: w * 10, index: 0 },
-      { id: w * 10 + 1, url: "https://b.com", pinned: false, windowId: w, groupId: w * 10 + 1, index: 1 },
-    ]);
-    stub.groups = [1, 2, 3].flatMap((w) => [
-      { id: w * 10, title: "A", windowId: w },
-      { id: w * 10 + 1, title: "B", windowId: w },
-    ]);
-    stub.localData.pinnedGroups = [{ id: "b", groupTitle: "B", position: 0 }];
-    stub.storageReads.length = 0;
+describe("applyPinsToGroup", () => {
+  let stub: ChromeStub;
 
-    expect(await applyAllGroupPins()).toBe(3);
-    expect(stub.storageReads.filter((r) => r.keys.includes("pinnedGroups"))).toHaveLength(1);
+  beforeEach(() => {
+    stub = installChromeStub();
+    // A loose tab, then group Work: x, a, b, p.
+    stub.openTabs = [
+      { id: 9, url: "https://loose.com", pinned: false, windowId: 1, groupId: -1, index: 0 },
+      ...["x", "a", "b", "p"].map((name, i) => ({
+        id: i + 1, url: `https://${name}.com`, pinned: false, windowId: 1, groupId: 50, index: i + 1,
+      })),
+    ];
+    stub.groups = [{ id: 50, title: "Work", windowId: 1 }];
+  });
+
+  const order = () => [...stub.openTabs].sort((a, b) => a.index! - b.index!).map((t) => t.id);
+
+  // Placing one lock at a time let the later move shift the earlier lock off its slot: p went
+  // to slot 1, then x leaving slot 0 for slot 2 dragged p back to slot 0.
+  it("puts every locked tab in its slot and keeps the rest in their order, in one move", async () => {
+    await pinTab("https://p.com", "Work", 1, "p", 4);
+    await pinTab("https://x.com", "Work", 2, "x", 1);
+    await applyPinsToGroup(50, "Work");
+    expect(order()).toEqual([9, 2, 4, 1, 3]);
+    expect(stub.moves).toEqual([{ ids: [2, 4, 1, 3], index: 1, windowId: undefined }]);
+    expect(stub.openTabs.filter((t) => t.groupId === 50)).toHaveLength(4);
+  });
+
+  it("does nothing when the locked tabs already hold their slots", async () => {
+    await pinTab("https://x.com", "Work", 0, "x", 1);
+    await applyPinsToGroup(50, "Work");
+    expect(stub.moves).toEqual([]);
   });
 });

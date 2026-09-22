@@ -168,40 +168,71 @@ export async function clearPinTabIds(): Promise<void> {
   if (changed) await savePinnedTabs(pins);
 }
 
-export async function applyPinsToGroup(
-  groupId: number,
-  groupTitle: string
-): Promise<number> {
-  const pins = await getPinnedTabs();
-  const groupPins = pins.filter((p) => p.groupName === groupTitle);
-  if (groupPins.length === 0) return 0;
+/** One group's `tabs` with each locked tab at its slot and the rest in `compare` order around
+ *  them. A lock resolves by tabId before URL, so it follows its tab through a navigation. */
+export function pinAwareSortTabs(
+  tabs: chrome.tabs.Tab[],
+  groupTitle: string,
+  allPins: PinnedTabEntry[],
+  compare: (a: chrome.tabs.Tab, b: chrome.tabs.Tab) => number
+): chrome.tabs.Tab[] {
+  const groupPins = allPins.filter((p) => p.groupName === groupTitle);
+  if (groupPins.length === 0) return tabs.sort(compare);
 
-  let tabs = (await chrome.tabs.query({ groupId })).sort((a, b) => a.index - b.index);
-  if (tabs.length === 0) return 0;
+  const tabIdMap = new Map(groupPins.filter((p) => p.tabId).map((p) => [p.tabId!, p.position]));
+  const urlMap = new Map(groupPins.map((p) => [p.url, p.position]));
+  const pinned: { tab: chrome.tabs.Tab; pos: number }[] = [];
+  const unpinned: chrome.tabs.Tab[] = [];
 
-  let moved = 0;
-
-  const sorted = [...groupPins].sort((a, b) => a.position - b.position);
-  for (const pin of sorted) {
-    const tab = (pin.tabId && tabs.find((t) => t.id === pin.tabId)) || tabs.find((t) => t.url === pin.url);
-    if (!tab) continue;
-    const baseIndex = tabs[0].index;
-    const targetIndex = Math.min(baseIndex + pin.position, baseIndex + tabs.length - 1);
-    if (tab.index !== targetIndex) {
-      await chrome.tabs.move(tab.id!, { index: targetIndex });
-      moved++;
-      // Moving a tab shifts every index after it. Re-read before placing the next pin,
-      // otherwise pins 2..n are positioned against indices that no longer exist.
-      tabs = (await chrome.tabs.query({ groupId })).sort((a, b) => a.index - b.index);
+  for (const tab of tabs) {
+    const pos = tabIdMap.get(tab.id!) ?? urlMap.get(tab.url ?? "");
+    if (pos !== undefined) {
+      pinned.push({ tab, pos });
+    } else {
+      unpinned.push(tab);
     }
   }
 
-  if (moved > 0) {
-    const freshTabs = await chrome.tabs.query({ groupId });
-    await chrome.tabs.group({ tabIds: freshTabs.map((t) => t.id!), groupId });
+  // Two locks on one slot: the tab id settles which holds it. Strip order did, so the pair traded
+  // places on every sort.
+  pinned.sort((a, b) => a.pos - b.pos || a.tab.id! - b.tab.id!);
+  unpinned.sort(compare);
+
+  const result: chrome.tabs.Tab[] = [];
+  let ui = 0;
+  const pinnedByPos = new Map(pinned.map((p) => [p.pos, p.tab]));
+  const totalLen = tabs.length;
+
+  for (let i = 0; i < totalLen; i++) {
+    if (pinnedByPos.has(i)) {
+      result.push(pinnedByPos.get(i)!);
+    } else if (ui < unpinned.length) {
+      result.push(unpinned[ui++]);
+    }
+  }
+  while (ui < unpinned.length) result.push(unpinned[ui++]);
+  for (const p of pinned) {
+    if (!result.includes(p.tab)) result.push(p.tab);
   }
 
-  return moved;
+  return result;
+}
+
+/** Puts a group's locked tabs at their slots, the rest keeping their order: the sort's own
+ *  placement, in one move. Placing one lock at a time let each move shift the locks already
+ *  placed, and cost a query per lock. */
+export async function applyPinsToGroup(groupId: number, groupTitle: string): Promise<void> {
+  const pins = await getPinnedTabs();
+  if (!pins.some((p) => p.groupName === groupTitle)) return;
+
+  const tabs = (await chrome.tabs.query({ groupId })).sort((a, b) => a.index - b.index);
+  const ordered = pinAwareSortTabs([...tabs], groupTitle, pins, (a, b) => a.index - b.index);
+  if (ordered.every((t, i) => t.id === tabs[i].id)) return;
+
+  const ids = ordered.map((t) => t.id!);
+  // To the group's own first index: every id sits at or right of it, so the batch lands in order.
+  await chrome.tabs.move(ids, { index: tabs[0].index });
+  await chrome.tabs.group({ tabIds: ids, groupId });
 }
 
 export interface PinnedGroupEntry {
@@ -257,8 +288,9 @@ export async function unpinGroup(groupTitle: string): Promise<boolean> {
 }
 
 // Tab-strip index at which a group must start to end up at `targetPos` (0-based) among the
-// window's groups. Walks the strip counting group boundaries and skipping the group being
-// moved. Shared by /movegroup and the group-pin applier, which used to carry separate copies.
+// window's groups: right before the group that will follow it, at the end when none will, and
+// straight after the Chrome-pinned tabs for slot 0. Counted with the group lifted out of the
+// strip, as tabGroups.move reads it; counting it in place overshot every move to the right.
 export function groupStartIndex(
   tabs: chrome.tabs.Tab[],
   groupId: number,
@@ -266,21 +298,13 @@ export function groupStartIndex(
   pinnedCount: number
 ): number {
   if (targetPos <= 0) return pinnedCount;
-  const strip = [...tabs].filter((t) => !t.pinned).sort((a, b) => a.index - b.index);
+  const rest = tabs.filter((t) => !t.pinned && t.groupId !== groupId).sort((a, b) => a.index - b.index);
   let seenGroups = 0;
-  let lastGroupId = -1;
-  let targetIndex = pinnedCount;
-  for (const t of strip) {
-    if (t.groupId !== -1 && t.groupId !== lastGroupId && t.groupId !== groupId) {
-      seenGroups++;
-      if (seenGroups > targetPos) break;
-      lastGroupId = t.groupId;
-    } else if (t.groupId === -1) {
-      lastGroupId = -1;
-    }
-    if (t.groupId !== groupId) targetIndex = t.index + 1;
+  for (let i = 0; i < rest.length; i++) {
+    const g = rest[i].groupId;
+    if (g !== -1 && g !== rest[i - 1]?.groupId && seenGroups++ === targetPos) return pinnedCount + i;
   }
-  return targetIndex;
+  return pinnedCount + rest.length;
 }
 
 export function buildGroupOrder(tabs: chrome.tabs.Tab[]): number[] {
@@ -295,136 +319,78 @@ export function buildGroupOrder(tabs: chrome.tabs.Tab[]): number[] {
   return order;
 }
 
-interface GroupPinMove {
-  groupId: number;
-  /** The group's tabs in strip order. */
-  tabIds: number[];
-  /** As passed to tabs.move. */
-  index: number;
-  /**
-   * Whether a local copy of the strip can say where this move lands. groupStartIndex counts
-   * the index with the group still in place, while tabs.move reads it with the group already
-   * lifted out; the two agree when the group travels leftward (every tab of it sits at or past
-   * the index) or goes to the very end. A rightward move to any other slot lands past the slot
-   * it was aimed at — and Chrome, moving the ids one at a time, lands a multi-tab group
-   * somewhere else again — so after one of those only a fresh query knows the strip.
-   */
-  predictable: boolean;
-}
-
-/** Group pins in the order the pass applies them. A copy: callers share the list. */
-function byPosition(pins: PinnedGroupEntry[]): PinnedGroupEntry[] {
-  return [...pins].sort((a, b) => a.position - b.position);
-}
-
-/** What the group-pin pass does for `pin` on `tabs` (one window), or null if it leaves it. */
-function planGroupPinMove(
-  tabs: chrome.tabs.Tab[],
-  groups: chrome.tabGroups.TabGroup[],
-  pin: PinnedGroupEntry,
-  pinnedCount: number
-): GroupPinMove | null {
-  const group = groups.find((g) => g.title === pin.groupTitle);
-  if (!group) return null;
-
-  const groupTabs = tabs.filter((t) => t.groupId === group.id).sort((a, b) => a.index - b.index);
-  if (groupTabs.length === 0) return null;
-
-  const groupOrder = buildGroupOrder(tabs);
-  const currentPos = groupOrder.indexOf(group.id);
-  const targetPos = Math.min(pin.position, groupOrder.length - 1);
-  if (currentPos === targetPos) return null;
-
-  const index = groupStartIndex(tabs, group.id, targetPos, pinnedCount);
-  return {
-    groupId: group.id,
-    tabIds: groupTabs.map((t) => t.id!),
-    index,
-    predictable: index >= tabs.length || groupTabs.every((t) => t.index >= index),
-  };
-}
-
-/** Re-index `tabs` (one window) the way a predictable GroupPinMove leaves the strip. */
-function moveLocally(tabs: chrome.tabs.Tab[], move: GroupPinMove): void {
-  const moving = new Set(move.tabIds);
-  const strip = [...tabs].sort((a, b) => a.index - b.index);
-  const rest = strip.filter((t) => !moving.has(t.id!));
-  rest.splice(Math.min(move.index, rest.length), 0, ...strip.filter((t) => moving.has(t.id!)));
-  rest.forEach((t, i) => { t.index = i; });
-}
-
 /**
- * Where the group-pin pass would leave a window, worked out on a copy of `tabs` without
- * touching Chrome — so organizeWindow can lay pinned groups down in their slots itself instead
- * of sorting them alphabetically and having the pass drag them back on every single sort.
+ * One window's `groups`, in the order they would otherwise take, with each locked group at
+ * min(position, last slot) and the rest keeping their order around it.
  *
- * Returns the copy re-indexed, or null when there is no such layout to hand over: the pass
- * would make a move whose landing a copy cannot predict, or the strip it leaves is not one it
- * would leave alone on the next run (two pins clamped to one slot keep trading places). The
- * caller then keeps the plain alphabetical layout and lets the real pass do exactly what it
- * always did.
+ * Locks asking for one slot (clamping makes that common: more locks than groups) take it in
+ * turn: the lower position asked for first, then title order, then the order given. One that
+ * finds its slot taken takes the next free one, and past the last slot they back up leftward.
+ * The result maps to itself, so the sort and /lockgroup, each running this on the strip the
+ * other left, agree and move nothing.
  */
-export function settleGroupPins(
-  tabs: chrome.tabs.Tab[],
+export function lockedGroupOrder(
   groups: chrome.tabGroups.TabGroup[],
-  pins: PinnedGroupEntry[],
-  pinnedCount: number
-): chrome.tabs.Tab[] | null {
-  const copy = tabs.map((t) => ({ ...t }));
-  const ordered = byPosition(pins);
-  for (const pin of ordered) {
-    const move = planGroupPinMove(copy, groups, pin, pinnedCount);
-    if (!move) continue;
-    if (!move.predictable) return null;
-    moveLocally(copy, move);
+  pins: PinnedGroupEntry[]
+): chrome.tabGroups.TabGroup[] {
+  const last = groups.length - 1;
+  const locked: { group: chrome.tabGroups.TabGroup; slot: number; position: number; at: number }[] = [];
+  const free: chrome.tabGroups.TabGroup[] = [];
+  groups.forEach((group, at) => {
+    const pin = group.title ? pins.find((p) => p.groupTitle === group.title) : undefined;
+    if (pin) locked.push({ group, slot: Math.min(pin.position, last), position: pin.position, at });
+    else free.push(group);
+  });
+  locked.sort((a, b) =>
+    a.slot - b.slot || a.position - b.position || a.group.title!.localeCompare(b.group.title!) || a.at - b.at
+  );
+
+  const order: chrome.tabGroups.TabGroup[] = [];
+  let l = 0;
+  let f = 0;
+  while (order.length < groups.length) {
+    const lockedNext = l < locked.length && (locked[l].slot <= order.length || f === free.length);
+    order.push(lockedNext ? locked[l++].group : free[f++]);
   }
-  if (ordered.some((pin) => planGroupPinMove(copy, groups, pin, pinnedCount))) return null;
-  return copy;
+  return order;
 }
 
 /**
- * `pins` lets a caller that already holds the list skip the read. sortTabsInWindow runs this
- * after organizeWindow has laid pinned groups out in their slots (see settleGroupPins), so on
- * the auto-sort path it normally finds nothing to move.
+ * /lockgroup's pass. Moves each locked group to its place in lockedGroupOrder of the window's
+ * groups as they stand, and nothing else. A locked group goes right after the group before it,
+ * or right after the Chrome-pinned tabs when it leads: where the sort lays it too, so a sort
+ * that follows finds it in place. tabGroups.move keeps a group whole in either direction; a
+ * multi-tab tabs.move going right lands scattered, because Chrome places the ids one at a time.
  */
-export async function applyGroupPinsToWindow(windowId: number, pins?: PinnedGroupEntry[]): Promise<number> {
-  const groupPins = pins ?? (await getPinnedGroups());
-  if (groupPins.length === 0) return 0;
-
-  // Copied because the pass re-indexes them in place; tabs.query's result is not ours to edit
-  // (the test stub hands out its live state).
-  let tabs = (await chrome.tabs.query({ windowId })).map((t) => ({ ...t }));
-  const allGroups = await chrome.tabGroups.query({ windowId });
-  const pinnedCount = tabs.filter((t) => t.pinned).length;
-  let moved = 0;
-
-  for (const pin of byPosition(groupPins)) {
-    const move = planGroupPinMove(tabs, allGroups, pin, pinnedCount);
-    if (!move) continue;
-
-    await chrome.tabs.move(move.tabIds, { index: move.index });
-    await chrome.tabs.group({ tabIds: move.tabIds, groupId: move.groupId });
-    moved++;
-
-    // Moving a group shifts every index after it, so the next pin needs the strip as it is now.
-    // That used to be a whole-window query after every pin; a copy says the same thing without
-    // the round-trip, except after a move only Chrome can place.
-    if (move.predictable) moveLocally(tabs, move);
-    else tabs = (await chrome.tabs.query({ windowId })).map((t) => ({ ...t }));
-  }
-
-  return moved;
-}
-
-export async function applyAllGroupPins(): Promise<number> {
+export async function applyGroupPinsToWindow(windowId: number): Promise<number> {
   const pins = await getPinnedGroups();
   if (pins.length === 0) return 0;
 
-  const windows = await chrome.windows.getAll();
-  let total = 0;
-  for (const win of windows) {
-    // The list is handed down rather than re-read once per window.
-    if (win.id) total += await applyGroupPinsToWindow(win.id, pins);
+  const tabs = await chrome.tabs.query({ windowId });
+  const groups = await chrome.tabGroups.query({ windowId });
+  const byId = new Map(groups.map((g) => [g.id, g]));
+  const target = lockedGroupOrder(buildGroupOrder(tabs).flatMap((id) => byId.get(id) ?? []), pins);
+  const lockedTitles = new Set(pins.map((p) => p.groupTitle));
+  const pinnedCount = tabs.filter((t) => t.pinned).length;
+
+  // Each tab's group id in strip order, kept in step with the moves so one query plans them all.
+  let strip = [...tabs].sort((a, b) => a.index - b.index).map((t) => t.groupId);
+  let moved = 0;
+  // Front to back: once a group sits right after the one before it, no later move lands
+  // between them, so the unlocked groups never have to move.
+  for (let k = 0; k < target.length; k++) {
+    const { id, title } = target[k];
+    if (!title || !lockedTitles.has(title)) continue;
+    const prev = target[k - 1]?.id;
+    const order = strip.filter((g, i) => g !== -1 && g !== strip[i - 1]);
+    if (order[order.indexOf(id) - 1] === prev) continue;
+
+    const rest = strip.filter((g) => g !== id);
+    const index = prev === undefined ? pinnedCount : rest.lastIndexOf(prev) + 1;
+    await chrome.tabGroups.move(id, { index });
+    rest.splice(index, 0, ...strip.filter((g) => g === id));
+    strip = rest;
+    moved++;
   }
-  return total;
+  return moved;
 }

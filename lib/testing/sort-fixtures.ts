@@ -1,4 +1,4 @@
-// Seeded window layouts for the auto-sort end-state test (lib/tabs/sort-endstate.test.ts).
+// Seeded window layouts for the lock invariant tests (lib/tabs/sort-invariants.test.ts).
 //
 // Every layout is one Chrome could actually be in: Chrome-pinned tabs lead the strip and are
 // never grouped, each group's tabs are contiguous, and every grouped tab's group lives in the

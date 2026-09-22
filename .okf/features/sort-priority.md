@@ -4,12 +4,12 @@ title: Domain sort and sort priority
 description: How a domain sort lays out a window, and the per-domain sort priority rules (first domains, segment-aware anchored path patterns, cross-rule tiers) that change its order without ever overriding a position lock.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabs/sort.ts
 tags: [sorting, sort-priority, path-patterns, tab-order]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-17T09:52:43Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-22T04:56:32Z }
 sources:
   - id: sort
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabs/sort.ts
     title: lib/tabs/sort.ts
-    last_modified: 2026-09-17
+    last_modified: 2026-09-22
   - id: rules
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/rules.ts
     title: lib/rules.ts (SortRule, pathMatches, buildSortRanker)
@@ -37,11 +37,11 @@ sources:
   - id: sort-test
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabs/sort.test.ts
     title: lib/tabs/sort.test.ts
-    last_modified: 2026-09-17
-  - id: sort-endstate-test
-    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabs/sort-endstate.test.ts
-    title: lib/tabs/sort-endstate.test.ts
-    last_modified: 2026-09-17
+    last_modified: 2026-09-22
+  - id: sort-invariants-test
+    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabs/sort-invariants.test.ts
+    title: lib/tabs/sort-invariants.test.ts
+    last_modified: 2026-09-22
   - id: rules-test
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/rules.test.ts
     title: lib/rules.test.ts
@@ -69,9 +69,8 @@ sources:
 `organizeWindow` works in this order:[^sort]
 
 1. Chrome-pinned tabs are left in place, and the layout starts after them.
-2. Groups come next, ordered **by title**. Each group's tabs are sorted with the comparator, with locks placed by `pinAwareSortTabs`.
-3. Ungrouped tabs come last, sorted with the comparator.
-4. A group lock moves its group to the slot `applyGroupPinsToWindow` would drag it to, when that result is settled. `sortTabsInWindow` then runs `applyGroupPinsToWindow` anyway, and it normally finds nothing left to move ([position locks](/features/position-locks.md)).
+2. Groups come next, ordered **by title**, except that a group lock takes its group to its slot (`lockedGroupOrder`, see [position locks](/features/position-locks.md)). Each group's tabs are sorted with the comparator, with locks placed by `pinAwareSortTabs`.
+3. Ungrouped tabs come last, sorted with the comparator. They come after every group, a group locked to the last slot included.
 
 That order is the *target*. `planLayout` turns it into moves by walking the blocks (each group, then the loose tabs) against a local copy of the strip and skipping every block whose tabs already sit at its index in order, so a window that is already sorted costs no `tabs.move` or `tabs.group` call at all. It used to move and regroup every block on every run: 121 calls on a 1000-tab sorted window. Blocks are placed front to back, so every move is leftward. That is the only direction a multi-tab `tabs.move` lands contiguously, because Chrome moves the ids one at a time. A block that does move is still regrouped. A loose tab stranded ahead of the groups (a link opened from a Chrome-pinned tab lands right after the pins) would push every block one slot off, so the planner also costs a variant that first appends such tabs to the end of the window, and keeps whichever plan makes fewer calls.[^sort]
 
@@ -139,7 +138,7 @@ The editor adds a domain (a pasted URL is reduced to its host, and a duplicate d
 - `lib/rules.test.ts`: `pathMatches` (anchoring, `*` never crossing `/`, `**` including none, optional leading slash, trailing slash, literal `?`, length cap), `sortPathOf`, `buildSortRanker`, `rankPositionsOf`, "path tiers across rules".[^rules-test]
 - `lib/tabs/sort.test.ts`: "with sort rules" (first domains in order, path order inside a domain, contiguous blocks, disabled rule, title sort untouched, inside a group, yields to a lock) and "two rules on one registrable domain".[^sort-test]
 - `lib/tabs/sort.test.ts` "sortTabsInWindow call count": an already-sorted window makes no moves or regroups, one out-of-order loose tab or group costs one block, a tab stranded ahead of the groups goes to the tail in one call.[^sort-test]
-- `lib/tabs/sort-endstate.test.ts` replays 160 seeded windows (locks, group locks, sort rules, two windows) and compares the end state with what the sort produced before it skipped no-op moves.[^sort-endstate-test]
+- `lib/tabs/sort-invariants.test.ts` sorts 1000 seeded windows (locks, group locks, sort rules, two windows) twice. The second sort makes no move.[^sort-invariants-test]
 
 # Related
 
@@ -153,7 +152,7 @@ The editor adds a domain (a pasted URL is reduced to its host, and a duplicate d
 [^popup-app]: entrypoints/popup/App.svelte
 [^url]: lib/url.ts
 [^sort-test]: lib/tabs/sort.test.ts
-[^sort-endstate-test]: lib/tabs/sort-endstate.test.ts
+[^sort-invariants-test]: lib/tabs/sort-invariants.test.ts
 [^rules-test]: lib/rules.test.ts
 [^commit-sortrules]: commit 6ddc216
 [^commit-tiers]: commit a539f1a

@@ -1,15 +1,15 @@
 ---
 type: Feature
 title: Position locks
-description: /lock, /unlock, /lockgroup and /unlockgroup hold a tab at a slot in its group or a group at a slot in its window; internally they are still "pins" (lib/pin.ts), re-applied after grouping and sorting and marked with a 📌 title badge.
+description: /lock, /unlock, /lockgroup and /unlockgroup hold a tab at a slot in its group or a group at a slot among its window's groups; internally they are still "pins" (lib/pin.ts), placed by every sort and by the lock commands, and marked with a 📌 title badge.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/pin.ts
 tags: [locks, pins, tab-order, sorting, title-badge]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-17T09:58:09Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-22T04:56:32Z }
 sources:
   - id: pin
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/pin.ts
     title: lib/pin.ts
-    last_modified: 2026-09-17
+    last_modified: 2026-09-22
   - id: lock
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabs/lock.ts
     title: lib/tabs/lock.ts
@@ -17,11 +17,11 @@ sources:
   - id: sort
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabs/sort.ts
     title: lib/tabs/sort.ts
-    last_modified: 2026-09-17
+    last_modified: 2026-09-22
   - id: group
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabs/group.ts
     title: lib/tabs/group.ts
-    last_modified: 2026-08-15
+    last_modified: 2026-09-22
   - id: pins-panel
     resource: https://github.com/samhvw8/TabOrdo/blob/main/components/PinsPanel.svelte
     title: components/PinsPanel.svelte
@@ -61,15 +61,23 @@ sources:
   - id: pin-test
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/pin.test.ts
     title: lib/pin.test.ts
-    last_modified: 2026-09-17
+    last_modified: 2026-09-22
   - id: sort-test
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabs/sort.test.ts
     title: lib/tabs/sort.test.ts
-    last_modified: 2026-09-17
-  - id: sort-endstate-test
-    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabs/sort-endstate.test.ts
-    title: lib/tabs/sort-endstate.test.ts
-    last_modified: 2026-09-17
+    last_modified: 2026-09-22
+  - id: sort-invariants-test
+    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabs/sort-invariants.test.ts
+    title: lib/tabs/sort-invariants.test.ts
+    last_modified: 2026-09-22
+  - id: order
+    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabs/order.ts
+    title: lib/tabs/order.ts (/movegroup)
+    last_modified: 2026-09-22
+  - id: order-test
+    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabs/order.test.ts
+    title: lib/tabs/order.test.ts
+    last_modified: 2026-09-22
   - id: commit-panel
     resource: https://github.com/samhvw8/TabOrdo/commit/82ee4fc033b7f09b57923b60ef44b851530f0598
     title: Add Pins debug panel with drag-reorder, tab tracking, and sort-aware pinning
@@ -116,23 +124,34 @@ Locking at a slot that is already taken shifts every lock at or after it up by o
 
 # Behaviour
 
-**Identity.** A tab lock resolves `tabId` first, then URL, in `getPinForTab`, `unpinTab`, `applyPinsToGroup`, `pinAwareSortTabs` and dedup.[^pin][^sort][^dedup] Tracking `tabId` lets a lock follow a tab through navigation, which is the novel- and manga-reading case.[^commit-panel] The background's pin URL sync rewrites the entry's `url` and `title` when that tab navigates.[^bg-index]
+**Identity.** A tab lock resolves `tabId` first, then URL, in `getPinForTab`, `unpinTab`, `pinAwareSortTabs` (which `applyPinsToGroup` runs) and dedup.[^pin][^dedup] Tracking `tabId` lets a lock follow a tab through navigation, which is the novel- and manga-reading case.[^commit-panel] The background's pin URL sync rewrites the entry's `url` and `title` when that tab navigates.[^bg-index]
 
-**Where positions are re-applied.**
+**Where positions are applied.**
 
 | Path | Tab locks | Group locks |
 |------|-----------|-------------|
-| `sortTabsInWindow` (`/sort`, Sort button, auto-sort, context menu) | `organizeWindow` → `pinAwareSortTabs` | `organizeWindow` lays them in their slots, then `applyGroupPinsToWindow` |
+| `sortTabsInWindow` (`/sort`, Sort button, auto-sort, context menu) | `organizeWindow` → `pinAwareSortTabs` | `organizeWindow` → `lockedGroupOrder` |
 | `sortTabsInGroup` (per-group Sort) | `pinAwareSortTabs` | none |
-| `groupTabsByDomain` (Group, Regroup) | `organizeWindow` for every window | `organizeWindow`, then `applyAllGroupPins` |
+| `groupTabsByDomain` (Group, Regroup) | `organizeWindow` for every window | `organizeWindow` for every window |
 | `/lock`, `/lockgroup` | `applyPinsToGroup` | `applyGroupPinsToWindow` |
 | Locks panel drag / reopen | `applyPinsToGroup` (drag debounced 500 ms) | none |
 
-Sources: [^sort][^group][^lock][^pins-panel]. Group locks survive Group and Sort because both call the group-lock applier after rearranging.[^commit-grouppins]
+Sources: [^sort][^group][^lock][^pins-panel]. Group locks survive Group and Sort because both lay the window out through `organizeWindow`, which places them. Before 734f183 both lost them.[^commit-grouppins]
 
-`pinAwareSortTabs` puts locked tabs at their slots and flows sorted unlocked tabs around them. A slot past the end of the group is appended.[^sort]
+**Tab placement.** `pinAwareSortTabs` puts locked tabs at their slots and flows the unlocked tabs around them in comparator order. A slot past the end of the group is appended. When two tab locks ask for one slot, the tab with the higher id holds it and the other goes to the end of the group. The tie used to follow strip order, so the pair traded places on every sort.[^pin] `applyPinsToGroup` runs the same placement with the tabs' current order as the comparator and lays it down in one `tabs.move` plus a regroup. It used to place one lock at a time with a query after each, and each move could shift a lock placed before it off its slot.[^pin][^pin-test]
 
-**Group locks during a sort.** `organizeWindow` used to lay groups down alphabetically and leave `applyGroupPinsToWindow` to drag each locked group back, on every sort, even when the group was already in its slot. With three group locks an already-sorted window made 23 move and group calls and 5 whole-window queries per page load. Now `settleGroupPins` runs the lock pass on a copy of the strip `organizeWindow` is about to produce, with the same slot maths, and `organizeWindow` lays that result down directly, so the real pass that follows finds nothing to move. The end state is the pass's own result, so it is unchanged. `organizeWindow` keeps the old alphabetical layout, and the pass then does what it always did, when the pass would make a move a copy cannot place (see Gotchas), when its result is not one it would leave alone on the next run (two locks clamped to one slot), when a lock's title names two groups in the window, or when the strip is not one Chrome produces.[^sort][^pin] The pass follows its own moves on a local copy and re-queries the window only after a move a copy cannot place; it used to re-query after every lock. `applyAllGroupPins` reads the lock list once for all windows.[^pin][^pin-test] `applyPinsToGroup` re-reads indices after every move, because stale indices put locks 2..n in the wrong place, and it re-groups the tabs at the end.[^pin] A lock beats a [sort priority](/features/sort-priority.md) rule.[^sort-test]
+**Group placement.** `lockedGroupOrder(groups, pins)` is the one rule for where locked groups go. It takes the locked groups out of the order the groups would otherwise have, and puts each back at `min(position, groups - 1)`. The rest keep their order around them.[^pin]
+
+- Locks that ask for one slot take it in turn: the lower position asked for first, then title order, then the order given. Clamping makes this common when there are more locks than groups. A lock that finds its slot taken takes the next free one, and past the last slot they back up leftward.
+- A lock's title matches every group with that title in the window, and those groups sit side by side.
+- A slot counts groups only. A group locked last sits after the other groups and ahead of the loose tabs.
+- The rule maps its own output to itself, so running it on a strip it produced moves nothing.
+
+A sort runs it on the groups in title order and lays the result down as its block order, followed by the loose tabs. `planLayout` skips every block already in place, so a sorted window with group locks makes no calls.[^sort] `/lockgroup` runs it on the groups in strip order and moves only the locked groups. Each goes with `tabGroups.move` to right after the group before it, or right after the Chrome-pinned tabs when it leads, planned on one query of the window. That is where the sort puts it, so the auto-sort after a lock finds nothing to move.[^pin][^sort-invariants-test] `tabGroups.move` keeps a group whole in either direction and reads its index with the group lifted out of the strip. A multi-tab `tabs.move` going right lands scattered, because Chrome places the ids one at a time. `/movegroup N` uses the same call, with the index from `groupStartIndex`, counted the same way.[^order][^order-test]
+
+This replaced a lock pass that ran after every sort and dragged each locked group from its alphabetical slot to its locked one. The pass counted a rightward move's index with the group still in the strip, so a group locked to a slot on its right landed past it. Two locks clamped to one slot traded places on every sort. f9ff08b replayed the pass on a copy to skip its no-op moves while keeping its end state, bugs included. Both bugs are gone, and the pass with them.[^sort][^pin]
+
+A lock beats a [sort priority](/features/sort-priority.md) rule.[^sort-test]
 
 # Title badge
 
@@ -155,21 +174,23 @@ This is the sidebar's "Locks" section. It shows [Sort Priority](/features/sort-p
 # Gotchas
 
 - **A bare `/lock` does not hold the tab where it is.** It uses `position = existingPins.length` (append after the group's existing locks) and then moves the tab there.[^lock] Commit 82ee4fc intended that ("defaults to appending at end of pin list"),[^commit-panel] but the README's tile table says "Hold at current position".[^readme]
-- **A group locked to a slot on its right can land past that slot.** `groupStartIndex` counts the target index with the group still in the strip, while `tabs.move` reads it with the group already lifted out. A rightward move to any slot short of the last therefore overshoots: by a slot for a one-tab group, and in the test stub a larger group can land inside the next one. Chrome moves a multi-tab group one id at a time, so it lands somewhere else again. The last slot is exempt, because that move goes to the very end of the window, past the loose tabs, which is also where a group locked last ends up. Every sort repeats it. The end-state test records this behaviour as it is; nothing fixes it yet.[^pin][^sort-endstate-test]
-- Two locks clamped to the same slot (more locks than groups in the window) trade places on every sort, so the pass moves them each time.[^pin]
+- **`/movegroup $` and a group locked last end up in different places when loose tabs trail the groups.** `/movegroup $` moves the group to the very end of the window, past them. A lock's last slot counts groups only, so the next sort puts the locked group back ahead of them.[^order][^pin]
+- Which of two tab locks on one slot holds it follows the tab ids, and tab ids change across a browser restart. The pair can swap once after one.[^pin]
 - Locks are keyed by group title. Renaming a group orphans its locks, and every group with that title in any window obeys them. A tab outside a titled group cannot be locked ("Group has no title").[^lock][^pin]
 - The lock vocabulary change is incomplete. Status messages say "Pinned at position…" and "Usage: /pin", and the panel's empty states and buttons still say `/pin`, `/pingroup` and "unpin".[^lock][^pins-panel]
 
 # Tests that guard it
 
-- `lib/pin.test.ts`: `groupStartIndex` slot maths, `buildGroupOrder`, `unpinTab` by tabId after the URL moved, `syncPinUrl` strips the badge, `clearPinTabIds`.[^pin-test]
-- `lib/tabs/sort.test.ts` "sortTabsInWindow with position locks" (held slot, sorting around it, holding by tabId after navigation) and "still yields to a position lock".[^sort-test]
-- `lib/tabs/sort.test.ts` "sortTabsInWindow with group locks": a locked group is laid down in its slot and a second sort moves nothing (one lock, two locks, the last slot behind the loose tabs), and two locks clamped to one slot fall back to the old two-step.[^sort-test]
+- `lib/pin.test.ts`: `groupStartIndex` slot maths (counted with the group lifted out), `buildGroupOrder`, `unpinTab` by tabId after the URL moved, `syncPinUrl` strips the badge, `clearPinTabIds`.[^pin-test]
+- `lib/pin.test.ts` "lockedGroupOrder": slots on either side, clamping, the tie-break order, two groups under one title, a shared slot spilling, and the rule mapping its own output to itself.[^pin-test]
+- `lib/pin.test.ts` "applyGroupPinsToWindow": `tabGroups.move` only, planned on one query, rightward and last-slot locks, only the locked group moves, a multi-tab group stays whole, no calls when everything is in place. "applyPinsToGroup": two locks the one-at-a-time version misplaced land in one move, and no move when nothing is out of place.[^pin-test]
+- `lib/tabs/sort.test.ts` "sortTabsInWindow with position locks" (held slot, sorting around it, holding by tabId after navigation, two tab locks on one slot staying put) and "still yields to a position lock".[^sort-test]
+- `lib/tabs/sort.test.ts` "sortTabsInWindow with group locks": one lock, two locks, a lock to the right, the last slot ahead of the loose tabs, and two locks clamped to one slot. Each lands in its slot and a second sort makes no calls.[^sort-test]
+- `lib/tabs/sort-invariants.test.ts`: 1000 seeded windows (tab locks, group locks, sort rules, duplicate titles, two windows). A sort and `/lockgroup`'s pass each put every locked group at its clamped slot, left or right of where it started. Doing either again moves nothing, the pass moves only locked groups and never with `tabs.move`, and after a sort the pass finds nothing to move.[^sort-invariants-test]
+- `lib/tabs/order.test.ts` "moveGroup": a move to a slot on the right lands in it, with one `tabGroups.move`.[^order-test]
 - `lib/pin-cache.test.ts`: cache hits and clones, invalidation from another context, no storage read in `syncPinUrl` for an untracked or unchanged tab, no phantom list after a failed write, and no revert of a sibling context's lock (`pinTab`, `syncPinUrl`, `pinGroup`).[^pin-cache-test]
-- `lib/pin.test.ts` "applyGroupPinsToWindow" (one window query for three leftward moves, a re-query only after an unplaceable move) and "applyAllGroupPins" (one read of the lock list for three windows).[^pin-test]
-- `lib/tabs/sort-endstate.test.ts`: 160 seeded windows with locks and group locks land exactly where they did before the sort laid group locks down itself.[^sort-endstate-test]
 - `lib/tabs/dedup.test.ts` has the position-pin cases; see [dedup](/features/dedup.md).
-- Nothing tests `pinCurrentTab`, `applyPinsToGroup` or `setTitleBadge` directly.
+- Nothing tests `pinCurrentTab`, `pinCurrentGroup` or `setTitleBadge` directly.
 
 # Related
 
@@ -190,7 +211,9 @@ This is the sidebar's "Locks" section. It shows [Sort Priority](/features/sort-p
 [^pin-test]: lib/pin.test.ts
 [^pin-cache-test]: lib/pin-cache.test.ts
 [^sort-test]: lib/tabs/sort.test.ts
-[^sort-endstate-test]: lib/tabs/sort-endstate.test.ts
+[^sort-invariants-test]: lib/tabs/sort-invariants.test.ts
+[^order]: lib/tabs/order.ts
+[^order-test]: lib/tabs/order.test.ts
 [^commit-panel]: commit 82ee4fc
 [^commit-badge]: commit 0225013
 [^commit-shift]: commit e25abd6

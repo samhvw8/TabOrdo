@@ -72,8 +72,6 @@ export async function moveGroup(posStr: string): Promise<string> {
   const groupId = active.groupId;
   const tabs = await chrome.tabs.query({ currentWindow: true });
   const pinnedCount = tabs.filter((t) => t.pinned).length;
-  const groupTabs = tabs.filter((t) => t.groupId === groupId).sort((a, b) => a.index - b.index);
-  const groupTabIds = groupTabs.map((t) => t.id!);
 
   let targetIndex: number;
   if (position === "first") targetIndex = pinnedCount;
@@ -84,7 +82,8 @@ export async function moveGroup(posStr: string): Promise<string> {
     targetIndex = groupStartIndex(tabs, groupId, Math.min(position, groups.length) - 1, pinnedCount);
   }
 
-  await chrome.tabs.move(groupTabIds, { index: targetIndex });
-  await chrome.tabs.group({ tabIds: groupTabIds, groupId });
+  // tabGroups.move keeps the group whole in either direction and reads the index with the group
+  // lifted out, as groupStartIndex counts it. A multi-tab tabs.move going right lands scattered.
+  await chrome.tabGroups.move(groupId, { index: targetIndex });
   return `Moved group to position ${position === "first" ? "first" : position === "last" ? "last" : position}`;
 }

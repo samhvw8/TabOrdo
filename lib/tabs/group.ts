@@ -2,7 +2,6 @@
 
 import { getConfig, isIgnoredGroupName, isIgnoredUrl, matchDomainToRule, type IgnoreRule } from "../rules.ts";
 import { getDomainMapper, getFullHostname, getGroupNameMapper, hashCode, type DomainMapper } from "../url.ts";
-import { applyAllGroupPins } from "../pin.ts";
 import { GROUP_COLORS } from "./types.ts";
 import { organizeWindow } from "./sort.ts";
 
@@ -131,7 +130,6 @@ export async function groupTabsByDomain(
     await organizeWindow(win.id!);
   }
   await collapseAllExceptActive();
-  await applyAllGroupPins();
 }
 
 export function pickMajorityWindow(tabs: chrome.tabs.Tab[]): number {
