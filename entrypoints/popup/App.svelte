@@ -615,8 +615,11 @@
       else if (item.url) { await chrome.tabs.create({ url: item.url }); window.close(); }
     } catch (e) {
       // A row can outlive its tab (the side panel stays open while tabs close elsewhere).
-      // Unhandled, Enter looked like it did nothing at all.
+      // Unhandled, Enter looked like it did nothing at all. The reload drops the dead row;
+      // loadTabs re-ranks an empty query itself, so only a typed one is re-ranked here.
       flashStatus(`Error: ${e instanceof Error ? e.message : "Could not open"}`, 5000);
+      await loadTabs().catch(() => {});
+      if (query) updateResults();
     }
   }
 
