@@ -86,7 +86,7 @@ function scheduleReconcile(state: LockSyncState): void {
 }
 
 /** Match every lock to the open tabs, save what changed, and badge the tabs newly matched. */
-export async function reconcileLocks(): Promise<void> {
+async function reconcileLocks(): Promise<void> {
   const [tabs, groups] = await Promise.all([chrome.tabs.query({}), chrome.tabGroups.query({})]);
   const pins = await getPinnedTabs(true);
   const { changed, adopted } = reconcilePins(pins, tabs, groups);

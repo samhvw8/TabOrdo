@@ -59,7 +59,7 @@ export function noteTabCreated(state: AutomationState, tab: chrome.tabs.Tab): vo
 
 // --- Auto-ungroup ---------------------------------------------------------------------------
 
-export function scheduleAutoUngroup(state: AutomationState, windowId: number, delayMs = UNGROUP_DEBOUNCE_MS): void {
+function scheduleAutoUngroup(state: AutomationState, windowId: number, delayMs = UNGROUP_DEBOUNCE_MS): void {
   const existing = state.ungroupTimers.get(windowId);
   if (existing) clearTimeout(existing);
   state.ungroupTimers.set(windowId, setTimeout(() => {
@@ -227,7 +227,7 @@ async function tryJoinGroup(selfWrites: SelfWriteLedger, tabId: number, groupId:
 }
 
 /** The rule path: join the window's group named after the rule, or make it, one tab or not. */
-export async function groupByRule(selfWrites: SelfWriteLedger, tabId: number, windowId: number, rule: GroupRule): Promise<void> {
+async function groupByRule(selfWrites: SelfWriteLedger, tabId: number, windowId: number, rule: GroupRule): Promise<void> {
   const existingGroups = await chrome.tabGroups.query({ windowId });
   const match = existingGroups.find((g) => g.title === rule.name && !isSharedGroup(g));
   if (match && (await tryJoinGroup(selfWrites, tabId, match.id, rule.name))) return;
@@ -240,7 +240,7 @@ export async function groupByRule(selfWrites: SelfWriteLedger, tabId: number, wi
 }
 
 /** The domain path: join the site's group, or make one only with another loose tab of the site. */
-export async function groupByDomain(selfWrites: SelfWriteLedger, tabId: number, url: string, windowId: number, config: RulesConfig): Promise<void> {
+async function groupByDomain(selfWrites: SelfWriteLedger, tabId: number, url: string, windowId: number, config: RulesConfig): Promise<void> {
   const [domainOf, nameOf, windowGroups] = await Promise.all([
     getDomainMapper(),
     getGroupNameMapper(),
@@ -273,7 +273,7 @@ export async function groupByDomain(selfWrites: SelfWriteLedger, tabId: number, 
  * An ignored URL only opts out of *grouping*: the auto-ungroup and auto-sort that follow in
  * onTabNavigated still run for it, as they do for a URL with no hostname.
  */
-export async function autoGroupTab(selfWrites: SelfWriteLedger, tabId: number, url: string, windowId: number, config: RulesConfig): Promise<void> {
+async function autoGroupTab(selfWrites: SelfWriteLedger, tabId: number, url: string, windowId: number, config: RulesConfig): Promise<void> {
   const hostname = getFullHostname(url);
   if (!hostname || url.startsWith("chrome://") || isIgnoredUrl(url, config.ignorePatterns)) return;
   if (config.useRules) {

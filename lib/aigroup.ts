@@ -10,7 +10,7 @@ import type { SelfWriteLedger } from "./selfwrite.ts";
 
 // How often a live AI run re-ups its bulk-lock lease. Far inside AI_LEASE_MS, so suppression
 // can't lapse between ticks.
-export const AI_LEASE_RENEW_MS = 60 * 1000;
+const AI_LEASE_RENEW_MS = 60 * 1000;
 
 /** `selfWrites` is the worker's group ledger: the groups this makes are marked on it. */
 export async function runAIGroup(selfWrites: SelfWriteLedger): Promise<{ ok: boolean; message: string }> {
