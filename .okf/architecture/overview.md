@@ -3,7 +3,7 @@ type: Architecture
 title: Architecture overview
 description: How TabOrdo's MV3 entrypoints, lib modules, command dispatch and storage areas fit together, and which realm owns what.
 tags: [architecture, mv3, storage, realms]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-22T06:20:00Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-22T21:00:00Z }
 sources:
   - id: wxt-config
     resource: https://github.com/samhvw8/TabOrdo/blob/main/wxt.config.ts
@@ -63,7 +63,7 @@ sources:
     last_modified: 2026-09-17
   - id: pin-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/pin.ts
-    title: Lock lists and their read cache
+    title: Lock lists
     last_modified: 2026-09-17
   - id: group-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabs/group.ts
@@ -125,9 +125,9 @@ Pins are the exception: they sit in `local` with a `tabId`, so the worker's `run
 
 # Realms share storage, not memory
 
-The popup and the side panel are the same component in two realms. Each has its own module instances (write chains, the config and lock-list caches) over one shared storage area.[^undo-ts][^pin-ts] So:
+The popup and the side panel are the same component in two realms. Each has its own module instances (write chains, queues) over one shared storage area.[^undo-ts][^pin-ts] So:
 
-- Any module-level cache of shared state must re-read before it mutates. The undo stack keeps no copy and lists storage each time (see [undo stack](/architecture/undo-stack.md)), and every lock or config setter reads with `fresh` past its cache ([position locks](/features/position-locks.md), [grouping rules](/features/grouping-rules.md)).[^undo-ts][^pin-ts]
+- Shared state is read from storage, not kept in module memory. The undo stack lists storage each time (see [undo stack](/architecture/undo-stack.md)), and so do the config and lock-list readers ([position locks](/features/position-locks.md), [grouping rules](/features/grouping-rules.md)): a read costs about 0.15 ms, and a copy held in one realm goes stale when another writes.[^undo-ts][^pin-ts]
 - `chrome.storage.session` has no compare-and-swap. A lock cannot be a refcount or a shared map, which is why the [bulk lock](/architecture/bulk-lock.md) uses one key per owner.
 - The component subscribes to `chrome.storage.onChanged` for `rulesConfig`, the action log, AI progress and the undo stack's entry keys (`touchesUndoStack`), so a side panel left open stays current.[^popup-app][^undo-ts]
 - The background also writes the undo stack: the context-menu dedup calls `closeTabs`, which snapshots, and the menu's Group and Sort snapshot through `lib/arrange.ts`.[^menus-ts][^arrange-ts]

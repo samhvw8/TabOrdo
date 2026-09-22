@@ -57,8 +57,7 @@ export async function noticeTab(state: LockSyncState, tab: chrome.tabs.Tab): Pro
   }
 }
 
-/** Schedule a reconcile when a lock with no tab has this URL. The lock list is cached, so the
- *  common case, no lock waiting, costs no storage read. */
+/** Schedule a reconcile when a lock with no tab has this URL. */
 async function noticeUrl(state: LockSyncState, url: string | undefined): Promise<void> {
   if (!url) return;
   const pins = await getPinnedTabs();
@@ -88,7 +87,7 @@ function scheduleReconcile(state: LockSyncState): void {
 /** Match every lock to the open tabs, save what changed, and badge the tabs newly matched. */
 async function reconcileLocks(): Promise<void> {
   const [tabs, groups] = await Promise.all([chrome.tabs.query({}), chrome.tabGroups.query({})]);
-  const pins = await getPinnedTabs(true);
+  const pins = await getPinnedTabs();
   const { changed, adopted } = reconcilePins(pins, tabs, groups);
   if (changed) await savePinnedTabs(pins);
   // A restored tab that has not loaded yet refuses the injection. It is badged when it loads,

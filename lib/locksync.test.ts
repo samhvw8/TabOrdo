@@ -29,7 +29,7 @@ describe("syncLockedTab", () => {
   it("carries a lock along when its tab navigates", async () => {
     stub.localData.pinnedTabs = [lock({ tabId: 7 })];
     await syncLockedTab(state, 7, { url: "https://a.com/2" }, asTab(tab(7, "https://a.com/2", 5, "Chapter 2")));
-    expect(await getPinnedTabs(true)).toMatchObject([{ tabId: 7, url: "https://a.com/2", title: "Chapter 2" }]);
+    expect(await getPinnedTabs()).toMatchObject([{ tabId: 7, url: "https://a.com/2", title: "Chapter 2" }]);
   });
 
   // A full navigation takes the injected badge down with the old page.
@@ -43,7 +43,7 @@ describe("syncLockedTab", () => {
     stub.localData.pinnedTabs = [lock({ tabId: 7 })];
     await syncLockedTab(state, 8, { url: "https://b.com", status: "complete" }, asTab(tab(8, "https://b.com")));
     expect(stub.scriptedIds).toEqual([]);
-    expect(await getPinnedTabs(true)).toMatchObject([{ url: "https://a.com/1" }]);
+    expect(await getPinnedTabs()).toMatchObject([{ url: "https://a.com/1" }]);
   });
 });
 
@@ -63,7 +63,7 @@ describe("after a browser restart", () => {
   it("matches each lock to its restored tab and badges it", async () => {
     await resetLocksAfterRestart(state);
     await vi.advanceTimersByTimeAsync(RECONCILE_SETTLE_MS);
-    expect((await getPinnedTabs(true))[0].tabId).toBe(12);
+    expect((await getPinnedTabs())[0].tabId).toBe(12);
     expect(stub.scriptedIds).toEqual([12]);
   });
 
@@ -71,7 +71,7 @@ describe("after a browser restart", () => {
     await resetLocksAfterRestart(state);
     await vi.advanceTimersByTimeAsync(RECONCILE_SETTLE_MS);
     await syncLockedTab(state, 12, { url: "https://a.com/2" }, asTab(tab(12, "https://a.com/2", 5)));
-    expect((await getPinnedTabs(true))[0]).toMatchObject({ tabId: 12, url: "https://a.com/2" });
+    expect((await getPinnedTabs())[0]).toMatchObject({ tabId: 12, url: "https://a.com/2" });
   });
 
   // The reset and the sync race: both are listeners Chrome does not await. A sync that read
@@ -81,7 +81,7 @@ describe("after a browser restart", () => {
     const sync = syncLockedTab(state, 7, { url: "https://unrelated.com/next" }, asTab(tab(7, "https://unrelated.com/next")));
     await Promise.all([reset, sync]);
     await vi.advanceTimersByTimeAsync(RECONCILE_SETTLE_MS);
-    expect((await getPinnedTabs(true))[0]).toMatchObject({ tabId: 12, url: "https://a.com/1" });
+    expect((await getPinnedTabs())[0]).toMatchObject({ tabId: 12, url: "https://a.com/1" });
   });
 
   // Session restore can create tabs after onStartup has fired and the first pass has run.
@@ -90,28 +90,28 @@ describe("after a browser restart", () => {
     stub.openTabs = [tab(7, "https://unrelated.com", -1)];
     await resetLocksAfterRestart(state);
     await vi.advanceTimersByTimeAsync(RECONCILE_SETTLE_MS);
-    expect((await getPinnedTabs(true))[0].tabId).toBeUndefined();
+    expect((await getPinnedTabs())[0].tabId).toBeUndefined();
 
     stub.openTabs.push(late);
     await noticeTab(state, asTab(late));
     await vi.advanceTimersByTimeAsync(RECONCILE_SETTLE_MS);
-    expect((await getPinnedTabs(true))[0].tabId).toBe(12);
+    expect((await getPinnedTabs())[0].tabId).toBe(12);
   });
 
   it("matches a lock with no tab when a tab finishes loading its URL", async () => {
     stub.localData.pinnedTabs = [lock({})];
     await syncLockedTab(state, 12, { status: "complete" }, asTab(stub.openTabs[1]));
     await vi.advanceTimersByTimeAsync(RECONCILE_SETTLE_MS);
-    expect((await getPinnedTabs(true))[0].tabId).toBe(12);
+    expect((await getPinnedTabs())[0].tabId).toBe(12);
   });
 
   it("waits for a burst of new tabs to settle, then matches in one pass", async () => {
     stub.localData.pinnedTabs = [lock({})];
     await noticeTab(state, asTab(stub.openTabs[1]));
     await vi.advanceTimersByTimeAsync(RECONCILE_SETTLE_MS - 1);
-    expect((await getPinnedTabs(true))[0].tabId).toBeUndefined();
+    expect((await getPinnedTabs())[0].tabId).toBeUndefined();
     await vi.advanceTimersByTimeAsync(1);
-    expect((await getPinnedTabs(true))[0].tabId).toBe(12);
+    expect((await getPinnedTabs())[0].tabId).toBe(12);
   });
 
   it("does not look for a tab when no lock is waiting for its URL", async () => {

@@ -4,7 +4,7 @@ title: Chrome API stub
 description: lib/testing/chrome-stub.ts is the repo's executable model of Chrome tab, group, window and storage semantics for vitest, with failure-injection knobs; its fidelity decides what the tests can prove.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/testing/chrome-stub.ts
 tags: [testing, vitest, chrome-api]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-22T14:00:00Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-22T21:00:00Z }
 sources:
   - id: stub
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/testing/chrome-stub.ts
@@ -26,9 +26,9 @@ sources:
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/undo.ts
     title: lib/undo.ts
     last_modified: 2026-09-17
-  - id: rules-cache-test
-    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/rules-cache.test.ts
-    title: lib/rules-cache.test.ts
+  - id: rules-writes-test
+    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/rules-writes.test.ts
+    title: lib/rules-writes.test.ts
     last_modified: 2026-07-27
   - id: workspace-test
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/workspace.test.ts
@@ -88,7 +88,7 @@ A stub tab carries `audible`, `discarded` and `frozen` when a test sets them, fo
 # How tests use it
 
 - Call `stub = installChromeStub()` in `beforeEach`. Each install starts clean, and so does the undo stack, which lives only in the stub's session area.[^stub][^undo-test] Module-level state in the code under test is **not** reset.
-- A module that touches `chrome` at import time needs the stub first. `rules.ts` registers `storage.onChanged` at module scope, so `rules-cache.test.ts` installs, calls `vi.resetModules()`, and re-imports per test.[^rules-cache-test] `pin.ts` does the same for its lock-list cache, and `pin-cache.test.ts` follows the same pattern. Every other test imports these modules before any stub exists, so their caches stay unarmed there and a direct write to `stub.localData` is always read back.
+- No lib module touches `chrome` at import time, so tests import normally and a direct write to `stub.localData` is always read back. Tests that model another context's write do exactly that, as `rules-writes.test.ts` does.[^rules-writes-test]
 - APIs the stub lacks (`sessions`, `readingList`, `sidePanel`) are assigned onto `globalThis.chrome` ad hoc in the test. The on-device model is a `LanguageModel` global stubbed with `vi.stubGlobal`.
 - The service worker's listener bodies live in `lib` and take their state as a parameter, so a test calls them with the event's arguments and a fresh `createAutomationState()` or `createLockSyncState()`. To model an echo, a test registers the lib function on `chrome.tabs.onUpdated`.[^automation-test]
 - `lib/workspace.test.ts` and `lib/sessions.test.ts` build their own `chrome` fake instead. The workspace fake's `remove` always succeeds.[^workspace-test]
@@ -118,7 +118,7 @@ Add fidelity when a test can pass for the wrong reason, and write the comment th
 [^vitest-config]: vitest.config.ts
 [^undo-test]: lib/undo.test.ts
 [^undo-ts]: lib/undo.ts
-[^rules-cache-test]: lib/rules-cache.test.ts
+[^rules-writes-test]: lib/rules-writes.test.ts
 [^workspace-test]: lib/workspace.test.ts
 [^commit-3431468]: Commit 3431468
 [^commit-acffcde]: Commit acffcde

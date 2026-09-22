@@ -91,22 +91,9 @@ function normalizeSortRules(raw: unknown): SortRule[] {
   }).filter((x): x is SortRule => x !== null);
 }
 
-// The service worker wakes for every tab event and several listeners each need the config,
-// so an uncached read costs 3+ storage round-trips per keystroke-speed event. The cache is
-// only armed once we've subscribed to invalidations — a context without storage.onChanged
-// (e.g. the test stub) keeps reading straight through.
-let cachedConfig: RulesConfig | null = null;
-let cacheArmed = false;
-
-try {
-  chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === "local" && changes[CONFIG_KEY]) cachedConfig = null;
-  });
-  cacheArmed = true;
-} catch {}
-
-export async function getConfig(fresh = false): Promise<RulesConfig> {
-  if (!fresh && cacheArmed && cachedConfig) return structuredClone(cachedConfig);
+// Read from storage every time: a read costs about 0.15 ms, and the popup, the side panel and
+// the worker all write this key, so a copy kept in any one of them can go stale.
+export async function getConfig(): Promise<RulesConfig> {
   const data = await chrome.storage.local.get(CONFIG_KEY);
   if (data[CONFIG_KEY]) {
     const stored = data[CONFIG_KEY];
@@ -128,27 +115,16 @@ export async function getConfig(fresh = false): Promise<RulesConfig> {
       ignoreGroupNames: normalizeIgnoreRules(stored.ignoreGroupNames),
       sortRules: normalizeSortRules(stored.sortRules),
     };
-    cachedConfig = normalized;
-    return structuredClone(normalized);
+    return normalized;
   }
   const config: RulesConfig = { rules: [], autoGroup: false, autoUngroup: false, useRules: false, autoSort: false, autoPinFollow: false, autoDiscard: false, switchToExisting: false, useAI: false, ignorePatterns: [], ignoreGroupNames: [], sortRules: [] };
   await saveConfig(config);
-  return structuredClone(config);
+  return config;
 }
 
 async function saveConfig(config: RulesConfig): Promise<void> {
-  const plain = JSON.parse(JSON.stringify(config));
-  // Prime the cache only once the write is durable. Priming first meant a rejected set()
-  // (quota, or "Extension context invalidated") left a config that was never persisted and
-  // that no storage.onChanged would ever invalidate — the next writer would then read that
-  // phantom and launder it into storage.
-  try {
-    await chrome.storage.local.set({ [CONFIG_KEY]: plain });
-    cachedConfig = plain;
-  } catch (e) {
-    cachedConfig = null;
-    throw e;
-  }
+  // Plain data: the panels hand in Svelte state, and storage cannot clone a proxy.
+  await chrome.storage.local.set({ [CONFIG_KEY]: JSON.parse(JSON.stringify(config)) });
 }
 
 // Every write is a read-modify-write of one shared object. Serializing them keeps two
@@ -164,11 +140,10 @@ export async function updateConfig(
   change: Partial<RulesConfig> | ((config: RulesConfig) => void)
 ): Promise<void> {
   const run = writeChain.then(async () => {
-    // Read straight from storage, never the cache. writeChain only orders writers inside
-    // one context, and popup + side panel are the same component in two contexts — a warm
-    // cache here would let one of them mutate a copy taken before the other's write and
-    // silently revert it. Toggles are rare and user-initiated, so the extra read is free.
-    const config = await getConfig(true);
+    // writeChain only orders writers inside one context. The popup and the side panel are the
+    // same component in two, so the read inside the chain is what keeps one from reverting a
+    // write the other has just made.
+    const config = await getConfig();
     if (typeof change === "function") change(config);
     else Object.assign(config, change);
     await saveConfig(config);

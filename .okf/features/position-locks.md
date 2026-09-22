@@ -4,7 +4,7 @@ title: Position locks
 description: /lock, /unlock, /lockgroup and /unlockgroup hold a tab at a slot in its group or a group at a slot among its window's groups; internally they are still "pins" (lib/pin.ts), placed by every sort and by the lock commands, and marked with a 📌 title badge.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/pin.ts
 tags: [locks, pins, tab-order, sorting, title-badge]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-22T14:00:00Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-22T21:00:00Z }
 sources:
   - id: pin
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/pin.ts
@@ -26,9 +26,9 @@ sources:
     resource: https://github.com/samhvw8/TabOrdo/blob/main/components/PinsPanel.svelte
     title: components/PinsPanel.svelte
     last_modified: 2026-09-22
-  - id: pin-cache-test
-    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/pin-cache.test.ts
-    title: lib/pin-cache.test.ts
+  - id: pin-writes-test
+    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/pin-writes.test.ts
+    title: lib/pin-writes.test.ts
     last_modified: 2026-09-17
   - id: commands
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/commands.ts
@@ -128,7 +128,7 @@ The aliases are hidden from the browse list but still resolve.[^commands][^actio
 
 Locking at a slot that is already taken shifts every lock at or after it up by one, so the new lock wins the slot.[^pin][^commit-shift] Re-locking an existing entry only updates its position.
 
-**Read cache.** `getPinnedTabs` and `getPinnedGroups` serve both lists from memory, because the service worker reads them on its hottest paths: the pin URL sync on every url, title and status event of every tab, and `organizeWindow` on every tab that finishes loading. The cache follows the same rules as the [rules config cache](/features/grouping-rules.md). It is armed only once `storage.onChanged` is subscribed, dropped by any write to its key from any context, primed after a `set()` only once the write has landed, and handed out as clones.[^pin] Every read-modify-write (`pinTab`, `unpinTab`, `reorderPins`, `clearPinTabIds`, `pinGroup`, `unpinGroup`, the write branch of `syncPinUrl`, the worker's restart reconcile, and the Locks panel's load) passes `fresh` and reads storage. Each realm holds its own cache, so a write built on a copy whose invalidation had not arrived yet would revert another context's change.[^pin][^pins-panel][^pin-cache-test] `syncPinUrl` answers "not a lock" and "lock unchanged" from a warm cache with no storage read, so a lock made elsewhere in the moment before its `onChanged` arrives misses one sync event, and the tab's next event catches up.[^pin]
+**Reads.** `getPinnedTabs` and `getPinnedGroups` read storage every time, like the [rules config](/features/grouping-rules.md). A read costs about 0.15–0.2 ms in the worker, and the worker, the popup and the side panel all write both lists, so every read-modify-write sees the other contexts' latest writes.[^pin][^pin-writes-test] `syncPinUrl`, which runs on every url, title and status event of every tab, pays one read per event and writes only when a tracked lock's url or title changed.[^pin] A per-context read cache used to answer those events from memory; it needed a fresh-read rule on every write path and was removed for costing more to keep right than the reads it saved.
 
 # Behaviour
 
@@ -209,7 +209,7 @@ This is the sidebar's "Locks" section. It shows [Sort Priority](/features/sort-p
 - `lib/tabs/sort.test.ts` "sortTabsInWindow with group locks": one lock, two locks, a lock to the right, the last slot ahead of the loose tabs, and two locks clamped to one slot. Each lands in its slot and a second sort makes no calls.[^sort-test]
 - `lib/tabs/sort-invariants.test.ts`: 1000 seeded windows (tab locks, group locks, sort rules, duplicate titles, two windows). A sort and `/lockgroup`'s pass each put every locked group at its clamped slot, left or right of where it started. Doing either again moves nothing, the pass moves only locked groups and never with `tabs.move`, and after a sort the pass finds nothing to move.[^sort-invariants-test]
 - `lib/tabs/order.test.ts` "moveGroup": a move to a slot on the right lands in it, with one `tabGroups.move`.[^order-test]
-- `lib/pin-cache.test.ts`: cache hits and clones, invalidation from another context, no storage read in `syncPinUrl` for an untracked or unchanged tab, no phantom list after a failed write, and no revert of a sibling context's lock (`pinTab`, `syncPinUrl`, `pinGroup`).[^pin-cache-test]
+- `lib/pin-writes.test.ts`: `syncPinUrl` follows a navigated lock and writes nothing for an untracked or unchanged tab, no failed write laundered into the next one, and no revert of another context's lock (`pinTab`, `syncPinUrl`, `pinGroup`).[^pin-writes-test]
 - `lib/tabs/dedup.test.ts` has the position-pin cases; see [dedup](/features/dedup.md).
 - Nothing tests `pinCurrentTab`, `pinCurrentGroup` or `setTitleBadge` directly.
 
@@ -232,7 +232,7 @@ This is the sidebar's "Locks" section. It shows [Sort Priority](/features/sort-p
 [^readme]: README.md
 [^changelog]: CHANGELOG.md
 [^pin-test]: lib/pin.test.ts
-[^pin-cache-test]: lib/pin-cache.test.ts
+[^pin-writes-test]: lib/pin-writes.test.ts
 [^sort-test]: lib/tabs/sort.test.ts
 [^sort-invariants-test]: lib/tabs/sort-invariants.test.ts
 [^order]: lib/tabs/order.ts

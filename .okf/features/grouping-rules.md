@@ -1,10 +1,10 @@
 ---
 type: Feature
 title: Grouping rules and ignore lists
-description: How the shared rulesConfig is stored, cached and written; how group rules and ignore patterns match hostnames and group names without backtracking; and the Rules editor that edits them.
+description: How the shared rulesConfig is stored and written; how group rules and ignore patterns match hostnames and group names without backtracking; and the Rules editor that edits them.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/rules.ts
 tags: [rules, config, ignore-lists, pattern-matching, storage]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-22T18:00:00Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-22T21:00:00Z }
 sources:
   - id: rules
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/rules.ts
@@ -14,9 +14,9 @@ sources:
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/rules.test.ts
     title: lib/rules.test.ts
     last_modified: 2026-08-05
-  - id: rules-cache-test
-    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/rules-cache.test.ts
-    title: lib/rules-cache.test.ts
+  - id: rules-writes-test
+    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/rules-writes.test.ts
+    title: lib/rules-writes.test.ts
     last_modified: 2026-07-27
   - id: rules-editor
     resource: https://github.com/samhvw8/TabOrdo/blob/main/components/RulesEditor.svelte
@@ -74,9 +74,8 @@ On the very first read, `getConfig()` writes the all-false default. Normalisatio
 
 # Invariants
 
-- **The read cache is armed only once `storage.onChanged` is subscribed.** A cached read returns a `structuredClone`, and any write to `rulesConfig` from any context clears the cache. The cache exists because the worker wakes for every tab event and several listeners each need the config.[^rules]
-- **The cache is primed only after a successful `set()`.** Priming it first left a config that was never saved cached, and the next writer saved that phantom to storage.[^rules][^rules-cache-test]
-- **Every write goes through `updateConfig`**, a per-context promise chain that does read, change, then save, so two quick toggles in one context cannot revert each other. It takes a patch of fields (`updateConfig({ autoSort: true })`), or a function for an edit that depends on the stored value (`mergeRules`, adding a rule). Its read uses `getConfig(true)` and bypasses the cache: the popup and side panel are the same component in two contexts, and a warm cache would revert the sibling's write.[^rules]
+- **`getConfig()` reads storage every time.** A read costs about 0.15 ms in the worker (measured in Chrome for Testing 153), and the popup, the side panel and the worker all write `rulesConfig`, so a copy held in any one of them can go stale. A read cache used to sit here, with invalidation on `storage.onChanged` and a fresh-read rule on every write path; it shipped two stale-config bugs to save well under a millisecond per tab event, and was removed.[^rules][^rules-writes-test]
+- **Every write goes through `updateConfig`**, a per-context promise chain that does read, change, then save, so two quick toggles in one context cannot revert each other. It takes a patch of fields (`updateConfig({ autoSort: true })`), or a function for an edit that depends on the stored value (`mergeRules`, adding a rule). Its read happens inside the chain, so a write from the other surface that has just landed is not reverted: the popup and side panel are the same component in two contexts.[^rules]
 - **Readers call `getConfig()` and take the fields they need.** There are no per-field getters or setters, except `getSortRules` and `setSortRules`, which the sort and the Pins panel use.[^rules]
 
 # Matching
@@ -114,7 +113,7 @@ This is the sidebar's Rules section. Its auto-group switch shares the dashboard'
 # Tests that guard it
 
 - `lib/rules.test.ts`: `domainMatches`, `ruleMatches`, the nested-quantifier guard, the pattern length cap, `matchDomainToRule` order and shadowing, `globMatches` "stays fast on the pattern that used to hang", literal `?`.[^rules-test]
-- `lib/rules-cache.test.ts`: cache hit, invalidation from another context, no phantom after a failed write, no revert of a sibling's toggle, serialised toggles.[^rules-cache-test]
+- `lib/rules-writes.test.ts`: no failed write laundered into the next one, no revert of another context's toggle, serialised toggles.[^rules-writes-test]
 - `lib/tabs/group.test.ts` "ignore lists": manual grouping and ungrouping honour both lists.[^group-test]
 
 # Related
@@ -123,7 +122,7 @@ This is the sidebar's Rules section. Its auto-group switch shares the dashboard'
 
 [^rules]: lib/rules.ts
 [^rules-test]: lib/rules.test.ts
-[^rules-cache-test]: lib/rules-cache.test.ts
+[^rules-writes-test]: lib/rules-writes.test.ts
 [^rules-editor]: components/RulesEditor.svelte
 [^popup-app]: entrypoints/popup/App.svelte
 [^settings-panel]: components/SettingsPanel.svelte

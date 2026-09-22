@@ -10,31 +10,8 @@ export interface PinnedTabEntry {
 const STORAGE_KEY = "pinnedTabs";
 const GROUP_STORAGE_KEY = "pinnedGroups";
 
-// Both lock lists sit on the service worker's hottest paths: syncPinUrl runs on every url, title
-// and status event of every tab, and organizeWindow on every tab that finishes loading — each
-// one a storage round-trip for a list that almost never changes. Same cache as getConfig in
-// rules.ts, with the same rules, for the same bugs:
-//  - armed only once storage.onChanged is subscribed, so a context without it (the test stub
-//    at import time) keeps reading straight through;
-//  - dropped by any change to its key, from any context;
-//  - primed by a read, and by a write only once the write has landed — a rejected set must not
-//    leave behind a list that was never stored and that no onChanged will ever invalidate;
-//  - handed out as copies, because callers edit what they get.
-// Read-modify-write paths bypass it (`fresh`). The worker, the popup and the side panel each
-// hold their own cache, and a write built on a copy whose invalidation had not arrived yet
-// would silently revert the other context's change.
-let cachedPins: PinnedTabEntry[] | null = null;
-let cachedGroupPins: PinnedGroupEntry[] | null = null;
-let cacheArmed = false;
-
-try {
-  chrome.storage.onChanged.addListener((changes, area) => {
-    if (area !== "local") return;
-    if (changes[STORAGE_KEY]) cachedPins = null;
-    if (changes[GROUP_STORAGE_KEY]) cachedGroupPins = null;
-  });
-  cacheArmed = true;
-} catch {}
+// Both lock lists are read from storage every time, as the config is (see getConfig): a read
+// costs about 0.15 ms, and the worker, the popup and the side panel all write them.
 
 /** Prefix the injected title badge adds (see lib/tabs/lock.ts). Lives here so the sync paths
  *  can strip it before storing a title — otherwise the onUpdated echo of applying the badge
@@ -45,28 +22,18 @@ export function stripPinBadge(title?: string): string | undefined {
   return title?.startsWith(PIN_BADGE) ? title.slice(PIN_BADGE.length) : title;
 }
 
-/** Pass `fresh` when the result feeds a write — see the cache comment above. */
-export async function getPinnedTabs(fresh = false): Promise<PinnedTabEntry[]> {
-  if (!fresh && cacheArmed && cachedPins) return structuredClone(cachedPins);
+export async function getPinnedTabs(): Promise<PinnedTabEntry[]> {
   const data = await chrome.storage.local.get(STORAGE_KEY);
-  const pins: PinnedTabEntry[] = Array.isArray(data[STORAGE_KEY]) ? data[STORAGE_KEY] : [];
-  cachedPins = pins;
-  return structuredClone(pins);
+  return Array.isArray(data[STORAGE_KEY]) ? data[STORAGE_KEY] : [];
 }
 
 export async function savePinnedTabs(pins: PinnedTabEntry[]): Promise<void> {
-  const plain = JSON.parse(JSON.stringify(pins));
-  try {
-    await chrome.storage.local.set({ [STORAGE_KEY]: plain });
-    cachedPins = plain;
-  } catch (e) {
-    cachedPins = null;
-    throw e;
-  }
+  // Plain data: the Locks panel hands in Svelte state, and storage cannot clone a proxy.
+  await chrome.storage.local.set({ [STORAGE_KEY]: JSON.parse(JSON.stringify(pins)) });
 }
 
 export async function pinTab(url: string, groupName: string, position: number, title?: string, tabId?: number): Promise<PinnedTabEntry> {
-  const pins = await getPinnedTabs(true);
+  const pins = await getPinnedTabs();
   const existing = pins.find((p) =>
     p.groupName === groupName && (p.url === url || (tabId && p.tabId === tabId))
   );
@@ -93,7 +60,7 @@ export async function pinTab(url: string, groupName: string, position: number, t
  * this failed to find the entry and reported "Tab was not pinned".
  */
 export async function unpinTab(url: string, groupName: string, tabId?: number): Promise<boolean> {
-  const pins = await getPinnedTabs(true);
+  const pins = await getPinnedTabs();
   let idx = tabId
     ? pins.findIndex((p) => p.tabId === tabId && p.groupName === groupName)
     : -1;
@@ -105,7 +72,7 @@ export async function unpinTab(url: string, groupName: string, tabId?: number): 
 }
 
 export async function reorderPins(groupName: string, orderedUrls: string[]): Promise<void> {
-  const pins = await getPinnedTabs(true);
+  const pins = await getPinnedTabs();
   for (let i = 0; i < orderedUrls.length; i++) {
     const pin = pins.find((p) => p.url === orderedUrls[i] && p.groupName === groupName);
     if (pin) pin.position = i;
@@ -122,25 +89,14 @@ export function getPinForTab(url: string, groupName: string, pins: PinnedTabEntr
 }
 
 /** Returns the pin tracking `tabId` (updated in place), or null if the tab isn't pinned —
- *  the caller uses that to know whether to re-apply the title badge after a navigation.
- *
- *  Almost every event this sees is for a tab no lock tracks, or for a locked tab whose url and
- *  title have not changed, so a warm cache answers both without touching storage. Only a real
- *  change pays for a fresh read-modify-write. The price is a lock made in another context in
- *  the moment before its onChanged arrives here: that one event is missed, and the next url,
- *  title or status event of the tab catches up. */
+ *  the caller uses that to know whether to re-apply the title badge after a navigation. Only a
+ *  url or title that changed is written back. */
 export async function syncPinUrl(tabId: number, newUrl: string, newTitle?: string): Promise<PinnedTabEntry | null> {
   const cleanTitle = stripPinBadge(newTitle);
   const outdated = (pin: PinnedTabEntry) =>
     (!!newUrl && pin.url !== newUrl) || (!!cleanTitle && pin.title !== cleanTitle);
 
-  if (cacheArmed && cachedPins) {
-    const known = cachedPins.find((p) => p.tabId === tabId);
-    if (!known) return null;
-    if (!outdated(known)) return structuredClone(known);
-  }
-
-  const pins = await getPinnedTabs(true);
+  const pins = await getPinnedTabs();
   const pin = pins.find((p) => p.tabId === tabId);
   if (!pin) return null;
   if (!outdated(pin)) return pin;
@@ -157,7 +113,7 @@ export async function syncPinUrl(tabId: number, newUrl: string, newTitle?: strin
  * the pin to wherever that tab navigates. URL matching backfills fresh ids afterwards.
  */
 export async function clearPinTabIds(): Promise<void> {
-  const pins = await getPinnedTabs(true);
+  const pins = await getPinnedTabs();
   let changed = false;
   for (const p of pins) {
     if (p.tabId !== undefined) {
@@ -305,28 +261,17 @@ export interface PinnedGroupEntry {
   position: number;
 }
 
-/** Pass `fresh` when the result feeds a write — see the cache comment at the top. */
-export async function getPinnedGroups(fresh = false): Promise<PinnedGroupEntry[]> {
-  if (!fresh && cacheArmed && cachedGroupPins) return structuredClone(cachedGroupPins);
+export async function getPinnedGroups(): Promise<PinnedGroupEntry[]> {
   const data = await chrome.storage.local.get(GROUP_STORAGE_KEY);
-  const pins: PinnedGroupEntry[] = Array.isArray(data[GROUP_STORAGE_KEY]) ? data[GROUP_STORAGE_KEY] : [];
-  cachedGroupPins = pins;
-  return structuredClone(pins);
+  return Array.isArray(data[GROUP_STORAGE_KEY]) ? data[GROUP_STORAGE_KEY] : [];
 }
 
 export async function savePinnedGroups(pins: PinnedGroupEntry[]): Promise<void> {
-  const plain = JSON.parse(JSON.stringify(pins));
-  try {
-    await chrome.storage.local.set({ [GROUP_STORAGE_KEY]: plain });
-    cachedGroupPins = plain;
-  } catch (e) {
-    cachedGroupPins = null;
-    throw e;
-  }
+  await chrome.storage.local.set({ [GROUP_STORAGE_KEY]: JSON.parse(JSON.stringify(pins)) });
 }
 
 export async function pinGroup(groupTitle: string, position: number): Promise<PinnedGroupEntry> {
-  const pins = await getPinnedGroups(true);
+  const pins = await getPinnedGroups();
   const existing = pins.find((p) => p.groupTitle === groupTitle);
   if (existing) {
     existing.position = position;
@@ -343,7 +288,7 @@ export async function pinGroup(groupTitle: string, position: number): Promise<Pi
 }
 
 export async function unpinGroup(groupTitle: string): Promise<boolean> {
-  const pins = await getPinnedGroups(true);
+  const pins = await getPinnedGroups();
   const idx = pins.findIndex((p) => p.groupTitle === groupTitle);
   if (idx === -1) return false;
   pins.splice(idx, 1);
