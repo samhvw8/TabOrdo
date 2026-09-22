@@ -315,6 +315,11 @@
       if (b.isCurrent) return 1;
       return b.tabCount - a.tabCount;
     });
+
+    // The empty-query list is what the "Back to" hint shows and Enter opens, so it must not
+    // keep a tab an action just closed. A typed query keeps its list: handleClose trims that
+    // one itself and keeps the selection where Ctrl+Delete left it.
+    if (!query) updateResults();
   }
 
   /**
@@ -324,6 +329,12 @@
    */
   function warmWhenIdle(search: TabSearch) {
     requestIdleCallback(() => { if (tabSearch === search) search.warm(); }, { timeout: 1000 });
+  }
+
+  /** Change the query from code. Setting `query` alone leaves the list ranked for the old one. */
+  function setQuery(q: string) {
+    query = q;
+    updateResults();
   }
 
   async function updateResults() {
@@ -832,8 +843,14 @@
   }
 
   async function handleSelect(item: SearchResult) {
-    if (item.tabId) { await switchToTab(item.tabId); window.close(); }
-    else if (item.url) { await chrome.tabs.create({ url: item.url }); window.close(); }
+    try {
+      if (item.tabId) { await switchToTab(item.tabId); window.close(); }
+      else if (item.url) { await chrome.tabs.create({ url: item.url }); window.close(); }
+    } catch (e) {
+      // A row can outlive its tab (the side panel stays open while tabs close elsewhere).
+      // Unhandled, Enter looked like it did nothing at all.
+      flashStatus(`Error: ${e instanceof Error ? e.message : "Could not open"}`, 5000);
+    }
   }
 
   async function handleClose(item: SearchResult) {
@@ -860,10 +877,7 @@
   }
 
   function handleCommandSelect(cmd: CommandDefinition) {
-    query = cmd.prefix.startsWith("@") ? `${cmd.prefix} ` : `/${cmd.prefix} `;
-    paletteMode = "search";
-    commandHints = [];
-    updateResults();
+    setQuery(cmd.prefix.startsWith("@") ? `${cmd.prefix} ` : `/${cmd.prefix} `);
   }
 
   function toggleSelect(tabId: number) {
@@ -1069,8 +1083,8 @@
       inputFocused = false;
       chrome.storage.session.remove("openMode").catch(() => {});
     }
-    // Populate the empty-query MRU list. Without this `results` stayed empty until the first
-    // keystroke, so Cmd+E → Enter (jump to the previous tab) silently did nothing.
+    // loadTabs ranks an empty query itself. A query typed before the tabs arrived was ranked
+    // against none, and would show nothing until the next keystroke.
     updateResults();
     // After the first paint, so the panels' code stays off the path to it (see loadRulesEditor).
     requestIdleCallback(() => { void loadRulesEditor(); void loadPinsPanel(); void loadSettingsPanel(); }, { timeout: 2000 });
@@ -1142,8 +1156,7 @@
           handleUndo();
         } else if (e.key === "Escape" && query) {
           e.preventDefault();
-          query = "";
-          onQueryChange();
+          setQuery("");
         }
       }}
     />
@@ -1328,7 +1341,7 @@
           {#each bucket.commands as cmd}
             <button
               class="w-full flex items-center gap-2 px-2 py-1 rounded hover:bg-surface-hover transition-colors text-left focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-surface"
-              onclick={() => { query = cmd.prefix.startsWith("@") ? `${cmd.prefix} ` : `/${cmd.prefix} `; showHelp = false; helpFilter = ""; updateResults(); }}
+              onclick={() => { showHelp = false; helpFilter = ""; setQuery(cmd.prefix.startsWith("@") ? `${cmd.prefix} ` : `/${cmd.prefix} `); }}
             >
               <span class="font-mono text-xs font-medium w-16 shrink-0 {cmd.color}">{cmd.label}</span>
               <span class="text-xs text-text-muted">{cmd.description}</span>
@@ -1497,7 +1510,7 @@
         {@const audioTabs = dashboardTabs.filter((t) => t.audible && !t.mutedInfo?.muted)}
         <button
           class="mx-3 mb-2 flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-accent-red/30 bg-accent-red/5 hover:bg-accent-red/10 transition-colors w-[calc(100%-1.5rem)] text-left"
-          onclick={() => { query = "@a "; paletteMode = "search"; updateResults(); }}
+          onclick={() => setQuery("@a ")}
           title="Click to view all tabs playing audio"
         >
           <svg class="w-3.5 h-3.5 shrink-0 text-accent-red" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
