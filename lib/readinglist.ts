@@ -1,3 +1,5 @@
+import { isSaveablePage } from "./url.ts";
+
 export interface ReadingListEntry {
   url: string;
   title: string;
@@ -15,9 +17,7 @@ export async function getReadingList(): Promise<ReadingListEntry[]> {
 }
 
 export async function addTabsToReadingList(tabs: { url: string; title: string }[]): Promise<number> {
-  const saveable = tabs.filter(
-    (tab) => tab.url && !tab.url.startsWith("chrome://") && !tab.url.startsWith("chrome-extension://")
-  );
+  const saveable = tabs.filter((tab) => isSaveablePage(tab.url));
   // Each add is independent, so they go out together. A rejected one (already on the list) still
   // costs only itself, and is not counted.
   const results = await Promise.allSettled(saveable.map((tab) => addToReadingList(tab.url, tab.title || tab.url)));

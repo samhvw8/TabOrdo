@@ -84,9 +84,7 @@ export async function groupTabsByDomain(
       const ruleEntry = [...ruleGroupMap.entries()].find(([, e]) => e.rule.name === group.title);
       if (ruleEntry) {
         const [ruleId, entry] = ruleEntry;
-        const moveIds = entry.tabs.filter((t) => t.windowId !== group.windowId).map((t) => t.id!);
-        if (moveIds.length > 0) await chrome.tabs.move(moveIds, { windowId: group.windowId, index: -1 });
-        await chrome.tabs.group({ tabIds: entry.tabs.map((t) => t.id!), groupId: group.id });
+        await gatherIntoGroup(entry.tabs, group.windowId, { groupId: group.id });
         ruleGroupMap.delete(ruleId);
         continue;
       }
@@ -94,9 +92,7 @@ export async function groupTabsByDomain(
       const name = nameMap.has(group.title) ? group.title : legacyTitles.get(group.title);
       const matching = name === undefined ? undefined : nameMap.get(name);
       if (name !== undefined && matching && matching.length > 0) {
-        const moveIds = matching.filter((t) => t.windowId !== group.windowId).map((t) => t.id!);
-        if (moveIds.length > 0) await chrome.tabs.move(moveIds, { windowId: group.windowId, index: -1 });
-        await chrome.tabs.group({ tabIds: matching.map((t) => t.id!), groupId: group.id });
+        await gatherIntoGroup(matching, group.windowId, { groupId: group.id });
         nameMap.delete(name);
       }
     }
@@ -104,26 +100,15 @@ export async function groupTabsByDomain(
 
   for (const [, entry] of ruleGroupMap) {
     if (entry.tabs.length < 1) continue;
-    const targetWindowId = pickMajorityWindow(entry.tabs);
-    const moveIds = entry.tabs.filter((t) => t.windowId !== targetWindowId).map((t) => t.id!);
-    if (moveIds.length > 0) await chrome.tabs.move(moveIds, { windowId: targetWindowId, index: -1 });
-    const groupId = await chrome.tabs.group({
-      tabIds: entry.tabs.map((t) => t.id!),
-      createProperties: { windowId: targetWindowId },
+    await gatherIntoGroup(entry.tabs, pickMajorityWindow(entry.tabs), {
+      title: entry.rule.name,
+      color: entry.rule.color,
     });
-    await chrome.tabGroups.update(groupId, { title: entry.rule.name, color: entry.rule.color });
   }
 
   for (const [name, nameTabs] of nameMap) {
     if (nameTabs.length < 2) continue;
-    const targetWindowId = pickMajorityWindow(nameTabs);
-    const moveIds = nameTabs.filter((t) => t.windowId !== targetWindowId).map((t) => t.id!);
-    if (moveIds.length > 0) await chrome.tabs.move(moveIds, { windowId: targetWindowId, index: -1 });
-    const groupId = await chrome.tabs.group({
-      tabIds: nameTabs.map((t) => t.id!),
-      createProperties: { windowId: targetWindowId },
-    });
-    await chrome.tabGroups.update(groupId, { title: name, color: domainGroupColor(name) });
+    await gatherIntoGroup(nameTabs, pickMajorityWindow(nameTabs), { title: name, color: domainGroupColor(name) });
   }
 
   const windows = await chrome.windows.getAll();
@@ -132,6 +117,47 @@ export async function groupTabsByDomain(
   }
   await collapseAllExceptActive();
   await applyAllGroupPins();
+}
+
+export interface GroupSpec {
+  /** Join this live group instead of creating one. A joined group keeps its own properties. */
+  groupId?: number;
+  /** Where a new group goes. Left out, Chrome creates it in the window its tabs are in. */
+  windowId?: number;
+  title?: string;
+  color?: chrome.tabGroups.ColorEnum;
+  collapsed?: boolean;
+}
+
+/**
+ * Put `tabIds` into one group: `spec.groupId` when given, otherwise a new group in
+ * `spec.windowId` with the title, colour and collapsed state `spec` gives. The tabs must already
+ * sit in that window, since chrome.tabs.group rejects ids that span windows. Returns the group.
+ */
+export async function buildGroup(tabIds: number[], spec: GroupSpec): Promise<number> {
+  if (spec.groupId !== undefined) return chrome.tabs.group({ tabIds, groupId: spec.groupId });
+  const groupId = await chrome.tabs.group({
+    tabIds,
+    ...(spec.windowId !== undefined ? { createProperties: { windowId: spec.windowId } } : {}),
+  });
+  const { title, color, collapsed } = spec;
+  await chrome.tabGroups.update(groupId, {
+    ...(title !== undefined ? { title } : {}),
+    ...(color !== undefined ? { color } : {}),
+    ...(collapsed !== undefined ? { collapsed } : {}),
+  });
+  return groupId;
+}
+
+/** buildGroup for tabs that may sit in other windows: those are moved to the end of `windowId` first. */
+export async function gatherIntoGroup(
+  tabs: chrome.tabs.Tab[],
+  windowId: number,
+  spec: Omit<GroupSpec, "windowId"> = {}
+): Promise<number> {
+  const strays = tabs.filter((t) => t.windowId !== windowId).map((t) => t.id!);
+  if (strays.length > 0) await chrome.tabs.move(strays, { windowId, index: -1 });
+  return buildGroup(tabs.map((t) => t.id!), { ...spec, windowId });
 }
 
 export function pickMajorityWindow(tabs: chrome.tabs.Tab[]): number {

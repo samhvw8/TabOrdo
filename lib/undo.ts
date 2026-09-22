@@ -1,3 +1,6 @@
+import { buildGroup } from "./tabs/group.ts";
+import { isReopenablePage } from "./url.ts";
+
 export interface UndoEntry {
   type: string;
   label: string;
@@ -199,7 +202,7 @@ export async function executeUndo(): Promise<string> {
       let reopened = 0;
       const regrouped: { tabId: number; data: ClosedTabData }[] = [];
       for (const t of tabs) {
-        if (!t.url || t.url === "chrome://newtab/") continue;
+        if (!isReopenablePage(t.url)) continue;
         if (liveIds.has(t.id)) continue;
         const sameWindow = openWindows.has(t.windowId);
         try {
@@ -218,23 +221,20 @@ export async function executeUndo(): Promise<string> {
         } catch {}
       }
 
-      // Put the restored tabs back in their group. Same bucketing as the "group" case below:
-      // window plus title plus colour, because chrome.tabs.group rejects ids spanning windows
-      // and two same-named groups in different windows are different groups.
-      const byGroup = new Map<string, { title: string; color: string; windowId?: number; tabIds: number[] }>();
-      for (const { tabId, data } of regrouped) {
-        const windowId = openWindows.has(data.windowId) ? data.windowId : undefined;
-        const key = `${windowId ?? "?"}:${data.groupTitle || ""}:${data.groupColor || ""}`;
-        if (!byGroup.has(key)) {
-          byGroup.set(key, { title: data.groupTitle || "", color: data.groupColor || "", windowId, tabIds: [] });
-        }
-        byGroup.get(key)!.tabIds.push(tabId);
-      }
-      if (byGroup.size > 0) {
+      // Put the restored tabs back in their group.
+      const buckets = bucketByGroup(
+        regrouped.map(({ tabId, data }) => ({
+          tabId,
+          windowId: openWindows.has(data.windowId) ? data.windowId : undefined,
+          title: data.groupTitle,
+          color: data.groupColor,
+        }))
+      );
+      if (buckets.length > 0) {
         // Closing one tab out of a group leaves the group standing, so rejoin it rather than
         // building a second group beside it with the same name.
         const liveGroups = await chrome.tabGroups.query({}).catch(() => []);
-        for (const [, info] of byGroup) {
+        for (const info of buckets) {
           // Only ever rejoin a group in the window the tab is actually going back to —
           // chrome.tabs.group rejects ids that span windows.
           const match =
@@ -247,20 +247,12 @@ export async function executeUndo(): Promise<string> {
                     (g.color || "") === info.color
                 );
           try {
-            const gid = await chrome.tabs.group(
-              match
-                ? { tabIds: info.tabIds, groupId: match.id }
-                : {
-                    tabIds: info.tabIds,
-                    ...(info.windowId !== undefined ? { createProperties: { windowId: info.windowId } } : {}),
-                  }
-            );
-            if (!match) {
-              await chrome.tabGroups.update(gid, {
-                title: info.title,
-                color: info.color as chrome.tabGroups.ColorEnum,
-              });
-            }
+            await buildGroup(info.tabIds, {
+              groupId: match?.id,
+              windowId: info.windowId,
+              title: info.title,
+              color: info.color as chrome.tabGroups.ColorEnum,
+            });
           } catch (e) {
             // A group Chrome refuses to rebuild must not turn a successful reopen into a failure.
             console.warn("[TabOrdo] undo: could not regroup restored tabs", info.title, e);
@@ -282,10 +274,7 @@ export async function executeUndo(): Promise<string> {
         }
       } catch {}
 
-      // Bucket by window as well as title/color. Keying on title:color alone folded two
-      // same-named groups living in different windows into one bucket, and the resulting
-      // cross-window chrome.tabs.group call throws — taking the whole undo with it. A tab whose
-      // window has closed since is bucketed where it sits now.
+      // A tab whose window has closed since is bucketed where it sits now.
       const windowFor = (a: GroupAssignment): number | undefined =>
         openWindows.has(a.windowId) ? a.windowId : byTabId.get(a.tabId)?.windowId;
 
@@ -313,26 +302,19 @@ export async function executeUndo(): Promise<string> {
       // so this has to happen first. Ungrouping above frees them from their current group's block.
       await restoreOrder(assignments, intact, currentTabs, openWindows);
 
-      const byGroup = new Map<string, { title: string; color: string; windowId?: number; tabIds: number[] }>();
-      for (const a of assignments) {
-        if (a.groupId === -1 || intact.has(a.groupId) || !byTabId.has(a.tabId)) continue;
-        const windowId = windowFor(a);
-        const key = `${windowId ?? "?"}:${a.groupTitle || ""}:${a.groupColor || ""}`;
-        if (!byGroup.has(key)) {
-          byGroup.set(key, { title: a.groupTitle || "", color: a.groupColor || "", windowId, tabIds: [] });
-        }
-        byGroup.get(key)!.tabIds.push(a.tabId);
-      }
+      const buckets = bucketByGroup(
+        assignments.flatMap((a) =>
+          a.groupId === -1 || intact.has(a.groupId) || !byTabId.has(a.tabId)
+            ? []
+            : [{ tabId: a.tabId, windowId: windowFor(a), title: a.groupTitle, color: a.groupColor }]
+        )
+      );
 
       let failed = 0;
-      for (const [, info] of byGroup) {
-        if (info.tabIds.length === 0) continue;
+      for (const info of buckets) {
         try {
-          const gid = await chrome.tabs.group({
-            tabIds: info.tabIds,
-            ...(info.windowId !== undefined ? { createProperties: { windowId: info.windowId } } : {}),
-          });
-          await chrome.tabGroups.update(gid, {
+          await buildGroup(info.tabIds, {
+            windowId: info.windowId,
             title: info.title,
             color: info.color as chrome.tabGroups.ColorEnum,
           });
@@ -365,6 +347,30 @@ export async function executeUndo(): Promise<string> {
     default:
       return "Unknown undo type";
   }
+}
+
+/** Tabs to regroup, gathered into one bucket per group they are to form. */
+interface GroupBucket {
+  title: string;
+  color: string;
+  windowId?: number;
+  tabIds: number[];
+}
+
+// Keyed by window as well as title and colour: keying on title and colour alone folded two
+// same-named groups in different windows into one bucket, and the cross-window
+// chrome.tabs.group call that followed threw, taking the whole undo with it.
+function bucketByGroup(
+  tabs: { tabId: number; windowId?: number; title?: string; color?: string }[]
+): GroupBucket[] {
+  const buckets = new Map<string, GroupBucket>();
+  for (const { tabId, windowId, title = "", color = "" } of tabs) {
+    const key = `${windowId ?? "?"}:${title}:${color}`;
+    let bucket = buckets.get(key);
+    if (!bucket) buckets.set(key, (bucket = { title, color, windowId, tabIds: [] }));
+    bucket.tabIds.push(tabId);
+  }
+  return [...buckets.values()];
 }
 
 /**

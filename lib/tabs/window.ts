@@ -3,6 +3,7 @@
 import { getDomainMapper } from "../url.ts";
 import type { MoveGroupsResult } from "./types.ts";
 import { getAllGroups } from "./query.ts";
+import { buildGroup } from "./group.ts";
 
 interface CarriedGroup {
   title?: string;
@@ -52,15 +53,13 @@ async function restoreGroup(
     ? existing.find((g) => g.title === entry.title && g.color === entry.color)
     : undefined;
   try {
-    if (match) {
-      await chrome.tabs.group({ tabIds: entry.tabIds, groupId: match.id });
-      return true;
-    }
-    const groupId = await chrome.tabs.group({ tabIds: entry.tabIds, createProperties: { windowId } });
-    const props: chrome.tabGroups.UpdateProperties = { collapsed: entry.collapsed };
-    if (entry.title !== undefined) props.title = entry.title;
-    if (entry.color !== undefined) props.color = entry.color;
-    await chrome.tabGroups.update(groupId, props);
+    await buildGroup(entry.tabIds, {
+      groupId: match?.id,
+      windowId,
+      title: entry.title,
+      color: entry.color,
+      collapsed: entry.collapsed,
+    });
     return true;
   } catch (e) {
     console.warn("[TabOrdo] could not restore group", entry.title, e);

@@ -86,6 +86,20 @@ export function getFullHostname(url: string): string {
   }
 }
 
+// Two rules for "is this a page", deliberately apart. Saving tabs for later (focus mode, the
+// Reading List, /save) leaves the browser's and extensions' own pages out. Bringing back what
+// was closed (undo, the archive) keeps them, and drops only a blank new tab.
+
+/** A page worth saving for later: not one of the browser's or an extension's own pages. */
+export function isSaveablePage(url: string | undefined): url is string {
+  return !!url && !url.startsWith("chrome://") && !url.startsWith("chrome-extension://");
+}
+
+/** A page worth reopening: anything but a blank new tab. */
+export function isReopenablePage(url: string | undefined): url is string {
+  return !!url && url !== "chrome://newtab/";
+}
+
 export function hashCode(str: string): number {
   let hash = 0;
   for (let i = 0; i < str.length; i++) {

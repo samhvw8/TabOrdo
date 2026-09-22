@@ -45,6 +45,14 @@ sources:
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/pin.ts
     title: Lock lists and their read cache
     last_modified: 2026-09-17
+  - id: group-ts
+    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabs/group.ts
+    title: Creating and rebuilding tab groups
+    last_modified: 2026-09-22
+  - id: url-ts
+    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/url.ts
+    title: URL helpers
+    last_modified: 2026-09-22
   - id: commit-7e3e91a
     resource: https://github.com/samhvw8/TabOrdo/commit/7e3e91acea53a8c29ffe62bb2ed40367d17bab09
     title: "refactor: split lib/tabs, extract action and dashboard registries"
@@ -69,6 +77,8 @@ Every background listener is registered through `register()`, so one throwing re
 # lib layout
 
 - `lib/tabs/` holds one module per concern behind the `lib/tabs/index.ts` barrel: `types`, `query`, `sort`, `group`, `dedup`, `window`, `close`, `media`, `order`, `lock`, `tree`. Import sites use the barrel, so the split can move freely. It replaced a 971-line `lib/tabs.ts`.[^tabs-barrel][^commit-7e3e91a]
+- Every group TabOrdo builds goes through `buildGroup` in `lib/tabs/group.ts`: join a live group, or create one in a window and set its title, colour and collapsed state. `gatherIntoGroup` first moves tabs sitting in other windows, because `chrome.tabs.group` rejects ids that span windows. Undo, the cross-window movers, domain grouping and `/branch` all use them.[^group-ts]
+- `lib/url.ts` holds the two "is this a page" rules, kept apart on purpose. `isSaveablePage` leaves out `chrome://` and `chrome-extension://` pages, for focus mode, the Reading List and `/save`. `isReopenablePage` drops only an empty URL or `chrome://newtab/`, for undo and the archive.[^url-ts]
 - `lib/tabs/tree.ts` write serialisation assumes the background is the only writer. The popup and side panel import the barrel too, so keep `recordOpener` and `forgetTab` calls in the background.[^tabs-barrel]
 - `lib/actions.ts` holds `ACTION_HANDLERS`, one async handler per slash command. `lib/commands.ts` is the command catalogue and `lib/dashboard.ts` the dashboard tile catalogue.[^actions-ts][^commit-7e3e91a]
 - Cross-cutting modules: `undo.ts` ([undo stack](/architecture/undo-stack.md)), `bulklock.ts` ([bulk lock](/architecture/bulk-lock.md)), `rules.ts`, `pin.ts`, `archive.ts`, `workspace.ts`, `search.ts`, `ai.ts`, `actionLog.ts`, `url.ts`.
@@ -117,4 +127,6 @@ The popup and the side panel are the same component in two realms. Each has its 
 [^tree-ts]: lib/tabs/tree.ts
 [^undo-ts]: lib/undo.ts
 [^pin-ts]: lib/pin.ts
+[^group-ts]: lib/tabs/group.ts
+[^url-ts]: lib/url.ts
 [^commit-7e3e91a]: Commit 7e3e91a
