@@ -307,4 +307,53 @@ describe("followPinState", () => {
     await followPinState(state, 1, { pinned: true }, asTab(stub.openTabs[0]));
     expect(stub.tabUpdates).toEqual([]);
   });
+
+  describe("with Chrome's onUpdated echoes wired up", () => {
+    let runs: Promise<void>[];
+
+    beforeEach(() => {
+      runs = [];
+      chrome.tabs.onUpdated.addListener((id, info, t) => {
+        runs.push(followPinState(state, id, info, t as chrome.tabs.Tab));
+      });
+    });
+
+    /** Let every echo arrive, and every run it started finish. */
+    async function settle(): Promise<void> {
+      for (let i = 0; i < 5; i++) {
+        await new Promise((r) => setTimeout(r, 0));
+        await Promise.all(runs);
+      }
+    }
+
+    // What the busy flag was for: each update's echo arrives as a pin change on a copy. A pass
+    // started from one converges (the state already matches) but re-queries every tab in the
+    // profile. The ledger marks the copies before updating them, so no echo starts one.
+    it("starts no second pass from the echoes of its own updates", async () => {
+      const query = vi.spyOn(chrome.tabs, "query");
+      runs.push(followPinState(state, 1, { pinned: true }, asTab(stub.openTabs[0])));
+      await settle();
+      expect(stub.tabUpdates).toEqual([{ id: 2, pinned: true }, { id: 3, pinned: true }]);
+      expect(runs).toHaveLength(3);
+      expect(query).toHaveBeenCalledTimes(1);
+    });
+
+    // The flag also swallowed a real toggle on an unrelated tab that landed mid-pass.
+    it("still follows a pin toggle on another tab that arrives while a pass is running", async () => {
+      stub.openTabs.push(tab({ id: 5, url: "https://b.com", index: 4 }));
+      const update = chrome.tabs.update;
+      let userPinned = false;
+      (chrome.tabs as { update: unknown }).update = async (id: number, props: chrome.tabs.UpdateProperties) => {
+        if (!userPinned) {
+          userPinned = true;
+          await update(4, { pinned: true });
+        }
+        return update(id, props);
+      };
+
+      runs.push(followPinState(state, 1, { pinned: true }, asTab(stub.openTabs[0])));
+      await settle();
+      expect(stub.openTabs.find((t) => t.id === 5)!.pinned).toBe(true);
+    });
+  });
 });

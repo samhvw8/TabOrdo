@@ -29,14 +29,10 @@ export interface AutomationState {
   /** Tab ids TabOrdo itself just grouped/ungrouped, so listeners can tell our own echoes
    *  apart from external mutations and skip re-reacting to them. */
   selfWrites: SelfWriteLedger;
-  /** Same idea for pin-state writes, kept apart so a pin write never hides a group change on
-   *  the same tab. The pinSyncInProgress flag alone couldn't suppress the echoes: Chrome
-   *  dispatches the onUpdated events our own tabs.update calls generate *after* the loop has
-   *  finished and cleared the flag, so every synced tab kicked off another full pass. They
-   *  converged (the state already matched) but each one woke the worker and re-queried every
-   *  tab in the profile. */
+  /** Same idea for pin follow's writes, kept apart so a pin write never hides a group change
+   *  on the same tab. Without it every copy pin follow updated would echo back as a pin change
+   *  and start another pass, each one waking the worker and re-querying every tab. */
   pinSelfWrites: SelfWriteLedger;
-  pinSyncInProgress: boolean;
   /** When this worker saw each group created, for the settle window. Groups created before
    *  this worker session have no entry and are treated as settled. */
   groupCreatedAt: Map<number, number>;
@@ -49,7 +45,6 @@ export function createAutomationState(): AutomationState {
   return {
     selfWrites: createSelfWriteLedger(),
     pinSelfWrites: createSelfWriteLedger(),
-    pinSyncInProgress: false,
     groupCreatedAt: new Map(),
     recentTabs: new Map(),
     ungroupTimers: new Map(),
@@ -376,6 +371,10 @@ export async function switchToExisting(
  * Its own listener: it shares no state with the grouping automations, and folding it into their
  * guard made every pin toggle run their prologue first, paying two storage round-trips to reach
  * a branch that needs neither.
+ *
+ * The copies are marked on pinSelfWrites before they are updated, so their echoes are skipped
+ * whenever they arrive. No "pass in progress" flag on top: it could not catch echoes that arrive
+ * after the pass, and it swallowed a real toggle on another tab that arrived during one.
  */
 export async function followPinState(
   state: AutomationState,
@@ -384,11 +383,9 @@ export async function followPinState(
   tab: chrome.tabs.Tab
 ): Promise<void> {
   if (changeInfo.pinned === undefined || !tab.url) return;
-  if (state.pinSyncInProgress) return;
   if (state.pinSelfWrites.has(tabId)) return;
   if (!(await getConfig()).autoPinFollow) return;
 
-  state.pinSyncInProgress = true;
   try {
     const allTabs = await chrome.tabs.query({});
     const sameUrl = allTabs.filter((t) => t.id !== tabId && t.url === tab.url);
@@ -401,7 +398,5 @@ export async function followPinState(
     }
   } catch (e) {
     console.error("[TabOrdo] pin follow error:", e);
-  } finally {
-    state.pinSyncInProgress = false;
   }
 }
