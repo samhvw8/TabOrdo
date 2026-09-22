@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { SvelteSet } from "svelte/reactivity";
   import { getAllTabs, switchToTab, closeTabs, pinCurrentTab, unpinCurrentTab, outlineBranch, type TabInfo } from "../../lib/tabs/index.ts";
   import { getPinnedTabs, getPinForTab, type PinnedTabEntry } from "../../lib/pin.ts";
   import { getArchiveCount } from "../../lib/archive.ts";
@@ -182,17 +183,22 @@
       busy = false;
     }
   }
-  let collapsedGroups = $state<Set<number>>(new Set());
+  const collapsedGroups = new SvelteSet<number>();
 
-  function setCollapsed(s: Set<number>) {
-    collapsedGroups = s;
-    chrome.storage.local.set({ collapsedGroups: [...s] });
+  // Storage holds JSON, so the set is saved as an array.
+  function saveCollapsed() {
+    chrome.storage.local.set({ collapsedGroups: [...collapsedGroups] });
+  }
+
+  function setCollapsed(keys: Iterable<number>) {
+    collapsedGroups.clear();
+    for (const k of keys) collapsedGroups.add(k);
+    saveCollapsed();
   }
 
   function toggleGroupCollapse(groupId: number) {
-    const next = new Set(collapsedGroups);
-    if (next.has(groupId)) next.delete(groupId); else next.add(groupId);
-    setCollapsed(next);
+    if (collapsedGroups.has(groupId)) collapsedGroups.delete(groupId); else collapsedGroups.add(groupId);
+    saveCollapsed();
   }
 
   // $state.raw, and a plain let for the search, deliberately. A deep $state proxy puts a trap
@@ -215,7 +221,7 @@
 
   let windows = $state.raw<WindowData[]>([]);
   let dashboardTabs = $state.raw<TabInfo[]>([]);
-  let selectedTabs = $state<Set<number>>(new Set());
+  const selectedTabs = new SvelteSet<number>();
   let currentWindowId = $state(0);
 
   // Strictly query-driven: the dashboard (and its action pad) stays put until you actually type.
@@ -640,20 +646,16 @@
   }
 
   function toggleSelect(tabId: number) {
-    const next = new Set(selectedTabs);
-    if (next.has(tabId)) next.delete(tabId); else next.add(tabId);
-    selectedTabs = next;
+    if (selectedTabs.has(tabId)) selectedTabs.delete(tabId); else selectedTabs.add(tabId);
   }
 
   function toggleSelectGroup(tabIds: number[]) {
     const allSelected = tabIds.every((id) => selectedTabs.has(id));
-    const next = new Set(selectedTabs);
     if (allSelected) {
-      for (const id of tabIds) next.delete(id);
+      for (const id of tabIds) selectedTabs.delete(id);
     } else {
-      for (const id of tabIds) next.add(id);
+      for (const id of tabIds) selectedTabs.add(id);
     }
-    selectedTabs = next;
   }
 
   async function dashAction(fn: () => Promise<string | void>) {
@@ -665,7 +667,7 @@
       // after the next action replaced the message, so a dash action followed by an undo
       // blanked the undo's confirmation early. flashStatus owns the single timer.
       if (msg) flashStatus(msg);
-      selectedTabs = new Set();
+      selectedTabs.clear();
     } catch (e) {
       flashStatus(`Error: ${e instanceof Error ? e.message : "Action failed"}`, 5000);
     } finally {
@@ -835,7 +837,7 @@
 
     const [, config, session] = await critical;
     applyConfig(config.rulesConfig);
-    if (config.collapsedGroups) collapsedGroups = new Set(config.collapsedGroups);
+    if (config.collapsedGroups) for (const k of config.collapsedGroups) collapsedGroups.add(k);
     if (Array.isArray(config.dashboardActionIds)) dashboardActionIds = config.dashboardActionIds;
     onboardingDismissed = !!config.onboardingDismissed;
     if (session.openMode === "dashboard") {
@@ -1228,17 +1230,17 @@
 
       <!-- Selection + collapse controls -->
       <div class="flex items-center gap-3 px-3 pb-1.5 text-xs">
-        <button onmousedown={(e) => { e.preventDefault(); selectedTabs = new Set(dashboardTabs.map((t) => t.id)); }} class="text-primary hover:text-primary-hover transition-colors">All</button>
-        <button onmousedown={(e) => { e.preventDefault(); selectedTabs = new Set(); }} class="text-text-muted hover:text-text transition-colors">None</button>
+        <button onmousedown={(e) => { e.preventDefault(); selectedTabs.clear(); for (const t of dashboardTabs) selectedTabs.add(t.id); }} class="text-primary hover:text-primary-hover transition-colors">All</button>
+        <button onmousedown={(e) => { e.preventDefault(); selectedTabs.clear(); }} class="text-text-muted hover:text-text transition-colors">None</button>
         {#if selectedTabs.size > 0}
           <span class="text-text-muted">{selectedTabs.size} selected</span>
         {/if}
         <div class="flex-1"></div>
         <button
-          onmousedown={(e) => { e.preventDefault(); const all = new Set<number>(); windows.forEach(w => { w.groups.forEach((_, k) => all.add(k)); all.add(-(w.windowId + 100000)); }); setCollapsed(all); }}
+          onmousedown={(e) => { e.preventDefault(); setCollapsed(windows.flatMap((w) => [...w.groups.keys(), -(w.windowId + 100000)])); }}
           class="text-text-muted hover:text-text transition-colors">Fold</button>
         <button
-          onmousedown={(e) => { e.preventDefault(); setCollapsed(new Set()); }}
+          onmousedown={(e) => { e.preventDefault(); setCollapsed([]); }}
           class="text-text-muted hover:text-text transition-colors">Unfold</button>
       </div>
 
