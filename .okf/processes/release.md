@@ -4,7 +4,7 @@ title: Releasing TabOrdo
 description: Steps to cut a TabOrdo release (version bump, dated CHANGELOG section, annotated tag, push, GitHub Release that triggers the Chrome Web Store publish), what each CI workflow does, the commit conventions, and what to do when the store publish fails.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/.github/workflows/publish.yml
 tags: [release, ci, chrome-web-store, versioning, git]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-22T23:00:00Z }
+generated: { by: claude-code/claude-opus-5-5, at: 2026-10-13T08:00:00Z }
 sources:
   - id: claude-md
     resource: https://github.com/samhvw8/TabOrdo/blob/main/CLAUDE.md
@@ -70,8 +70,8 @@ A release is a version bump on `main`, an annotated tag, and a **published** Git
 
 # Steps
 
-1. Check that `main` is green locally: `npm run check` and `npm test`. Verify: both exit 0 (publish runs them again, see below).[^publish-yml]
-2. Bump `version` in `package.json`. Verify: `package-lock.json` changes with it; the recent bump commits touch all three release files.[^claude-md][^commit-bump-072]
+1. Check that `main` is green locally: `pnpm run check` and `pnpm test`. Verify: both exit 0 (publish runs them again, see below).[^publish-yml]
+2. Bump `version` in `package.json`. Verify: `git diff` shows only the `version` line. The project uses pnpm since 2026-09-28, and `pnpm-lock.yaml` does not record the root version. Bump commits up to v0.8.0 also touched `package-lock.json`.[^claude-md][^commit-bump-072]
 3. Turn `## Unreleased` into `## X.Y.Z — YYYY-MM-DD` in `CHANGELOG.md`. Verify: the heading matches the dated sections below it.[^claude-md][^changelog]
 4. Commit only those files as `docs: changelog and version bump for X.Y.Z`.[^commit-bump-072]
 5. `git tag -a vX.Y.Z -m "vX.Y.Z"`. Verify: `git cat-file -t vX.Y.Z` prints `tag`.[^claude-md]
@@ -82,9 +82,10 @@ A release is a version bump on `main`, an annotated tag, and a **published** Git
 
 | Workflow | Trigger | Steps |
 |----------|---------|-------|
-| `build.yml` "Build & Package" | push to `main`, PR to `main` | Node from `mise.toml` via `jdx/mise-action`,[^mise-toml] `npm ci`, `npm run check`, `npm test`, `npm run zip`; on `main` only, upload `.output/*.zip` as artifact `tab-ordo-chrome` (30 days)[^build-yml] |
-| `publish.yml` "Publish to Chrome Web Store" | `release: published`, `workflow_dispatch` | Node from `mise.toml`, `npm ci`, check, test, zip, then `npx wxt submit --chrome-zip .output/*-chrome.zip` with the `CWS_EXTENSION_ID`, `CWS_CLIENT_ID`, `CWS_CLIENT_SECRET` and `CWS_REFRESH_TOKEN` secrets[^publish-yml] |
+| `build.yml` "Build & Package" | push to `main`, PR to `main` | Node and pnpm from `mise.toml` via `jdx/mise-action`,[^mise-toml] `pnpm install --frozen-lockfile`, `pnpm run check`, `pnpm test`, `pnpm run zip`; on `main` only, upload `.output/*.zip` as artifact `tab-ordo-chrome` (30 days)[^build-yml] |
+| `publish.yml` "Publish to Chrome Web Store" | `release: published`, `workflow_dispatch` | Node and pnpm from `mise.toml`, `pnpm install --frozen-lockfile`, check, test, zip, then `pnpm exec wxt submit --chrome-zip .output/*-chrome.zip` with the `CWS_EXTENSION_ID`, `CWS_CLIENT_ID`, `CWS_CLIENT_SECRET` and `CWS_REFRESH_TOKEN` secrets[^publish-yml] |
 
+- `pnpm install` fails while a dependency's build script is neither allowed nor denied. `pnpm-workspace.yaml` denies the two there are, `esbuild` (its binary comes from a platform package) and `spawn-sync`; a new one needs the same entry before CI can install.[^build-yml]
 - Publish repeats check and test because nothing makes a release wait for `build.yml`. Without them, publishing could ship a build that `build.yml` is about to fail.[^publish-yml]
 - The upload step needs `include-hidden-files: true`. `.output` is a dot-directory, and without the flag every build on `main` uploaded nothing and only warned.[^build-yml][^commit-artifact]
 
@@ -93,7 +94,7 @@ A release is a version bump on `main`, an annotated tag, and a **published** Git
 | Commit | Carries |
 |--------|---------|
 | `fix:` / `feat:` / `perf:` | Code **and** its tests; sometimes the CHANGELOG entry too (`013f617` edited `CHANGELOG.md`, `lib/tabs/dedup.ts` and its test)[^commit-fix-071] |
-| `docs: changelog and version bump for X.Y.Z` | `CHANGELOG.md`, `package.json`, `package-lock.json` only; the tag points here (`v0.7.2` → `c51f9f8`)[^commit-bump-072][^git-history] |
+| `docs: changelog and version bump for X.Y.Z` | `CHANGELOG.md` and `package.json` only (plus `package-lock.json` before the pnpm switch); the tag points here (`v0.7.2` → `c51f9f8`)[^commit-bump-072][^git-history] |
 | `docs: changelog entry for …` | CHANGELOG-only follow-ups between releases[^git-history] |
 
 Conventional-commit subjects start in July 2026. Earlier history uses free-form subjects such as "Bump version to 0.5.0, update docs…".[^git-history]

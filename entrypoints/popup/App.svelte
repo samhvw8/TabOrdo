@@ -28,10 +28,15 @@
   import TabCard from "../../components/TabCard.svelte";
   import Sidebar, { type SidebarSection } from "../../components/Sidebar.svelte";
   import LazyRows from "../../components/LazyRows.svelte";
+  import { markOpen, readOpenTiming, formatOpenTiming, SLOW_OPEN_MS, type OpenTiming } from "../../lib/opentiming.ts";
 
   // Same component serves two surfaces: the popup is a fixed 450x600 sheet, the side panel is
   // persistent and user-resizable. The caller says which, so the root can size accordingly.
-  let { fluid = false }: { fluid?: boolean } = $props();
+  // initialQuery: keys typed on the popup's loading screen, before this mounted (see main.ts).
+  let { fluid = false, initialQuery = "" }: { fluid?: boolean; initialQuery?: string } = $props();
+
+  /** Set when this popup took SLOW_OPEN_MS or more to show its tabs: where the time went. */
+  let openTiming = $state<OpenTiming | null>(null);
 
   // Rules, pins and settings are panels nobody sees on open, yet their code was in the App
   // chunk, parsed before every first paint. They load on their own now, started at idle rather
@@ -804,6 +809,7 @@
     // Tier 1 is what the first useful frame needs, with its storage reads batched into one call
     // per area. Tier 2 feeds badges and panels that are off-screen or secondary; each lands on
     // its own and re-renders the one thing it owns.
+    if (initialQuery) query = initialQuery;
     const critical = Promise.all([
       loadTabs(),
       chrome.storage.local.get(["rulesConfig", "collapsedGroups", "dashboardActionIds", "onboardingDismissed"]),
@@ -831,12 +837,24 @@
     // loadTabs ranks an empty query itself. A query typed before the tabs arrived was ranked
     // against none, and would show nothing until the next keystroke.
     updateResults();
+    if (!fluid) reportOpenTiming();
     // After the first paint, so the panels' code stays off the path to it (see loadRulesEditor).
     requestIdleCallback(() => { void loadRulesEditor(); void loadPinsPanel(); void loadSettingsPanel(); }, { timeout: 2000 });
   });
 
   function openArchive() {
     chrome.tabs.create({ url: chrome.runtime.getURL("/archive.html") });
+  }
+
+  /** Mark the tabs ready, then, after the frame that paints them, log where the open went. */
+  function reportOpenTiming() {
+    markOpen("ready");
+    requestAnimationFrame(() => setTimeout(() => {
+      markOpen("painted");
+      const t = readOpenTiming();
+      console.info(`[TabOrdo] popup open: ${t.totalMs} ms\n${formatOpenTiming(t)}`);
+      if (t.totalMs >= SLOW_OPEN_MS) openTiming = t;
+    }));
   }
 
   function onQueryChange() {
@@ -1324,6 +1342,16 @@
     </div>
   {/if}
   </div>
+
+  {#if openTiming}
+    <div class="shrink-0 border-t border-border px-3 py-1.5 text-[11px] text-accent-yellow">
+      <div class="flex items-center justify-between">
+        <span>Slow open: {openTiming.totalMs} ms</span>
+        <button class="text-text-muted hover:text-text" onclick={() => (openTiming = null)} aria-label="Dismiss">✕</button>
+      </div>
+      <pre class="mt-1 whitespace-pre-wrap break-all font-mono text-[10px] text-text-muted">{formatOpenTiming(openTiming)}</pre>
+    </div>
+  {/if}
 
   <div class="shrink-0 grow-0 basis-auto flex items-center justify-between px-3 py-1.5 border-t border-border text-[11px] text-text-muted">
     <span>{allTabs.length} tab{allTabs.length !== 1 ? "s" : ""}</span>
