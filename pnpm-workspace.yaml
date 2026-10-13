@@ -1,0 +1,6 @@
+# Neither install script is needed: esbuild's binary comes from its platform package, and
+# spawn-sync's postinstall is a legacy shim nothing here calls. pnpm fails the install until
+# each one is allowed or denied.
+allowBuilds:
+  esbuild: false
+  spawn-sync: false

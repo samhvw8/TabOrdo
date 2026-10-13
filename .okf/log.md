@@ -1,6 +1,7 @@
 # Update Log
 
 ## 2026-10-13
+* **Update**: CI installs with pnpm (pinned in `mise.toml`), and `pnpm-workspace.yaml` denies the two dependency build scripts so the install can finish — [release](/processes/release.md).
 * **Update**: The popup shows a loading screen at `load` and mounts the app after it, so favicons can no longer hold the popup hidden; each open is timed and a slow one shows its breakdown — [overview](/architecture/overview.md).
 
 ## 2026-09-28
