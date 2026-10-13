@@ -4,7 +4,7 @@ title: Releasing TabOrdo
 description: Steps to cut a TabOrdo release (version bump, dated CHANGELOG section, annotated tag, push, GitHub Release that triggers the Chrome Web Store publish), what each CI workflow does, the commit conventions, and what to do when the store publish fails.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/.github/workflows/publish.yml
 tags: [release, ci, chrome-web-store, versioning, git]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-22T23:00:00Z }
+generated: { by: claude-code/claude-opus-5-5, at: 2026-09-28T03:00:00Z }
 sources:
   - id: claude-md
     resource: https://github.com/samhvw8/TabOrdo/blob/main/CLAUDE.md
@@ -71,7 +71,7 @@ A release is a version bump on `main`, an annotated tag, and a **published** Git
 # Steps
 
 1. Check that `main` is green locally: `npm run check` and `npm test`. Verify: both exit 0 (publish runs them again, see below).[^publish-yml]
-2. Bump `version` in `package.json`. Verify: `package-lock.json` changes with it; the recent bump commits touch all three release files.[^claude-md][^commit-bump-072]
+2. Bump `version` in `package.json`. Verify: `git diff` shows only the `version` line. The project uses pnpm since 2026-09-28, and `pnpm-lock.yaml` does not record the root version. Bump commits up to v0.8.0 also touched `package-lock.json`.[^claude-md][^commit-bump-072]
 3. Turn `## Unreleased` into `## X.Y.Z — YYYY-MM-DD` in `CHANGELOG.md`. Verify: the heading matches the dated sections below it.[^claude-md][^changelog]
 4. Commit only those files as `docs: changelog and version bump for X.Y.Z`.[^commit-bump-072]
 5. `git tag -a vX.Y.Z -m "vX.Y.Z"`. Verify: `git cat-file -t vX.Y.Z` prints `tag`.[^claude-md]
@@ -93,7 +93,7 @@ A release is a version bump on `main`, an annotated tag, and a **published** Git
 | Commit | Carries |
 |--------|---------|
 | `fix:` / `feat:` / `perf:` | Code **and** its tests; sometimes the CHANGELOG entry too (`013f617` edited `CHANGELOG.md`, `lib/tabs/dedup.ts` and its test)[^commit-fix-071] |
-| `docs: changelog and version bump for X.Y.Z` | `CHANGELOG.md`, `package.json`, `package-lock.json` only; the tag points here (`v0.7.2` → `c51f9f8`)[^commit-bump-072][^git-history] |
+| `docs: changelog and version bump for X.Y.Z` | `CHANGELOG.md` and `package.json` only (plus `package-lock.json` before the pnpm switch); the tag points here (`v0.7.2` → `c51f9f8`)[^commit-bump-072][^git-history] |
 | `docs: changelog entry for …` | CHANGELOG-only follow-ups between releases[^git-history] |
 
 Conventional-commit subjects start in July 2026. Earlier history uses free-form subjects such as "Bump version to 0.5.0, update docs…".[^git-history]

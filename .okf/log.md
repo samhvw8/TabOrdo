@@ -1,5 +1,8 @@
 # Update Log
 
+## 2026-09-28
+* **Update**: TabOrdo moved from npm to pnpm (`pnpm-lock.yaml`, `packageManager: pnpm@12.6.0`), so a version bump no longer touches a lockfile — [release](/processes/release.md). `build.yml` and `publish.yml` still run `npm ci` and will fail until they switch to pnpm.
+
 ## 2026-09-22
 * **Creation**: The Chrome 138 floor as a standing decision, with what it removed and what it costs — [minimum Chrome 138](/decisions/minimum-chrome-138.md).
 * **Update**: Promo tiles for the store listing (Google's rules, the 2026-09-22 design, the render recipe); v0.7.3's failed and v0.8.0's successful store submissions; the Chrome 138 requirement on the product page; current popup chunk sizes — [store listing](/processes/chrome-web-store-listing.md), [release](/processes/release.md), [TabOrdo](/tabordo.md), [overview](/architecture/overview.md).
