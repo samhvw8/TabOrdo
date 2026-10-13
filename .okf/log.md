@@ -1,5 +1,8 @@
 # Update Log
 
+## 2026-10-13
+* **Update**: The popup shows a loading screen at `load` and mounts the app after it, so favicons can no longer hold the popup hidden; each open is timed and a slow one shows its breakdown — [overview](/architecture/overview.md).
+
 ## 2026-09-28
 * **Update**: TabOrdo moved from npm to pnpm (`pnpm-lock.yaml`, `packageManager: pnpm@12.6.0`), so a version bump no longer touches a lockfile — [release](/processes/release.md). `build.yml` and `publish.yml` still run `npm ci` and will fail until they switch to pnpm.
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Improvements
+
+- **The palette opens faster while a page is loading** — Chrome keeps the popup hidden until its page has loaded, and until then may run it at low priority, for example while you reload a tab Chrome had unloaded. The popup now loads only a few kilobytes before it shows, and the rest behind a short "Loading TabOrdo…" screen; one measured open went from 2.5 s to under 0.4 s. Keys you type during that screen still reach the search box. An open that still takes 400 ms or more shows where the time went, above the footer
+
 ## 0.8.0 — 2026-09-22
 
 ### Improvements

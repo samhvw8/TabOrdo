@@ -3,7 +3,7 @@ type: Architecture
 title: Architecture overview
 description: How TabOrdo's MV3 entrypoints, lib modules, command dispatch and storage areas fit together, and which realm owns what.
 tags: [architecture, mv3, storage, realms]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-22T23:00:00Z }
+generated: { by: claude-code/claude-opus-5-5, at: 2026-10-13T07:40:00Z }
 sources:
   - id: wxt-config
     resource: https://github.com/samhvw8/TabOrdo/blob/main/wxt.config.ts
@@ -37,6 +37,14 @@ sources:
     resource: https://github.com/samhvw8/TabOrdo/blob/main/entrypoints/popup/App.svelte
     title: Popup and side panel component
     last_modified: 2026-09-22
+  - id: popup-main
+    resource: https://github.com/samhvw8/TabOrdo/blob/main/entrypoints/popup/main.ts
+    title: Popup mount after load, with open timing
+    last_modified: 2026-10-13
+  - id: chromium-popup
+    resource: https://source.chromium.org/chromium/chromium/src/+/main:chrome/browser/ui/views/extensions/extension_popup.cc
+    title: ExtensionPopup shows on DocumentOnLoadCompletedInPrimaryMainFrame
+    last_modified: 2026-10-13
   - id: sidepanel-main
     resource: https://github.com/samhvw8/TabOrdo/blob/main/entrypoints/sidepanel/main.ts
     title: Side panel mount
@@ -88,7 +96,7 @@ TabOrdo is a Chrome MV3 extension built with WXT, Svelte 5 and TypeScript. Four 
 | Entrypoint | Realm | Role |
 |---|---|---|
 | `entrypoints/background/index.ts` | Service worker | Wiring only. Registers the tab listeners (auto-group, auto-sort, auto-ungroup, switch-to-existing, pin follow, lock sync, lineage), the context menu, the auto-discard alarm and the `/aigroup` runner, and hands each event to a lib function. Only the lineage listeners keep their bodies inline.[^background] |
-| `entrypoints/popup/` | Action popup, 450x600 | Mounts `App.svelte`. Chrome tears it down on any focus loss.[^popup-app] `RulesEditor`, `PinsPanel` and `SettingsPanel` are dynamic imports in their own chunks (about 39 KB minified, beside a 157 KB App chunk), started in `requestIdleCallback` after first paint so a panel opens from a settled promise with no blank frame.[^popup-app] |
+| `entrypoints/popup/` | Action popup, 450x600 | Mounts `App.svelte`. Chrome tears it down on any focus loss.[^popup-app] Chrome keeps the popup hidden until the page's `load` event, so `main.ts` shows a static "Loading TabOrdo…" screen and fetches Svelte, `App.svelte` and `app.css` only after `load`; it has no static imports. Until the popup is visible Chrome can run it at background priority: one measured open (105 tabs, a discarded tab reloading) parsed the HTML in 20 ms, ran the first script line at 1.7 s and reached `load` at 2.3 s, then needed 0.2 s for everything after. Before, anything the app added in time (tab favicons are remote URLs) held the popup hidden until it downloaded. Keys typed on the loading screen pass in as `initialQuery`. Each open is timed by `lib/opentiming.ts`, logged to the popup console, and shown as a "Slow open" strip above the footer when it took 400 ms or more to paint the tabs; the strip lists every file fetched before `load`, so a slow fetch can be told from a page that was only waiting.[^popup-main][^chromium-popup] `RulesEditor`, `PinsPanel` and `SettingsPanel` are dynamic imports in their own chunks (about 39 KB minified, beside a 157 KB App chunk), started in `requestIdleCallback` after first paint so a panel opens from a settled promise with no blank frame.[^popup-app] |
 | `entrypoints/sidepanel/` | Side panel | Mounts the **same** `popup/App.svelte` with `fluid: true`.[^sidepanel-main] Declared as `side_panel.default_path` in the manifest.[^wxt-config] |
 | `entrypoints/archive/` | Extension tab page | Browses and restores archived tabs; opened via `chrome.runtime.getURL("/archive.html")`.[^popup-app] |
 
@@ -147,6 +155,8 @@ The popup and the side panel are the same component in two realms. Each has its 
 [^arrange-ts]: lib/arrange.ts
 [^aigroup-ts]: lib/aigroup.ts
 [^popup-app]: entrypoints/popup/App.svelte
+[^popup-main]: entrypoints/popup/main.ts and lib/opentiming.ts
+[^chromium-popup]: Chromium extension_popup.cc
 [^sidepanel-main]: entrypoints/sidepanel/main.ts
 [^tabs-barrel]: lib/tabs/index.ts
 [^actions-ts]: lib/actions.ts
