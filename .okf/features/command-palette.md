@@ -4,7 +4,7 @@ title: Command palette and dashboard actions
 description: How slash commands, @ triage views and dashboard tiles are registered, dispatched to one handler per command, confirmed, and extended.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/actions.ts
 tags: [command-palette, dashboard, actions, triage]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-22T21:30:00Z }
+generated: { by: claude-code/claude-opus-5-5, at: 2026-10-16T09:55:00Z }
 sources:
   - id: commands-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/commands.ts
@@ -72,7 +72,7 @@ The palette (the `Cmd+E` popup, and the same component mounted in the side panel
 |------|------|-------|
 | `ACTIONS`, the action table | `lib/commands.ts` | One row per slash command and per tile: `id`, `description`, browse cluster (`group`), colour, `hidden`, `aliasOf`, and optionally a `tile` (label, icon, tooltip, `confirm`, `own`) and an `alt` mode[^commands-ts] |
 | `ACTION_COMMANDS`, `ALL_COMMANDS`, `groupCommands`, `matchCommands` | `lib/commands.ts` | The palette's list and browse clusters, derived from the table, beside the hand-written `SEARCH_COMMANDS`, `VIEW_COMMANDS` and `TRIAGE_COMMANDS`[^commands-ts] |
-| `TILES`, `TILE_BY_ID`, `MORE_SECTIONS`, `UNLOCK_FACE`, `DEFAULT_DASHBOARD_IDS` | `lib/dashboard.ts` | Tiles, their alt faces and the More panel list, all derived from the table except the defaults[^dashboard-ts] |
+| `TILES`, `TILE_BY_ID`, `MORE_SECTIONS`, `searchTiles`, `UNLOCK_FACE`, `DEFAULT_DASHBOARD_IDS` | `lib/dashboard.ts` | Tiles, their alt faces, the More panel list and its filter, all derived from the table except the defaults[^dashboard-ts] |
 | `ACTION_HANDLERS`, `TILE_HANDLERS`, `runAction`, `runTile` | `lib/actions.ts` | One async handler per command, and one per tile that does something of its own[^actions-ts] |
 
 Every label is derived from what you type (`/close`, `@a`), and an alias's description, cluster and colour come from its target. A tile's label defaults to its id capitalised and its tooltip to the row's description.[^commands-ts][^dashboard-ts]
@@ -136,7 +136,7 @@ All triage views are rows in one `TRIAGE_CATEGORIES` table; text after a view re
 
 ## Dashboard tiles, alt-click and confirmations
 
-- The grid renders `dashboardActionIds` from `chrome.storage.local` (defaults `sort`, `group`, `dedup`, `merge`, `pin`); the ★ in the More panel toggles a tile. A tile's id is its row's id, and stored ids must keep resolving, which is why the two lock tiles still carry the old ids `pin` and `pingroup`, on the alias rows.[^dashboard-ts][^popup-app]
+- The grid renders `dashboardActionIds` from `chrome.storage.local` (defaults `sort`, `group`, `dedup`, `merge`, `pin`); the pin button on each More panel row adds or removes a tile, and is always visible (filled while the tile is on the grid). A tile's id is its row's id, and stored ids must keep resolving, which is why the two lock tiles still carry the old ids `pin` and `pingroup`, on the alias rows.[^dashboard-ts][^popup-app]
 - `handleOverflowAction` is one switch with a `default: goBack(); dashTile(action)`. `dashTile` wraps `dashAction` around `runTile(id, ctx)`, which runs `TILE_HANDLERS[id]` when the row's tile is marked `own` and the bare command's handler otherwise. So a tile and its slash command share one handler and report the same status text.[^popup-app][^actions-ts]
 - `TILE_HANDLERS` covers the tiles whose id names a command that does something else: Group+ (`group`) groups every loose tab by domain through `lib/arrange.ts` while `/group` groups the matches; Ungroup (`ungroup`) ungroups everything while bare `/ungroup` takes the active tab; Regroup (`regroup`) is a tile-only row with no slash command. Each takes the undo snapshot.[^actions-ts][^commands-ts]
 - The Sort tile runs bare `/sort`, whose domain sort is `sortWindowByDomain` from `lib/arrange.ts`, the function the action-icon menu's Sort also calls.[^actions-ts]
@@ -145,6 +145,7 @@ All triage views are rows in one `TRIAGE_CATEGORIES` table; text after a view re
 - An `alt` names a target row (`to`) and optionally a `query`. Its face defaults to the target tile's label, icon and tooltip, so a swap pair states nothing twice. Swap pairs are symmetric: Close Left/Right, Split V/H, Save/Load, Unite/Isolate, Branch/Branch Up. Mute alt-clicks to Unmute, which has no tile and so supplies its own face; Lock Tab and Lock Group alt-click to a lock at `^`.[^commands-ts][^dashboard-ts][^readme]
 - `tileFace` in the component gives the grid and the More panel the same face: the Lock Tab tile's state (`UNLOCK_FACE` while held), Focus's Unfocus face, and the alt face while Alt is held. The More panel adds the archive size as the Archive row's subtitle.[^popup-app]
 - The More panel lists every tile under the palette's browse clusters, in `ACTION_GROUP_ORDER` and table order.[^dashboard-ts]
+- The More panel has its own filter box, focused when the panel opens. A query replaces the clusters with one list ranked by `searchTiles`: every word must match, and each word scores by where it lands — label or id start, a word in the label, anywhere in the label or id, the tooltip or cluster, the label's letters in order (`dedp`), then one typo for words of 4+ letters (`grpup`). A leading `/` is ignored. ↑/↓ move the selection, Enter runs it, Shift+Enter pins or unpins it, Escape clears the query.[^dashboard-ts][^popup-app]
 - Selection bar: Close, Archive and Discard run the `/close`, `/archive` and `/discard` handlers on the ticked tabs; that is how the Archive button, which used to close with no undo snapshot, got one.[^popup-app][^commit-54b3787]
 - A group header's Sort and Extract run `sortGroup` and `extractGroup` from `lib/actions.ts`, which snapshot first like the handlers.[^actions-ts]
 - Tiles with `confirm` in the table (`merge`, `dedup`, `closeleft`, `closeright`, `closeold`, `closesite`, and `focus` only while no workspace is saved) arm on the first click (label "Confirm") and run on a second within 3 s. Selection Close confirms too; selection Archive does not. Both go through one helper, `confirmed(id)`.[^commands-ts][^popup-app] Typed commands never confirm: typing is already deliberate.[^changelog]
@@ -185,7 +186,7 @@ All triage views are rows in one `TRIAGE_CATEGORIES` table; text after a view re
 | File | Guards |
 |------|--------|
 | `lib/actions.test.ts` | Dispatch, aliases, `runTile`, per-handler behaviour, the group-header snapshot[^actions-test] |
-| `lib/dashboard.test.ts` | Stored tile ids still resolve, tile faces, alt symmetry[^dashboard-test] |
+| `lib/dashboard.test.ts` | Stored tile ids still resolve, tile faces, alt symmetry, More panel filter ranking and typo tolerance[^dashboard-test] |
 | `lib/commands.test.ts` | `matchCommands` browse, aliases, fuzzy; unique row ids[^commands-test] |
 
 # Related

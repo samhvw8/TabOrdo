@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Improvements
+
+- **Search the More panel** — a search box at the top of More finds an action as you type. It matches words in the name or description, letters in order (`dedp` finds Dedup) and one typo (`grpup` finds Group), with the best match first. Use ↑/↓ to choose, Enter to run, Shift+Enter to pin it to the dashboard, and Esc to clear
+- **Pin actions to the dashboard from More** — each row now has a pin button that is always shown, filled while the action is on your dashboard. The old ★ only appeared on hover
+
 ## 0.8.1 — 2026-10-13
 
 ### Improvements

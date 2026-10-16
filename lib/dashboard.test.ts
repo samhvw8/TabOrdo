@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { TILES, TILE_BY_ID, DEFAULT_DASHBOARD_IDS } from "./dashboard.ts";
+import { TILES, TILE_BY_ID, DEFAULT_DASHBOARD_IDS, searchTiles } from "./dashboard.ts";
 
 // Everything in dashboard.ts is derived from the action table, so these check the derivation
 // and the promises made to users, not that hand-kept lists agree.
@@ -47,5 +47,46 @@ describe("alt-click modes", () => {
     const left = TILE_BY_ID.get("closeleft")!;
     const right = TILE_BY_ID.get("closeright")!;
     expect(left.alt).toMatchObject({ action: "closeright", label: right.label, icon: right.icon, tooltip: right.tooltip });
+  });
+});
+
+describe("searchTiles (More panel filter)", () => {
+  const ids = (q: string) => searchTiles(q).map((t) => t.id);
+
+  it("returns nothing to rank for an empty query", () => {
+    expect(searchTiles("  ")).toEqual([]);
+  });
+
+  it("puts a label prefix match first", () => {
+    expect(ids("dedup")[0]).toBe("dedup");
+    expect(ids("sor")[0]).toBe("sort");
+  });
+
+  it("matches the slash command form", () => {
+    expect(ids("/closeold")[0]).toBe("closeold");
+  });
+
+  it("finds a tile by a word in its tooltip", () => {
+    const archive = TILE_BY_ID.get("archive")!;
+    const word = archive.tooltip.split(/\W+/).find((w) => w.length > 5)!;
+    expect(ids(word)).toContain("archive");
+  });
+
+  it("tolerates a missing letter", () => {
+    expect(ids("dedp")).toContain("dedup");
+  });
+
+  it("tolerates a one-letter typo", () => {
+    expect(ids("grpup")).toContain("group");
+  });
+
+  it("needs every word to match somewhere", () => {
+    const close = ids("close old");
+    expect(close[0]).toBe("closeold");
+    expect(close).not.toContain("sort");
+  });
+
+  it("returns nothing for gibberish", () => {
+    expect(ids("zzqxj")).toEqual([]);
   });
 });

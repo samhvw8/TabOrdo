@@ -4,7 +4,7 @@
   import { getAllTabs, switchToTab, closeTabs, pinCurrentTab, unpinCurrentTab, outlineBranch, type TabInfo } from "../../lib/tabs/index.ts";
   import { getPinnedTabs, getPinForTab, type PinnedTabEntry } from "../../lib/pin.ts";
   import { getArchiveCount } from "../../lib/archive.ts";
-  import { tabsToSearchItems, searchBookmarks, searchHistory, parseCommand, type SearchResult } from "../../lib/search.ts";
+  import { tabsToSearchItems, searchBookmarks, searchHistory, parseCommand, highlightSegments, type SearchResult } from "../../lib/search.ts";
   import { createTabSearch, type TabSearch } from "../../lib/tabsearch.ts";
   import { resolveView, readingListRows, duplicateTabs, firstSelectable, nextSelectable, ACTION_PREFIXES, type ViewContext } from "../../lib/views.ts";
   import { createDebouncer } from "../../lib/debounce.ts";
@@ -20,7 +20,7 @@
   import { groupDotClass, groupBorderClass, groupBgClass, relTime } from "../../lib/format.ts";
   import { createFlash } from "../../lib/flash.ts";
   import { runAction, runTile, sortGroup, extractGroup, type ActionContext, type ActionResult } from "../../lib/actions.ts";
-  import { TILE_BY_ID, DEFAULT_DASHBOARD_IDS, MORE_SECTIONS, UNLOCK_FACE, type Tile, type TileFace } from "../../lib/dashboard.ts";
+  import { TILE_BY_ID, DEFAULT_DASHBOARD_IDS, MORE_SECTIONS, UNLOCK_FACE, searchTiles, type Tile, type TileFace } from "../../lib/dashboard.ts";
   import SearchInput from "../../components/SearchInput.svelte";
   import ResultList from "../../components/ResultList.svelte";
   import CommandHints from "../../components/CommandHints.svelte";
@@ -110,6 +110,35 @@
 
   let dashboardActionIds = $state<string[]>([...DEFAULT_DASHBOARD_IDS]);
   let dashboardActions = $derived(dashboardActionIds.map(id => TILE_BY_ID.get(id)).filter((t): t is Tile => !!t));
+
+  // The More panel's filter. A query swaps the clustered browse list for one ranked list, so the
+  // best match is on top and Enter runs it. Arrow keys walk whichever list is showing.
+  let moreQuery = $state("");
+  let moreIndex = $state(0);
+  let moreSections = $derived<{ title: string; tiles: Tile[] }[]>(moreQuery.trim()
+    ? [{ title: "", tiles: searchTiles(moreQuery) }]
+    : MORE_SECTIONS);
+  let moreList = $derived(moreSections.flatMap((s) => s.tiles));
+  $effect(() => { if (activeSection !== "more") { moreQuery = ""; moreIndex = 0; } });
+
+  function moreKeydown(e: KeyboardEvent) {
+    const tile = moreList[moreIndex];
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (moreList.length === 0) return;
+      moreIndex = (moreIndex + (e.key === "ArrowDown" ? 1 : -1) + moreList.length) % moreList.length;
+      document.getElementById(`more-${moreList[moreIndex].id}`)?.scrollIntoView({ block: "nearest" });
+    } else if (e.key === "Enter" && tile) {
+      e.preventDefault();
+      if (e.shiftKey) toggleDashboardAction(tile.id);
+      else handleOverflowAction(tile.id);
+    } else if (e.key === "Escape" && moreQuery) {
+      e.preventDefault();
+      e.stopPropagation();
+      moreQuery = "";
+      moreIndex = 0;
+    }
+  }
 
   let activeTabPin = $derived.by(() => {
     const active = dashboardTabs.find(t => t.active && t.windowId === currentWindowId);
@@ -1046,35 +1075,68 @@
       </div>
     </div>
   {:else if activeSection === "more"}
-    <div class="flex-1 overflow-y-auto px-2 py-2 min-h-0">
-      <div class="px-2 pb-1.5 text-[9px] text-text-muted/60">Click ★ to add/remove actions from dashboard</div>
-      {#each MORE_SECTIONS as section, si}
+    <div class="px-3 pt-2 pb-1.5 border-b border-border/40">
+      <!-- svelte-ignore a11y_autofocus -->
+      <input
+        type="text"
+        class="w-full px-2 py-1 rounded-md border border-border bg-surface-hover text-xs text-text placeholder:text-text-muted focus:outline-none focus:border-primary"
+        placeholder="Find an action..."
+        aria-label="Find an action"
+        role="combobox"
+        aria-controls="more-list"
+        aria-expanded="true"
+        aria-activedescendant={moreList[moreIndex] ? `more-${moreList[moreIndex].id}` : undefined}
+        autofocus
+        bind:value={moreQuery}
+        oninput={() => { moreIndex = 0; }}
+        onkeydown={moreKeydown}
+      />
+      <div class="pt-1 text-[9px] text-text-muted/60">↵ run · ⇧↵ pin to dashboard · click the pin to add or remove</div>
+    </div>
+    <div id="more-list" role="listbox" class="flex-1 overflow-y-auto px-2 py-2 min-h-0">
+      {#if moreList.length === 0}
+        <div class="px-2 py-6 text-center text-[11px] text-text-muted">No action matches "{moreQuery.trim()}"</div>
+      {/if}
+      {#each moreSections as section, si}
         {#if si > 0}
           <div class="my-1 mx-1 h-px bg-border/20"></div>
         {/if}
-        <div class="px-2 pt-1.5 pb-1 text-[9px] font-semibold uppercase tracking-wider text-text-muted/70">{section.title}</div>
+        {#if section.title}
+          <div class="px-2 pt-1.5 pb-1 text-[9px] font-semibold uppercase tracking-wider text-text-muted/70">{section.title}</div>
+        {/if}
         <div class="grid gap-0.5">
           {#each section.tiles as tile}
             {@const face = tileFace(tile, false)}
+            {@const pinned = dashboardActionIds.includes(tile.id)}
+            {@const selected = moreList[moreIndex]?.id === tile.id}
             <div
-              class="w-full text-left flex items-start gap-2.5 px-2 py-1.5 rounded-md hover:bg-surface-hover active:bg-surface-active transition-colors group cursor-pointer {pendingConfirm === tile.id ? 'bg-accent-red/10 ring-1 ring-accent-red/30' : ''}"
-              role="button" tabindex="0"
+              id="more-{tile.id}"
+              class="w-full text-left flex items-start gap-2.5 px-2 py-1.5 rounded-md hover:bg-surface-hover active:bg-surface-active transition-colors group cursor-pointer {pendingConfirm === tile.id ? 'bg-accent-red/10 ring-1 ring-accent-red/30' : selected ? 'bg-surface-hover ring-1 ring-primary/40' : ''}"
+              role="option" tabindex="-1"
+              aria-selected={selected}
               onclick={() => handleOverflowAction(tile.id)}
               onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleOverflowAction(tile.id); } }}
+              onmousemove={() => { moreIndex = moreList.indexOf(tile); }}
             >
               <span class="shrink-0 w-5 h-5 rounded bg-surface-active/60 flex items-center justify-center mt-px group-hover:bg-primary/15 group-hover:text-primary transition-colors">
                 {@html smallIcon(face.icon)}
               </span>
               <div class="flex-1 min-w-0">
-                <div class="text-xs font-medium {pendingConfirm === tile.id ? 'text-accent-red' : 'text-text'}">{pendingConfirm === tile.id ? "Click again to confirm" : face.label}</div>
+                <div class="text-xs font-medium {pendingConfirm === tile.id ? 'text-accent-red' : 'text-text'}">
+                  {#if pendingConfirm === tile.id}Click again to confirm{:else}{#each highlightSegments(face.label, moreQuery.replace(/^\//, "")) as seg}{#if seg.matched}<span class="text-primary font-semibold">{seg.text}</span>{:else}{seg.text}{/if}{/each}{/if}
+                </div>
                 <!-- The archive's size is worth a row's subtitle; on the grid the tooltip says what the tile does. -->
                 <div class="text-[10px] text-text-muted/70 leading-tight">{tile.id === "archive" ? `${archiveCount} saved` : face.tooltip}</div>
               </div>
               <button
-                class="shrink-0 self-center text-sm leading-none transition-[color,opacity] hover:scale-110 {dashboardActionIds.includes(tile.id) ? 'text-primary' : 'text-text-muted/30 opacity-0 group-hover:opacity-100'}"
+                class="shrink-0 self-center w-6 h-6 rounded flex items-center justify-center transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary {pinned ? 'text-primary bg-primary/10 hover:bg-primary/20' : 'text-text-muted/50 hover:text-text hover:bg-surface-active'}"
                 onclick={(e) => { e.stopPropagation(); toggleDashboardAction(tile.id); }}
-                title={dashboardActionIds.includes(tile.id) ? "Remove from dashboard" : "Add to dashboard"}
-              >{dashboardActionIds.includes(tile.id) ? "★" : "☆"}</button>
+                title={pinned ? "Unpin from dashboard" : "Pin to dashboard"}
+                aria-label={pinned ? `Unpin ${face.label} from dashboard` : `Pin ${face.label} to dashboard`}
+                aria-pressed={pinned}
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill={pinned ? "currentColor" : "none"} stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>
+              </button>
             </div>
           {/each}
         </div>
