@@ -9,7 +9,7 @@ sources:
   - id: rules
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/rules.ts
     title: lib/rules.ts
-    last_modified: 2026-09-22
+    last_modified: 2026-10-17
   - id: rules-test
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/rules.test.ts
     title: lib/rules.test.ts
@@ -82,7 +82,7 @@ On the very first read, `getConfig()` writes the all-false default. Normalisatio
 
 | Function | Input | Semantics |
 |----------|-------|-----------|
-| `matchDomainToRule(host, rules)` | hostname (`www.` stripped) | Rules in list order, patterns in order, first `domainMatches` wins |
+| `matchDomainToRule(host, rules)` | hostname (`www.` stripped) | Rules in list order, patterns in order, first `domainMatches` wins. Compiles plain patterns into an exact/dot-suffix `Map<string, number>` and `*` patterns into a fallback list, cached per `rules` array and pattern signature (`buildSortRanker` shares the same compiler) |
 | `domainMatches(host, p)` | hostname | No `*`: exact or subdomain (`github.com` covers `docs.github.com`). With `*`: whole-string glob. Case-insensitive by default |
 | `isIgnoredUrl(url, list)` | **hostname only** | Regex rules via `ruleMatches`, others via `domainMatches`; disabled rules skipped |
 | `isIgnoredGroupName(title, list)` | group title | `ruleMatches`: exact string, glob or regex |

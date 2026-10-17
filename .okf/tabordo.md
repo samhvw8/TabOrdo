@@ -36,7 +36,7 @@ sources:
   - id: package-json
     resource: https://github.com/samhvw8/TabOrdo/blob/main/package.json
     title: package.json
-    last_modified: 2026-08-23
+    last_modified: 2026-10-17
   - id: sidebar
     resource: https://github.com/samhvw8/TabOrdo/blob/main/components/Sidebar.svelte
     title: components/Sidebar.svelte
@@ -64,7 +64,7 @@ sources:
   - id: changelog
     resource: https://github.com/samhvw8/TabOrdo/blob/main/CHANGELOG.md
     title: CHANGELOG.md
-    last_modified: 2026-09-17
+    last_modified: 2026-10-17
   - id: commit-name
     resource: https://github.com/samhvw8/TabOrdo/commit/83323042c80389b783debc996d7a6485d68797e5
     title: "Update extension name for SEO: TabOrdo - Tab Manager & Organizer"
@@ -88,7 +88,7 @@ sources:
 
 # Overview
 
-TabOrdo ("TabOrdo - Tab Manager & Organizer") is a keyboard-first tab manager for Chrome. You press `Cmd+E` and use a command palette to search, sort, group, deduplicate, archive and triage tabs.[^readme] It is a Manifest V3 extension built with WXT, Svelte 5, TypeScript and Tailwind 4, tested with vitest, and currently at version `0.7.2`.[^claude-md][^package-json] The product name was chosen for store search (SEO).[^commit-name]
+TabOrdo ("TabOrdo - Tab Manager & Organizer") is a keyboard-first tab manager for Chrome. You press `Cmd+E` and use a command palette to search, sort, group, deduplicate, archive and triage tabs.[^readme] It is a Manifest V3 extension built with WXT, Svelte 5, TypeScript and Tailwind 4, tested with vitest, and currently at version `0.9.2`.[^claude-md][^package-json] The product name was chosen for store search (SEO).[^commit-name]
 
 It needs Chrome 138 or later ([minimum Chrome 138](/decisions/minimum-chrome-138.md)).[^wxt-config]
 

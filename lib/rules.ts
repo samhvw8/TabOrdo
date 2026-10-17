@@ -354,17 +354,105 @@ export async function populateFromCurrentGroups(): Promise<number> {
   return added;
 }
 
+// Move 1 & 2: collapse domain -> rule index once per rule list. Plain domain patterns
+// (`github.com`, `docs.google.com`) go into `plainByDomain` keyed by lower-case domain, keeping
+// the first (lowest) rule index that mentions each pattern. Matching a hostname then walks its
+// dot boundaries (`a.b.c` -> `a.b.c`, `b.c`, `c`) in O(dots) Map reads instead of scanning
+// every rule and pattern, and only checks wildcard patterns whose rule index precedes the best
+// plain match.
+interface CompiledDomainMatcher {
+  plainByDomain: Map<string, number>;
+  fallback: { ruleIndex: number; pattern: string }[];
+  firstFallbackRuleIndex: number;
+  hostMemo: Map<string, number>;
+}
+
+const compiledGroupRules = new WeakMap<GroupRule[], CompiledDomainMatcher>();
+
+function buildDomainMatcher(patternLists: readonly (readonly string[])[]): CompiledDomainMatcher {
+  const plainByDomain = new Map<string, number>();
+  const fallback: { ruleIndex: number; pattern: string }[] = [];
+  let firstFallbackRuleIndex = Infinity;
+
+  for (let r = 0; r < patternLists.length; r++) {
+    const patterns = patternLists[r];
+    if (!Array.isArray(patterns)) continue;
+    for (let i = 0; i < patterns.length; i++) {
+      const raw = patterns[i];
+      if (raw.length > 0 && !raw.startsWith(".") && !raw.includes("*")) {
+        const lower = raw.toLowerCase();
+        if (!plainByDomain.has(lower)) plainByDomain.set(lower, r);
+      } else {
+        if (r < firstFallbackRuleIndex) firstFallbackRuleIndex = r;
+        fallback.push({ ruleIndex: r, pattern: raw });
+      }
+    }
+  }
+
+  return { plainByDomain, fallback, firstFallbackRuleIndex, hostMemo: new Map() };
+}
+
+function matchRuleIndex(domain: string, matcher: CompiledDomainMatcher): number {
+  const d = domain.toLowerCase();
+  const cached = matcher.hostMemo.get(d);
+  if (cached !== undefined) return cached;
+
+  let best = Infinity;
+  const { plainByDomain, fallback, firstFallbackRuleIndex } = matcher;
+  if (plainByDomain.size > 0) {
+    const direct = plainByDomain.get(d);
+    if (direct !== undefined) best = direct;
+    let dot = d.indexOf(".");
+    while (dot !== -1 && best > 0) {
+      const hit = plainByDomain.get(d.slice(dot + 1));
+      if (hit !== undefined && hit < best) best = hit;
+      dot = d.indexOf(".", dot + 1);
+    }
+  }
+
+  if (firstFallbackRuleIndex < best) {
+    for (let i = 0; i < fallback.length; i++) {
+      const fb = fallback[i];
+      if (fb.ruleIndex >= best) continue;
+      if (domainMatches(d, fb.pattern)) {
+        best = fb.ruleIndex;
+        if (best === 0) break;
+      }
+    }
+  }
+
+  const result = best === Infinity ? -1 : best;
+  if (matcher.hostMemo.size >= 4096) matcher.hostMemo.clear();
+  matcher.hostMemo.set(d, result);
+  return result;
+}
+
+let lastGroupRulesSig = "";
+let lastGroupRulesMatcher: CompiledDomainMatcher | null = null;
+
 export function matchDomainToRule(
   domain: string,
   rules: GroupRule[]
 ): GroupRule | null {
-  for (const rule of rules) {
-    if (!Array.isArray(rule.patterns)) continue;
-    for (const pattern of rule.patterns) {
-      if (domainMatches(domain, pattern)) return rule;
+  if (rules.length === 0) return null;
+  let matcher = compiledGroupRules.get(rules);
+  if (!matcher) {
+    let sig = "";
+    for (let r = 0; r < rules.length; r++) {
+      const p = rules[r].patterns;
+      sig += Array.isArray(p) ? `${p.join("\0")}\x01` : "\x01";
     }
+    if (sig === lastGroupRulesSig && lastGroupRulesMatcher) {
+      matcher = lastGroupRulesMatcher;
+    } else {
+      matcher = buildDomainMatcher(rules.map((r) => r.patterns));
+      lastGroupRulesSig = sig;
+      lastGroupRulesMatcher = matcher;
+    }
+    compiledGroupRules.set(rules, matcher);
   }
-  return null;
+  const idx = matchRuleIndex(domain, matcher);
+  return idx === -1 ? null : rules[idx];
 }
 
 export function domainMatches(domain: string, pattern: string, caseSensitive?: boolean): boolean {
@@ -525,7 +613,7 @@ export function buildSortRanker(rules: SortRule[]): SortRanker {
     tierBase.set(rule.id, base);
     base += rule.patterns.length;
   }
-
+  const hostMatcher = buildDomainMatcher(active.map((r) => [r.domain]));
   const memo = new Map<string, SortRank>();
   return (url: string): SortRank => {
     const hit = memo.get(url);
@@ -535,8 +623,9 @@ export function buildSortRanker(rules: SortRule[]): SortRanker {
     if (hostname) {
       // First match wins, so a specific `mail.google.com` entry listed above a broad
       // `google.com` one takes precedence rather than being shadowed by it.
-      const rule = active.find((r) => domainMatches(hostname, r.domain));
-      if (rule) {
+      const idx = matchRuleIndex(hostname, hostMatcher);
+      if (idx !== -1) {
+        const rule = active[idx];
         const tier = pathTier(url, rule.patterns);
         rank = {
           domain: rule.rankFirst ? domainRank.get(rule.id)! : UNRANKED,

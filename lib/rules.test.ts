@@ -330,6 +330,18 @@ describe("matchDomainToRule", () => {
     expect(matchDomainToRule("gist.github.com", rules)?.id).toBe("catchall");
   });
 
+  it("preserves list precedence across plain domains, subdomains, and fresh rule arrays", () => {
+    const broadFirst = [rule("broad", ["github.com"]), rule("gist", ["gist.github.com"])];
+    expect(matchDomainToRule("gist.github.com", broadFirst)?.id).toBe("broad");
+
+    const specificFirst = [rule("gist", ["gist.github.com"]), rule("broad", ["github.com"])];
+    expect(matchDomainToRule("gist.github.com", specificFirst)?.id).toBe("gist");
+    expect(matchDomainToRule("api.github.com", specificFirst)?.id).toBe("broad");
+
+    const renamedCopy = [{ ...specificFirst[0], name: "Gist Renamed" }, specificFirst[1]];
+    expect(matchDomainToRule("gist.github.com", renamedCopy)?.name).toBe("Gist Renamed");
+  });
+
   it("skips rules whose patterns array is missing", () => {
     const broken = { id: "x", name: "x", color: "blue" } as unknown as GroupRule;
     expect(matchDomainToRule("github.com", [broken, rule("ok", ["github.com"])])?.id).toBe("ok");

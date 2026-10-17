@@ -1,5 +1,8 @@
 # Update Log
 
+## 2026-10-17
+* **Update**: Defer `entrypoints/popup/main.ts` `start()` via `MessageChannel` after `load` (avoiding both synchronous `<link rel="stylesheet">` injection inside `load` and hidden-frame `DOMTimer` throttling on `setTimeout`), prefetch first-paint Chrome IPCs (`tabs`, `tabGroups`, `windows.getCurrent`, `storage.local`, `storage.session`) at script start, move `.confirm-countdown` into `app.css` so `App.svelte` has no blocking CSS preload dependency, cache haystack entries per `(title, url, groupTitle)`, collapse literal tiers into one pass with `Uint8Array` `seen` pruning before `uFuzzy.info` and `indexOf` subsequence jumps, compile `matchDomainToRule` / `buildSortRanker` domain patterns into a lookup table, and bump version to 0.9.2 — [overview](/architecture/overview.md), [search](/features/search.md), [grouping rules](/features/grouping-rules.md), [TabOrdo](/tabordo.md).
+
 ## 2026-10-16
 * **Update**: The More panel has a fuzzy filter (`searchTiles`) with keyboard run and pin, and a visible pin button per row — [command palette](/features/command-palette.md).
 

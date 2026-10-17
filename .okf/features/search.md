@@ -9,7 +9,7 @@ sources:
   - id: search-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/search.ts
     title: Search engine
-    last_modified: 2026-09-22
+    last_modified: 2026-10-17
   - id: tabsearch-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabsearch.ts
     title: Popup search over one tab load
@@ -89,7 +89,7 @@ The palette ranks tabs with `rankedSearch`, a single ordered search that replace
 
 Group titles sit in both haystacks, so a group-name hit ranks as a title hit, and `/archive Work` reaches every tab in the "Work" group.[^search-ts][^changelog]
 
-`buildHaystacks` produces both in one pass, running pinyin and diacritic stripping once per label. The single builders share the same per-item code. The strings are identical to stripping each whole entry, because stripping works per character and every join is a space; a test pins this with Vietnamese, Korean, CJK and leading-combining-mark input.[^search-ts][^search-test]
+`buildHaystacks` produces both in one pass, running pinyin and diacritic stripping once per label, and caches each entry by `title\0url\0groupTitle` (or `title\0groupTitle` for title-only) so reloads and tab actions reuse unchanged entries (2.25 ms to 0.25 ms at 1000 tabs). `stripDiacritics` also takes a fast path when all code units are below U+0080. The single builders share the same per-item code. The strings are identical to stripping each whole entry, because stripping works per character and every join is a space; a test pins this with Vietnamese, Korean, CJK and leading-combining-mark input.[^search-ts][^search-test]
 
 # Ranking
 
@@ -143,7 +143,7 @@ Every new query cancels a pending lookup and clears `loading`, so a plain query 
 
 # Performance decisions
 
-- `prepare()` caches lower-cased entries and their word splits in a `WeakMap` keyed by the haystack **array**. The first search per load pays; later keystrokes hit. Contract: replace a haystack, never mutate it in place.[^search-ts]
+- `prepare()` caches lower-cased entries and their word splits in a `WeakMap` keyed by the haystack **array**. The first search per load pays; later keystrokes hit. Contract: replace a haystack, never mutate it in place. `rankedSearch` assigns each entry's literal tier (0..3) in one pass with a `Uint8Array` `seen` bitmap, filters `seen` entries out of `fuzzy.filter` before running `fuzzy.info`/`fuzzy.sort`, and scans subsequences via `String.prototype.indexOf` jumps instead of character-by-character loops.[^search-ts]
 - `App.svelte` keeps `allTabs`, `results`, `windows`, `dashboardTabs` and `pinnedTabs` as `$state.raw`, and `tabSearch` (which holds the haystack, recency and priority arrays ranking reads) as a plain `let`. A deep `$state` proxy traps every element read, and ranking does thousands per keystroke inside loops and sort comparators.[^popup-app]
 - Nothing is built before the dashboard paints. `loadTabs` creates the `TabSearch` and, when the query is empty, ranks it straight away, so the "Back to" hint and Enter never point at a tab an action just closed; an empty query (the most-recent list the popup opens with) reads just the row count via `recencyOrder`. A `requestIdleCallback` (timeout 1 s) then builds both haystacks and their `prepare()` caches, unless a newer load replaced that search. A key pressed first builds synchronously and gets the same results.[^tabsearch-ts][^popup-app]
 - Measured in Node at 1000 tabs: search work before first paint 3.20 ms to 0.24 ms; the idle warm-up costs 3.04 ms after paint; the first `g` then takes 0.42 ms instead of 3.35 ms. One pass over both haystacks costs 1.65 ms where two builders cost 2.82 ms.[^tabsearch-ts]

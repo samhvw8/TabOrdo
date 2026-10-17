@@ -81,10 +81,13 @@ export function highlightSegments(text: string, needle: string): HighlightSegmen
   return segments;
 }
 
+const NON_ASCII = /[^\x00-\x7f]/;
+
 export function stripDiacritics(s: string): string {
+  if (!NON_ASCII.test(s)) return s;
   return s
     .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
+    .replace(/[\u0300-\u036f]/g, "")
     .replace(/[đĐ]/g, "d");
 }
 
@@ -127,13 +130,20 @@ export function recencyOrder(length: number, recency?: number[], limit = length)
 // An optional priority (e.g. pinned / current-window) sorts first, recency only breaks ties within it.
 function sortByRecency(indices: number[], recency?: number[], priority?: number[]): number[] {
   if (!recency && !priority) return indices;
-  return [...indices].sort((a, b) => {
+  return indices.sort((a, b) => {
     if (priority) {
       const p = (priority[b] ?? 0) - (priority[a] ?? 0);
       if (p !== 0) return p;
     }
     return (recency?.[b] ?? 0) - (recency?.[a] ?? 0);
   });
+}
+
+function hasWordPrefix(words: string[], q: string): boolean {
+  for (let i = 0; i < words.length; i++) {
+    if (words[i].startsWith(q)) return true;
+  }
+  return false;
 }
 
 // One ranked search replacing user-selected modes: word-prefix matches first, then substring,
@@ -146,49 +156,97 @@ export function rankedSearch(
   titleHaystack?: string[],
   priority?: number[]
 ): number[] {
+  const n = haystack.length;
   if (!needle.trim()) {
-    return recencyOrder(haystack.length, recency, limit);
+    return recencyOrder(n, recency, limit);
   }
+  if (n === 0 || limit <= 0) return [];
   if (hasChinese(needle)) {
-    return sortByRecency(exactSearch(haystack, needle, haystack.length), recency, priority).slice(0, limit);
+    return sortByRecency(exactSearch(haystack, needle, n), recency, priority).slice(0, limit);
   }
-  const seen = new Set<number>();
-  // Split into two buckets rather than one flat list. A single shared slice(0, limit) at the end
-  // meant the approximate tiers were dead weight on any query the literal tiers matched broadly:
-  // prefix/substring filled all `limit` slots and the fuzzy hits below them were computed and
-  // then discarded. Reserving a slice keeps them reachable.
+
+  // Move 1 & 4: collapse the four literal passes into one pass that assigns each entry its
+  // highest literal tier (0: title word-prefix, 1: full word-prefix, 2: title substring,
+  // 3: full substring). Every word in `words[i]` is a slice of `lower[i]` between WORD_SPLIT
+  // delimiters, so a word-prefix hit is only possible when `!WORD_SPLIT.test(q)` and
+  // `lower[i].includes(q)` is already true. Each entry lands in at most one tier bucket, so
+  // literal tiers need no Set deduplication.
+  const q = needle.toLowerCase();
+  const canPrefix = !WORD_SPLIT.test(q);
+  const fullPrep = prepare(haystack);
+  const fullLower = fullPrep.lower;
+  const fullWords = fullPrep.words;
+  const sameHay = !titleHaystack || titleHaystack === haystack;
+  const titlePrep = sameHay ? fullPrep : prepare(titleHaystack);
+  const titleLower = titlePrep.lower;
+  const titleWords = titlePrep.words;
+
+  const tier0: number[] = [];
+  const tier1: number[] = [];
+  const tier2: number[] = [];
+  const tier3: number[] = [];
+  const seen = new Uint8Array(n);
+
+  if (sameHay) {
+    for (let i = 0; i < n; i++) {
+      if (!fullLower[i].includes(q)) continue;
+      seen[i] = 1;
+      if (canPrefix && hasWordPrefix(fullWords[i], q)) tier0.push(i);
+      else tier2.push(i);
+    }
+  } else {
+    const titleLen = titleLower.length;
+    for (let i = 0; i < n; i++) {
+      const inTitle = i < titleLen && titleLower[i].includes(q);
+      if (inTitle && canPrefix && hasWordPrefix(titleWords[i], q)) {
+        seen[i] = 1;
+        tier0.push(i);
+        continue;
+      }
+      const inFull = fullLower[i].includes(q);
+      if (inFull && canPrefix && hasWordPrefix(fullWords[i], q)) {
+        seen[i] = 1;
+        tier1.push(i);
+        continue;
+      }
+      if (inTitle) {
+        seen[i] = 1;
+        tier2.push(i);
+      } else if (inFull) {
+        seen[i] = 1;
+        tier3.push(i);
+      }
+    }
+  }
+
   const literal: number[] = [];
+  if (tier0.length > 0) literal.push(...sortByRecency(tier0, recency, priority));
+  if (tier1.length > 0) literal.push(...sortByRecency(tier1, recency, priority));
+  if (tier2.length > 0) literal.push(...sortByRecency(tier2, recency, priority));
+  if (tier3.length > 0) literal.push(...sortByRecency(tier3, recency, priority));
+
   const approximate: number[] = [];
-  const take = (bucket: number[], indices: number[]) => {
-    for (const i of indices) {
-      if (!seen.has(i)) {
-        seen.add(i);
-        bucket.push(i);
+  const takeApprox = (indices: number[]) => {
+    for (let k = 0; k < indices.length; k++) {
+      const i = indices[k];
+      if (!seen[i]) {
+        seen[i] = 1;
+        approximate.push(i);
       }
     }
   };
-  // A title/group-name hit is a stronger signal than a URL-only hit (e.g. "com" inside every
-  // domain), so it's ranked first when a title-only view of the haystack is supplied.
-  const titleHay = titleHaystack ?? haystack;
-  take(literal, sortByRecency(prefixSearch(titleHay, needle, titleHay.length), recency, priority));
-  take(literal, sortByRecency(prefixSearch(haystack, needle, haystack.length), recency, priority));
-  take(literal, sortByRecency(exactSearch(titleHay, needle, titleHay.length), recency, priority));
-  take(literal, sortByRecency(exactSearch(haystack, needle, haystack.length), recency, priority));
-  // Bounded by the haystack, not by `limit`, exactly as the literal tiers above are: truncating
-  // to `limit` here would spend the whole quota on indices the literal tiers already claimed,
-  // and dedup afterwards would leave nothing.
-  //
+
   // uFuzzy splits terms on [^A-Za-z\d']+ even with `unicode: true`, which only adds the /u
   // flag, so "hư" reached it as the lone term "h" and pulled in every tab with an h: 861 rows
   // at 1000 tabs that matched nothing the user typed. Every haystack entry already carries a
   // diacritic-stripped copy, so fold the needle to meet it. A one-letter needle is skipped
   // outright: any entry uFuzzy matches contains that letter, which the substring tier has
-  // already claimed (a lone "ư" folds to "u", and those extra hits are the junk above). At
-  // 1000 tabs the call found nothing new for 0.98 ms of a 1.69 ms keystroke.
+  // already claimed (a lone "ư" folds to "u", and those extra hits are the junk above).
   const fuzzyNeedle = stripDiacritics(needle);
-  if (fuzzyNeedle.trim().length >= 2) take(approximate, fuzzySearch(haystack, fuzzyNeedle, haystack.length));
-  take(approximate, subsequenceSearch(titleHay, needle, titleHay.length));
-  take(approximate, subsequenceSearch(haystack, needle, haystack.length));
+  if (fuzzyNeedle.trim().length >= 2) takeApprox(fuzzySearch(haystack, fuzzyNeedle, n, seen));
+  const titleHay = titleHaystack ?? haystack;
+  takeApprox(subsequenceSearch(titleHay, needle, titleHay.length, seen));
+  if (!sameHay) takeApprox(subsequenceSearch(haystack, needle, n, seen));
 
   const reserved = Math.min(approximate.length, APPROXIMATE_RESERVE);
   return [...literal.slice(0, Math.max(0, limit - reserved)), ...approximate].slice(0, limit);
@@ -197,10 +255,15 @@ export function rankedSearch(
 /** Slots held back from the literal tiers so approximate matches always have somewhere to land. */
 const APPROXIMATE_RESERVE = 10;
 
-function fuzzySearch(haystack: string[], needle: string, limit: number): number[] {
-  const [idxs, info, order] = fuzzy.search(haystack, needle);
-  if (!idxs || !order) return [];
-  return order.slice(0, limit).map((i) => (info ? info.idx[i] : idxs[i]));
+function fuzzySearch(haystack: string[], needle: string, limit: number, skip?: Uint8Array): number[] {
+  const idxs = fuzzy.filter(haystack, needle);
+  if (!idxs || idxs.length === 0) return [];
+  const unseen = skip ? idxs.filter((i) => !skip[i]) : idxs;
+  if (unseen.length === 0) return [];
+  if (unseen.length > 1000) return unseen.slice(0, limit);
+  const info = fuzzy.info(unseen, haystack, needle);
+  const order = fuzzy.sort(info, haystack, needle);
+  return order.slice(0, limit).map((i) => info.idx[i]);
 }
 
 /**
@@ -241,13 +304,15 @@ function prepare(haystack: string[]): PreparedHaystack {
  * Ranked by the tightest window that contains the needle, so "yt" scores "YouTube" (span 4)
  * far above a title where a y and a t happen to sit thirty characters apart.
  */
-function subsequenceSearch(haystack: string[], needle: string, limit: number): number[] {
+function subsequenceSearch(haystack: string[], needle: string, limit: number, skip?: Uint8Array): number[] {
   // One-character needles match nearly everything and carry no signal.
   const q = needle.toLowerCase().replace(/\s+/g, "");
   if (q.length < 2) return [];
   const { lower } = prepare(haystack);
   const scored: { i: number; span: number }[] = [];
+  const canSkip = skip !== undefined && limit >= lower.length;
   for (let i = 0; i < lower.length; i++) {
+    if (canSkip && skip[i]) continue;
     const span = subsequenceSpan(lower[i], q);
     if (span >= 0) scored.push({ i, span });
   }
@@ -257,19 +322,23 @@ function subsequenceSearch(haystack: string[], needle: string, limit: number): n
 
 /** Width of the tightest window containing `q` as an in-order subsequence of `text`, or -1. */
 function subsequenceSpan(text: string, q: string): number {
+  const q0 = q[0];
+  const qLen = q.length;
   let best = -1;
-  for (let start = 0; start < text.length; start++) {
-    if (text[start] !== q[0]) continue;
-    let qi = 1;
+  let start = text.indexOf(q0);
+  while (start !== -1) {
     let ti = start + 1;
-    while (ti < text.length && qi < q.length) {
-      if (text[ti] === q[qi]) qi++;
-      ti++;
+    for (let qi = 1; qi < qLen; qi++) {
+      const at = text.indexOf(q[qi], ti);
+      if (at === -1) return best; // no completion from here, and later starts can only do worse
+      ti = at + 1;
     }
-    if (qi < q.length) break; // no completion from here, and later starts can only do worse
     const span = ti - start;
-    if (best < 0 || span < best) best = span;
-    if (best === q.length) break; // contiguous — nothing tighter exists
+    if (best < 0 || span < best) {
+      best = span;
+      if (best === qLen) return best; // contiguous — nothing tighter exists
+    }
+    start = text.indexOf(q0, start + 1);
   }
   return best;
 }
@@ -280,16 +349,6 @@ function exactSearch(haystack: string[], needle: string, limit: number): number[
   const results: number[] = [];
   for (let i = 0; i < lower.length && results.length < limit; i++) {
     if (lower[i].includes(q)) results.push(i);
-  }
-  return results;
-}
-
-function prefixSearch(haystack: string[], needle: string, limit: number): number[] {
-  const q = needle.toLowerCase();
-  const { words } = prepare(haystack);
-  const results: number[] = [];
-  for (let i = 0; i < words.length && results.length < limit; i++) {
-    if (words[i].some((w) => w.startsWith(q))) results.push(i);
   }
   return results;
 }
@@ -370,24 +429,50 @@ interface LabelParts {
   titleEntry: string;
 }
 
+// Move 2 & 10: a tab's folded/pinyin label parts and full haystack entry only change when its
+// title, URL, or groupTitle changes — not on every popup open or tab-close reload. Bounded at
+// MAX_HAYSTACK_CACHE entries so long-lived sidepanel sessions cannot grow the cache without bound.
+const MAX_HAYSTACK_CACHE = 4096;
+const labelPartsCache = new Map<string, LabelParts>();
+const fullEntryCache = new Map<string, string>();
+
 function labelParts(title: string, groupTitle: string | undefined): LabelParts {
+  const cacheKey = groupTitle ? `${title}\0${groupTitle}` : title;
+  const cached = labelPartsCache.get(cacheKey);
+  if (cached) return cached;
+
   const label = groupTitle ? `${title} ${groupTitle}` : title;
   const strippedTitle = stripDiacritics(title);
   const strippedGroup = groupTitle ? stripDiacritics(groupTitle) : "";
   const strippedLabel = groupTitle ? `${strippedTitle} ${strippedGroup}` : strippedTitle;
   const pinyin = pinyinVariants(label);
   const entry = label === strippedLabel ? label : `${label} ${strippedLabel}`;
-  return { strippedTitle, strippedGroup, pinyin, titleEntry: pinyin ? `${entry} ${pinyin}` : entry };
+  const parts: LabelParts = {
+    strippedTitle,
+    strippedGroup,
+    pinyin,
+    titleEntry: pinyin ? `${entry} ${pinyin}` : entry,
+  };
+  if (labelPartsCache.size >= MAX_HAYSTACK_CACHE) labelPartsCache.clear();
+  labelPartsCache.set(cacheKey, parts);
+  return parts;
 }
 
 function fullEntry(t: SearchItem, parts: LabelParts): string {
+  const cacheKey = t.groupTitle ? `${t.title}\0${t.url}\0${t.groupTitle}` : `${t.title}\0${t.url}`;
+  const cached = fullEntryCache.get(cacheKey);
+  if (cached !== undefined) return cached;
+
   const original = t.groupTitle ? `${t.title} ${t.url} ${t.groupTitle}` : `${t.title} ${t.url}`;
   const strippedUrl = stripDiacritics(t.url);
   const stripped = t.groupTitle
     ? `${parts.strippedTitle} ${strippedUrl} ${parts.strippedGroup}`
     : `${parts.strippedTitle} ${strippedUrl}`;
   const hay = original === stripped ? original : `${original} ${stripped}`;
-  return parts.pinyin ? `${hay} ${parts.pinyin}` : hay;
+  const out = parts.pinyin ? `${hay} ${parts.pinyin}` : hay;
+  if (fullEntryCache.size >= MAX_HAYSTACK_CACHE) fullEntryCache.clear();
+  fullEntryCache.set(cacheKey, out);
+  return out;
 }
 
 export function buildSearchHaystack(items: SearchItem[]): string[] {
