@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.2 — 2026-10-17
+
+### Bug Fixes
+
+- **The toolbar icon no longer gets stuck pressed when opening the palette** — starting the stylesheet and app loads inside the popup page's `load` event could keep Chrome waiting for the page to finish loading while running it at background priority, leaving the toolbar icon depressed with no popup shown. The popup now finishes its `load` event first and then mounts in the next unthrottled turn
+
+### Performance
+
+- **Faster popup open** — the popup now starts reading tabs, groups, window state and settings as soon as its entry script runs instead of waiting until the interface has mounted, removes a small component stylesheet that forced the app script to wait on a CSS load event, and waits until after the first frame paints before warming the search index and background panels
+- **Faster tab search and domain rule matching** — search index entries are cached per tab so reopening or switching tabs reuses unchanged titles and URLs, literal and fuzzy search passes share a single pass without rescanning matched tabs, and domain grouping and sort rules compile into a lookup table instead of testing every pattern on every tab
+
 ## 0.9.1 — 2026-10-17
 
 ### Bug Fixes
