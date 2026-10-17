@@ -2,12 +2,11 @@
 
 import type { TabInfo } from "./types.ts";
 
-export async function getAllTabs(): Promise<TabInfo[]> {
-  // The group query does not depend on the tab query; awaiting them in turn doubled the
-  // latency of the single call the popup blocks on before it can paint.
-  const [tabs, groups] = await Promise.all([chrome.tabs.query({}), getAllGroups()]);
+export function mapTabsWithGroups(
+  tabs: chrome.tabs.Tab[],
+  groups: chrome.tabGroups.TabGroup[]
+): TabInfo[] {
   const groupMap = new Map(groups.map((g) => [g.id, g]));
-
   return tabs.map((tab) => {
     const group = groupMap.get(tab.groupId);
     return {
@@ -28,6 +27,13 @@ export async function getAllTabs(): Promise<TabInfo[]> {
       lastAccessed: tab.lastAccessed,
     };
   });
+}
+
+export async function getAllTabs(): Promise<TabInfo[]> {
+  // The group query does not depend on the tab query; awaiting them in turn doubled the
+  // latency of the single call the popup blocks on before it can paint.
+  const [tabs, groups] = await Promise.all([chrome.tabs.query({}), getAllGroups()]);
+  return mapTabsWithGroups(tabs, groups);
 }
 
 export async function getCurrentWindowTabs(): Promise<TabInfo[]> {

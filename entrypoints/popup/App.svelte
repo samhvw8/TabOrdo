@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
-  import { getAllTabs, switchToTab, closeTabs, pinCurrentTab, unpinCurrentTab, outlineBranch, type TabInfo } from "../../lib/tabs/index.ts";
+  import { getAllTabs, mapTabsWithGroups, switchToTab, closeTabs, pinCurrentTab, unpinCurrentTab, outlineBranch, type TabInfo } from "../../lib/tabs/index.ts";
   import { getPinnedTabs, getPinForTab, type PinnedTabEntry } from "../../lib/pin.ts";
   import { getArchiveCount } from "../../lib/archive.ts";
   import { tabsToSearchItems, searchBookmarks, searchHistory, parseCommand, highlightSegments, type SearchResult } from "../../lib/search.ts";
@@ -33,7 +33,15 @@
   // Same component serves two surfaces: the popup is a fixed 450x600 sheet, the side panel is
   // persistent and user-resizable. The caller says which, so the root can size accordingly.
   // initialQuery: keys typed on the popup's loading screen, before this mounted (see main.ts).
-  let { fluid = false, initialQuery = "" }: { fluid?: boolean; initialQuery?: string } = $props();
+  interface InitialBoot {
+    tabs: Promise<chrome.tabs.Tab[]>;
+    groups: Promise<chrome.tabGroups.TabGroup[]>;
+    win: Promise<chrome.windows.Window>;
+    local: Promise<Record<string, any>>;
+    session: Promise<Record<string, unknown>>;
+  }
+
+  let { fluid = false, initialQuery = "", initialBoot }: { fluid?: boolean; initialQuery?: string; initialBoot?: InitialBoot } = $props();
 
   /** Set when this popup took SLOW_OPEN_MS or more to show its tabs: where the time went. */
   let openTiming = $state<OpenTiming | null>(null);
@@ -286,13 +294,29 @@
       : undefined
   );
 
-  async function loadTabs() {
+  async function loadTabs(boot?: InitialBoot, deferWarm = false) {
     // Three independent reads; serialising them cost three round-trips for no ordering reason.
-    const [tabs, win, pins] = await Promise.all([
-      getAllTabs(),
-      chrome.windows.getCurrent(),
-      getPinnedTabs(),
-    ]);
+    // On popup boot, main.ts starts these IPCs before Svelte and App.svelte finish loading.
+    let tabs: TabInfo[];
+    let win: chrome.windows.Window;
+    let pins: PinnedTabEntry[];
+    if (boot) {
+      const [rawTabs, rawGroups, rawWin, local] = await Promise.all([
+        boot.tabs,
+        boot.groups,
+        boot.win,
+        boot.local,
+      ]);
+      tabs = mapTabsWithGroups(rawTabs, rawGroups);
+      win = rawWin;
+      pins = Array.isArray(local.pinnedTabs) ? local.pinnedTabs : [];
+    } else {
+      [tabs, win, pins] = await Promise.all([
+        getAllTabs(),
+        chrome.windows.getCurrent(),
+        getPinnedTabs(),
+      ]);
+    }
     currentWindowId = win.id!;
     pinnedTabs = pins;
 
@@ -304,7 +328,7 @@
       // Among equally-good search matches, favor tabs you're most likely looking for: pinned, or already in front of you.
       tabs.map((t) => (t.pinned || t.windowId === currentWindowId ? 1 : 0)),
     );
-    warmWhenIdle(tabSearch);
+    if (!deferWarm) warmWhenIdle(tabSearch);
     dashboardTabs = tabs;
 
     const windowMap = new Map<number, WindowData>();
@@ -840,19 +864,14 @@
     // its own and re-renders the one thing it owns.
     if (initialQuery) query = initialQuery;
     const critical = Promise.all([
-      loadTabs(),
-      chrome.storage.local.get(["rulesConfig", "collapsedGroups", "dashboardActionIds", "onboardingDismissed"]),
-      chrome.storage.session.get("openMode").catch(() => ({}) as Record<string, unknown>),
+      loadTabs(initialBoot, true),
+      initialBoot
+        ? initialBoot.local
+        : chrome.storage.local.get(["rulesConfig", "collapsedGroups", "dashboardActionIds", "onboardingDismissed"]),
+      initialBoot
+        ? initialBoot.session
+        : chrome.storage.session.get("openMode").catch(() => ({}) as Record<string, unknown>),
     ]);
-
-    refreshCanUndo();
-    void hasSavedWorkspace().then((v) => { hasWorkspace = v; });
-    void getArchiveCount().then((v) => { archiveCount = v; });
-    void getActionLog().then((v) => { actionLog = v; });
-    void getAIProgress().then((v) => {
-      aiProgress = v;
-      if (v.status !== "idle") activeSection = "ai";
-    });
 
     const [, config, session] = await critical;
     applyConfig(config.rulesConfig);
@@ -866,9 +885,21 @@
     // loadTabs ranks an empty query itself. A query typed before the tabs arrived was ranked
     // against none, and would show nothing until the next keystroke.
     updateResults();
+
+    refreshCanUndo();
+    void hasSavedWorkspace().then((v) => { hasWorkspace = v; });
+    void getArchiveCount().then((v) => { archiveCount = v; });
+    void getActionLog().then((v) => { actionLog = v; });
+    void getAIProgress().then((v) => {
+      aiProgress = v;
+      if (v.status !== "idle") activeSection = "ai";
+    });
+
     if (!fluid) reportOpenTiming();
-    // After the first paint, so the panels' code stays off the path to it (see loadRulesEditor).
-    requestIdleCallback(() => { void loadRulesEditor(); void loadPinsPanel(); void loadSettingsPanel(); }, { timeout: 2000 });
+    else {
+      if (tabSearch) warmWhenIdle(tabSearch);
+      requestIdleCallback(() => { void loadRulesEditor(); void loadPinsPanel(); void loadSettingsPanel(); }, { timeout: 2000 });
+    }
   });
 
   function openArchive() {
@@ -883,6 +914,10 @@
       const t = readOpenTiming();
       console.info(`[TabOrdo] popup open: ${t.totalMs} ms\n${formatOpenTiming(t)}`);
       if (t.totalMs >= SLOW_OPEN_MS) openTiming = t;
+      // Schedule search haystack warmup and secondary panel chunk loads strictly after the first
+      // frame has painted, so `requestIdleCallback` cannot run before `painted`.
+      if (tabSearch) warmWhenIdle(tabSearch);
+      requestIdleCallback(() => { void loadRulesEditor(); void loadPinsPanel(); void loadSettingsPanel(); }, { timeout: 2000 });
     }));
   }
 

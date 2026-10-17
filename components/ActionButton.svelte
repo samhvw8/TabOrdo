@@ -72,20 +72,6 @@
     {/if}
   </button>
 </div>
-
-<style>
-  .confirm-countdown {
-    width: 100%;
-    animation: confirm-countdown 3s linear forwards;
-  }
-  @keyframes confirm-countdown {
-    from { width: 100%; }
-    to { width: 0%; }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .confirm-countdown { animation: none; }
-  }
-</style>
 {#if tooltip && show}
   <span
     role="tooltip"

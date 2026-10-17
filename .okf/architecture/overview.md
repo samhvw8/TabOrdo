@@ -40,7 +40,7 @@ sources:
   - id: popup-main
     resource: https://github.com/samhvw8/TabOrdo/blob/main/entrypoints/popup/main.ts
     title: Popup mount after load, with open timing
-    last_modified: 2026-10-13
+    last_modified: 2026-10-17
   - id: chromium-popup
     resource: https://source.chromium.org/chromium/chromium/src/+/main:chrome/browser/ui/views/extensions/extension_popup.cc
     title: ExtensionPopup shows on DocumentOnLoadCompletedInPrimaryMainFrame
@@ -60,7 +60,7 @@ sources:
   - id: search-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/search.ts
     title: Search and parseCommand
-    last_modified: 2026-08-21
+    last_modified: 2026-10-17
   - id: tree-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabs/tree.ts
     title: Tab lineage map
@@ -96,7 +96,7 @@ TabOrdo is a Chrome MV3 extension built with WXT, Svelte 5 and TypeScript. Four 
 | Entrypoint | Realm | Role |
 |---|---|---|
 | `entrypoints/background/index.ts` | Service worker | Wiring only. Registers the tab listeners (auto-group, auto-sort, auto-ungroup, switch-to-existing, pin follow, lock sync, lineage), the context menu, the auto-discard alarm and the `/aigroup` runner, and hands each event to a lib function. Only the lineage listeners keep their bodies inline.[^background] |
-| `entrypoints/popup/` | Action popup, 450x600 | Mounts `App.svelte`. Chrome tears it down on any focus loss.[^popup-app] Chrome keeps the popup hidden until the page's `load` event, so `main.ts` shows a static "Loading TabOrdo…" screen and fetches Svelte, `App.svelte` and `app.css` only after `load`; it has no static imports. Until the popup is visible Chrome can run it at background priority: one measured open (105 tabs, a discarded tab reloading) parsed the HTML in 20 ms, ran the first script line at 1.7 s and reached `load` at 2.3 s, then needed 0.2 s for everything after. Before, anything the app added in time (tab favicons are remote URLs) held the popup hidden until it downloaded. Keys typed on the loading screen pass in as `initialQuery`. Each open is timed by `lib/opentiming.ts`, logged to the popup console, and shown as a "Slow open" strip above the footer when it took 400 ms or more to paint the tabs; the strip lists every file fetched before `load`, so a slow fetch can be told from a page that was only waiting.[^popup-main][^chromium-popup] `RulesEditor`, `PinsPanel` and `SettingsPanel` are dynamic imports in their own chunks (about 39 KB minified, beside a 157 KB App chunk), started in `requestIdleCallback` after first paint so a panel opens from a settled promise with no blank frame.[^popup-app] |
+| `entrypoints/popup/` | Action popup, 450x600 | Mounts `App.svelte`. Chrome tears it down on any focus loss.[^popup-app] Chrome keeps the popup hidden until `DocumentOnLoadCompletedInPrimaryMainFrame()` and `DidStopLoading()` (`ExtensionViewViews::OnLoaded()`), so `main.ts` shows a static "Loading TabOrdo…" screen, starts the first-paint Chrome IPC reads (`tabs.query`, `tabGroups.query`, `windows.getCurrent`, `storage.local.get` and `storage.session.get`) immediately at script start, and defers `start()` via `MessageChannel` after `load` (unlike `setTimeout(..., 0)`, `MessageChannel` is not throttled in hidden frames before `WasShown()`) before fetching Svelte, `App.svelte` and `app.css`; starting Vite's preload helper synchronously inside the `load` listener injected `<link rel="stylesheet">` before `CheckCompletedInternal()` re-checked `ShouldComplete()`, holding `DidStopLoading()` and keeping the popup hidden at background priority with the toolbar icon stuck pressed. Until the popup is visible Chrome can run it at background priority: one measured open (105 tabs, a discarded tab reloading) parsed the HTML in 20 ms, ran the first script line at 1.7 s and reached `load` at 2.3 s, then needed 0.2 s for everything after. Keys typed on the loading screen pass in as `initialQuery`, and the prefetched Chrome IPC promises pass in as `initialBoot`. Each open is timed by `lib/opentiming.ts`, logged to the popup console, and shown as a "Slow open" strip above the footer when it took 400 ms or more to paint the tabs; the strip lists every file fetched before `load`, so a slow fetch can be told from a page that was only waiting.[^popup-main][^chromium-popup] `RulesEditor`, `PinsPanel` and `SettingsPanel` are dynamic imports in their own chunks (about 39 KB minified, beside a 165 KB App chunk), started in `requestIdleCallback` after the first frame paints so a panel opens from a settled promise with no blank frame.[^popup-app] |
 | `entrypoints/sidepanel/` | Side panel | Mounts the **same** `popup/App.svelte` with `fluid: true`.[^sidepanel-main] Declared as `side_panel.default_path` in the manifest.[^wxt-config] |
 | `entrypoints/archive/` | Extension tab page | Browses and restores archived tabs; opened via `chrome.runtime.getURL("/archive.html")`.[^popup-app] |
 
