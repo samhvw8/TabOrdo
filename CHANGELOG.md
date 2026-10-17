@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.1 — 2026-10-17
+
+### Bug Fixes
+
+- **The More panel fills the popup again** — in 0.9.0 the search box and the action list sat side by side, which squeezed the actions into a narrow column on the right. The search box is back on top, with the list at full width below it
+
 ## 0.9.0 — 2026-10-16
 
 ### Improvements
