@@ -1075,6 +1075,8 @@
       </div>
     </div>
   {:else if activeSection === "more"}
+    <!-- One column: the parent row lays siblings out side by side. -->
+    <div class="flex-1 flex flex-col min-w-0 min-h-0">
     <div class="px-3 pt-2 pb-1.5 border-b border-border/40">
       <!-- svelte-ignore a11y_autofocus -->
       <input
@@ -1141,6 +1143,7 @@
           {/each}
         </div>
       {/each}
+    </div>
     </div>
   {:else if showHelp}
     {@const allCmds = [...ALL_COMMANDS, ...TRIAGE_COMMANDS]}
