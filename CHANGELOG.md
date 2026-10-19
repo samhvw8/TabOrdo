@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.10.0 — 2026-10-19
+
+### Improvements
+
+- **`/mergeall` gathers every window into this one, pinned tabs included** — `/merge` leaves pinned tabs behind, so a window with a pinned tab stays open. `/mergeall` moves those too and keeps them pinned, so the other windows empty and close. Tab groups come along as they do with `/merge`
+
+### Bug Fixes
+
+- **`/merge` no longer fails when an incognito or popup window is open** — with TabOrdo allowed in incognito, one tab in an incognito, popup or app window made Chrome refuse the whole move, and nothing merged. Both merge commands now take tabs only from normal windows in the same profile as the current window, and leave the others alone
+
 ## 0.9.2 — 2026-10-17
 
 ### Bug Fixes
