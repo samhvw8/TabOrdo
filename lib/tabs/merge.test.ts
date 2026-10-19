@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { installChromeStub, type ChromeStub } from "../testing/chrome-stub.ts";
-import { mergeAllWindows } from "./index.ts";
+import { mergeAllWindows, mergeAllWindowsWithPinned } from "./index.ts";
 
 let stub: ChromeStub;
 
@@ -150,6 +150,23 @@ describe("mergeAllWindows", () => {
     expect(stub.moves).toEqual([]);
   });
 
+  it("leaves incognito, popup and app windows alone instead of failing the whole move", async () => {
+    stub.windows = [{ id: 1 }, { id: 2, incognito: true }, { id: 3, type: "popup" }, { id: 4, type: "app" }, { id: 5 }];
+    stub.openTabs = [
+      { id: 1, url: "https://home.com", pinned: false, windowId: 1, groupId: -1, index: 0 },
+      { id: 2, url: "https://private.com", pinned: false, windowId: 2, groupId: -1, index: 0 },
+      { id: 3, url: "https://popup.com", pinned: false, windowId: 3, groupId: -1, index: 0 },
+      { id: 4, url: "https://app.com", pinned: false, windowId: 4, groupId: -1, index: 0 },
+      { id: 5, url: "https://other.com", pinned: false, windowId: 5, groupId: -1, index: 0 },
+    ];
+
+    const result = await mergeAllWindows();
+
+    expect(result.moved).toBe(1);
+    expect(stripOf(1)).toEqual([1, 5]);
+    expect([2, 3, 4].map((id) => stub.openTabs.find((t) => t.id === id)!.windowId)).toEqual([2, 3, 4]);
+  });
+
   it("is a no-op when every tab already lives in the current window", async () => {
     stub.openTabs = [
       { id: 1, url: "https://a.com", pinned: false, windowId: 1, groupId: 95, index: 0 },
@@ -227,5 +244,93 @@ describe("mergeAllWindows — failure reporting", () => {
     stub.groups = [{ id: 50, title: "Work", color: "blue", windowId: 2 }];
 
     expect(await mergeAllWindows()).toEqual({ moved: 1, groupsFailed: 0 });
+  });
+});
+
+describe("mergeAllWindowsWithPinned", () => {
+  it("moves pinned tabs too, keeping them pinned, so the source window is left empty", async () => {
+    stub.openTabs = [
+      { id: 1, url: "https://home.com", pinned: false, windowId: 1, groupId: -1, index: 0 },
+      { id: 2, url: "https://pinned.com", pinned: true, windowId: 2, groupId: -1, index: 0 },
+      { id: 3, url: "https://a.com", pinned: false, windowId: 2, groupId: 50, index: 1 },
+    ];
+    stub.groups = [{ id: 50, title: "Work", color: "blue", windowId: 2 }];
+
+    const result = await mergeAllWindowsWithPinned();
+
+    expect(result).toEqual({ moved: 2, groupsFailed: 0 });
+    expect(stub.openTabs.filter((t) => t.windowId === 2)).toEqual([]);
+    expect(stub.openTabs.find((t) => t.id === 2)!.pinned).toBe(true);
+    expect(groupOf(3)).not.toBe(-1);
+  });
+
+  it("re-pins a pinned tab that arrives unpinned", async () => {
+    stub.openTabs = [
+      { id: 1, url: "https://home.com", pinned: false, windowId: 1, groupId: -1, index: 0 },
+      { id: 2, url: "https://pinned.com", pinned: true, windowId: 2, groupId: -1, index: 0 },
+    ];
+    // Model a move that drops the pin, which nothing in the extension API promises against.
+    const move = chrome.tabs.move;
+    chrome.tabs.move = (async (ids: number[], props: chrome.tabs.MoveProperties) => {
+      const moved = (await move(ids, props)) as unknown as chrome.tabs.Tab[];
+      for (const t of moved) t.pinned = false;
+      return moved;
+    }) as typeof chrome.tabs.move;
+
+    await mergeAllWindowsWithPinned();
+
+    expect(stub.openTabs.find((t) => t.id === 2)!.pinned).toBe(true);
+    expect(stub.tabUpdates).toEqual([{ id: 2, pinned: true }]);
+  });
+
+  it("leaves incognito, popup and app windows alone", async () => {
+    stub.windows = [
+      { id: 1 },
+      { id: 2, incognito: true },
+      { id: 3, type: "popup" },
+      { id: 4, type: "app" },
+      { id: 5 },
+    ];
+    stub.openTabs = [
+      { id: 1, url: "https://home.com", pinned: false, windowId: 1, groupId: -1, index: 0 },
+      { id: 2, url: "https://private.com", pinned: false, windowId: 2, groupId: -1, index: 0 },
+      { id: 3, url: "https://popup.com", pinned: false, windowId: 3, groupId: -1, index: 0 },
+      { id: 4, url: "https://app.com", pinned: false, windowId: 4, groupId: -1, index: 0 },
+      { id: 5, url: "https://other.com", pinned: false, windowId: 5, groupId: -1, index: 0 },
+    ];
+
+    const result = await mergeAllWindowsWithPinned();
+
+    expect(result.moved).toBe(1);
+    expect(stripOf(1)).toEqual([1, 5]);
+    expect(stub.openTabs.find((t) => t.id === 2)!.windowId).toBe(2);
+    expect(stub.openTabs.find((t) => t.id === 3)!.windowId).toBe(3);
+    expect(stub.openTabs.find((t) => t.id === 4)!.windowId).toBe(4);
+  });
+
+  it("from an incognito window, gathers the other incognito windows only", async () => {
+    stub.currentWindowId = 2;
+    stub.windows = [{ id: 1 }, { id: 2, incognito: true }, { id: 3, incognito: true }];
+    stub.openTabs = [
+      { id: 1, url: "https://regular.com", pinned: false, windowId: 1, groupId: -1, index: 0 },
+      { id: 2, url: "https://p1.com", pinned: false, windowId: 2, groupId: -1, index: 0 },
+      { id: 3, url: "https://p2.com", pinned: true, windowId: 3, groupId: -1, index: 0 },
+    ];
+
+    const result = await mergeAllWindowsWithPinned();
+
+    expect(result.moved).toBe(1);
+    expect(stub.openTabs.find((t) => t.id === 1)!.windowId).toBe(1);
+    expect(stub.openTabs.find((t) => t.id === 3)!.windowId).toBe(2);
+  });
+
+  it("is a no-op when there is no other window", async () => {
+    stub.windows = [{ id: 1 }];
+    stub.openTabs = [
+      { id: 1, url: "https://a.com", pinned: true, windowId: 1, groupId: -1, index: 0 },
+    ];
+
+    expect(await mergeAllWindowsWithPinned()).toEqual({ moved: 0, groupsFailed: 0 });
+    expect(stub.moves).toEqual([]);
   });
 });

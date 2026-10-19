@@ -25,7 +25,8 @@ Requires Chrome 138 or later.
 | `/ungroup` | Ungroup matching tabs |
 | `/collapse` | Collapse all tab groups |
 | `/dedup` | Remove duplicate tabs |
-| `/merge` | Merge all windows |
+| `/merge` | Merge all windows (pinned tabs stay put; skips incognito and popup windows) |
+| `/mergeall` | Merge all windows, pinned tabs included |
 | `/move` | Move tab to position (`^` `$` or number) |
 | `/movegroup` | Move group to position (`^` `$` or number) |
 | `/lock` | Hold tab at a position in its group (`^` `$` or number) |

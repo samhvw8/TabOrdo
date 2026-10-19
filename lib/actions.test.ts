@@ -78,6 +78,23 @@ describe("runAction dispatch", () => {
   });
 });
 
+describe("/mergeall", () => {
+  it("moves pinned tabs too, where /merge leaves them, and records an undo entry", async () => {
+    stub.openTabs = [
+      { id: 1, url: "https://a.com", pinned: false, windowId: 1, groupId: -1, index: 0, active: true },
+      { id: 2, url: "https://p.com", pinned: true, windowId: 2, groupId: -1, index: 0 },
+      { id: 3, url: "https://b.com", pinned: false, windowId: 2, groupId: -1, index: 1 },
+    ];
+
+    expect(await runAction("merge", ctx())).toEqual({ message: "Merged 1 tab(s)", acted: true });
+    expect(stub.openTabs.find((t) => t.id === 2)!.windowId).toBe(2);
+
+    expect(await runAction("mergeall", ctx())).toEqual({ message: "Merged 1 tab(s)", acted: true });
+    expect(stub.openTabs.every((t) => t.windowId === 1)).toBe(true);
+    expect((await peekUndoEntry())?.type).toBe("group");
+  });
+});
+
 // A tile runs its command's handler unless it has one of its own, so the grid and the palette
 // cannot report different things for the same work.
 describe("runTile", () => {

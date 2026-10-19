@@ -4,7 +4,7 @@ title: Command palette and dashboard actions
 description: How slash commands, @ triage views and dashboard tiles are registered, dispatched to one handler per command, confirmed, and extended.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/actions.ts
 tags: [command-palette, dashboard, actions, triage]
-generated: { by: claude-code/claude-opus-5-5, at: 2026-10-16T09:55:00Z }
+generated: { by: claude-code/claude-opus-5-5, at: 2026-10-19T18:30:00Z }
 sources:
   - id: commands-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/commands.ts
@@ -168,6 +168,7 @@ All triage views are rows in one `TRIAGE_CATEGORIES` table; text after a view re
 # Gotchas
 
 - Targets are capped at 50 and include fuzzy and subsequence hits, so a short query can reach loosely matching tabs. Read the preview.[^popup-app]
+- `/merge` and `/mergeall` both pull tabs into the current window, keeping groups, and both take only normal windows on the current window's side of the incognito line (`mergeSources`). Chrome refuses a move into a popup or app window or between profiles, and one such tab rejects the whole `tabs.move`, so before 2026-10-19 one incognito window (with incognito access on) made `/merge` fail. `/merge` leaves pinned tabs where they are. `/mergeall` moves them too (re-pinning any that land unpinned), so the source windows empty and Chrome closes them.[^actions-ts]
 - Handlers that ignore `ctx` (`/dedup`, `/closeold`, `/merge`, …) still show a filtered preview when text follows, then act globally.[^actions-ts][^popup-app]
 - Alt-clicking a tile that confirms arms the *alt* action's id, so the clicked tile never relabels to "Confirm"; a second alt-click still runs it. Ctrl-click also triggers alt modes, but the relabel follows only the Alt key.[^popup-app]
 - Load from File refuses in the popup (the picker steals focus and Chrome closes the popup); it works in the side panel.[^popup-app]

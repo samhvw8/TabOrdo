@@ -10,7 +10,7 @@
 // /aigroup (which is deliberately run outside the lock — see App.svelte).
 
 import {
-  closeTabs, sortTabsInWindow, mergeAllWindows, removeDuplicates, muteTab, setTabVolume,
+  closeTabs, sortTabsInWindow, mergeAllWindows, mergeAllWindowsWithPinned, removeDuplicates, muteTab, setTabVolume,
   splitTabToWindow, discardTabs, closeTabsToLeft, closeTabsToRight, closeTabsSameSite,
   closeOldTabs, shuffleTabs, uniteDomain, isolateDomain, splitWindow, splitByDomain,
   stackWindows, collapseAllGroups, moveCurrentTab, moveGroup, pinCurrentTab, unpinCurrentTab,
@@ -234,6 +234,11 @@ export const ACTION_HANDLERS: Record<HandledCommand, ActionHandler> = {
   merge: async () => {
     await snapshotBeforeGroup();
     return { message: mergeStatus(await mergeAllWindows()), acted: true };
+  },
+
+  mergeall: async () => {
+    await snapshotBeforeGroup();
+    return { message: mergeStatus(await mergeAllWindowsWithPinned()), acted: true };
   },
 
   sort: async (ctx) => {

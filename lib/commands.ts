@@ -142,6 +142,7 @@ export const ACTIONS = [
   { id: "parent", description: "Switch to the tab that opened this one", group: "Organize", color: "text-accent-orange" },
   { id: "merge", description: "Pull every tab from other windows into this one", group: "Windows", color: "text-accent-orange",
     tile: { icon: ICON('<path d="m8 6 4-4 4 4"/><path d="M12 2v10.3a4 4 0 0 1-1.172 2.872L4 22"/><path d="m20 22-5-5"/>'), tooltip: "Move all tabs from other windows here.", confirm: true } },
+  { id: "mergeall", description: "Pull every tab, pinned too, from this profile's other windows into this one", group: "Windows", color: "text-accent-orange" },
   { id: "sort", description: "Sort tabs (domain|title|url)", group: "Organize", color: "text-accent-orange",
     tile: { label: "Sort All", icon: ICON('<path d="m3 16 4 4 4-4"/><path d="M7 20V4"/><path d="m21 8-4-4-4 4"/><path d="M17 4v16"/>'), tooltip: "Sort tabs by domain." } },
   { id: "dedup", description: "Remove duplicate tabs", group: "Organize", color: "text-accent-orange",

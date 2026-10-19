@@ -126,16 +126,52 @@ export async function moveTabsToNewWindow(
   return { windowId, result: { moved: withIds.length, groupsFailed } };
 }
 
-export async function mergeAllWindows(): Promise<MoveGroupsResult> {
-  const currentWindow = await chrome.windows.getCurrent();
-  const targetWindowId = currentWindow.id!;
-  const allTabs = await chrome.tabs.query({});
-  const otherTabs = allTabs.filter(
-    (t) => t.windowId !== targetWindowId && !t.pinned
+/**
+ * Tabs of the windows a merge into the current window can take from: the other normal
+ * windows on the same side of the incognito line. Chrome refuses to move a tab into or out
+ * of a popup or app window, or between a regular and an incognito window (two profiles),
+ * and one such tab rejects the whole tabs.move — so they are left out, not attempted.
+ */
+async function mergeSources(): Promise<{ targetWindowId: number; tabs: chrome.tabs.Tab[] }> {
+  const current = await chrome.windows.getCurrent();
+  const targetWindowId = current.id!;
+  const sources = new Set(
+    (await chrome.windows.getAll({ windowTypes: ["normal"] }))
+      .filter((w) => w.id !== targetWindowId && !!w.incognito === !!current.incognito)
+      .map((w) => w.id)
   );
+  const tabs = (await chrome.tabs.query({})).filter((t) => sources.has(t.windowId) && t.id !== undefined);
+  return { targetWindowId, tabs };
+}
+
+export async function mergeAllWindows(): Promise<MoveGroupsResult> {
+  const { targetWindowId, tabs } = await mergeSources();
+  const otherTabs = tabs.filter((t) => !t.pinned);
   if (otherTabs.length === 0) return { moved: 0, groupsFailed: 0 };
 
   return moveTabsPreservingGroups(otherTabs, targetWindowId);
+}
+
+/**
+ * Every tab of this profile's other windows, pinned ones included, into this window. Chrome
+ * closes a window once its last tab leaves, so the source windows go with them.
+ */
+export async function mergeAllWindowsWithPinned(): Promise<MoveGroupsResult> {
+  const { targetWindowId, tabs } = await mergeSources();
+  const pinned = tabs.filter((t) => t.pinned);
+
+  let pinnedMoved = 0;
+  if (pinned.length > 0) {
+    // Pinned tabs cannot be grouped, so there is nothing to carry: a plain move will do.
+    const landed = await chrome.tabs.move(pinned.map((t) => t.id!), { windowId: targetWindowId, index: -1 });
+    // Nothing in the API promises the pin survives the window change; put back any it drops.
+    for (const t of [landed].flat()) {
+      if (!t.pinned) await chrome.tabs.update(t.id!, { pinned: true });
+    }
+    pinnedMoved = pinned.length;
+  }
+  const rest = await moveTabsPreservingGroups(tabs.filter((t) => !t.pinned), targetWindowId);
+  return { moved: pinnedMoved + rest.moved, groupsFailed: rest.groupsFailed };
 }
 
 export async function splitTabToWindow(tabId: number): Promise<void> {

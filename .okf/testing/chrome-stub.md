@@ -4,12 +4,12 @@ title: Chrome API stub
 description: lib/testing/chrome-stub.ts is the repo's executable model of Chrome tab, group, window and storage semantics for vitest, with failure-injection knobs; its fidelity decides what the tests can prove.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/testing/chrome-stub.ts
 tags: [testing, vitest, chrome-api]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-22T21:00:00Z }
+generated: { by: claude-code/claude-opus-5-5, at: 2026-10-19T18:30:00Z }
 sources:
   - id: stub
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/testing/chrome-stub.ts
     title: lib/testing/chrome-stub.ts
-    last_modified: 2026-09-22
+    last_modified: 2026-10-19
   - id: automation-test
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/automation.test.ts
     title: lib/automation.test.ts
@@ -57,13 +57,14 @@ sources:
 | API | Modelled behaviour |
 |---|---|
 | `tabs.query` | Filters by `windowId`, `groupId`, `currentWindow`/`lastFocusedWindow` (both mean `currentWindowId`), `active` and `pinned`. Ignoring `active` once made every "active tab" query return the first tab, so close/unite/isolate tests asserted nothing.[^stub] |
-| `tabs.move` | Moves ids in the order given. A tab crossing windows **loses its group**. **Reflows** indices so each window stays `0..n-1`. Modelling only the group drop had left ordering assertions vacuous: reversing or deleting the sort in `carryGroups` still passed all 9 merge tests.[^stub] |
+| `tabs.move` | Moves ids in the order given. A tab crossing windows **loses its group**. **Reflows** indices so each window stays `0..n-1`. Modelling only the group drop had left ordering assertions vacuous: reversing or deleting the sort in `carryGroups` still passed all 9 merge tests.[^stub]Rejects a move into a window whose `type` is not `normal` ("Tabs can only be moved to and from normal windows.") and a move across the incognito line ("Tabs can only be moved between windows in the same profile."), as Chromium's `tabs_util` `MoveTabToWindow` does.[^stub] |
 | `tabGroups.move` | Same window only. As Chromium's `TabGroupsMoveFunction::MoveGroup`: `index` is where the group's first tab lands once the group is lifted out, in either direction, and the group keeps its id. Recorded in `groupMoves`.[^stub] |
 | `tabs.group` | **Rejects ids that span windows** ("Tabs can only be grouped in the same window."). Creates the group in `groups` when no `groupId` is given, and pulls members contiguous.[^stub][^commit-3431468] |
 | `tabs.remove` | As Chromium's `TabsRemoveFunction`: removes ids **in order and rejects at the first failure**, so earlier ids are gone. An id not in `openTabs` rejects with `No tab with id: N.` An id in `failRemoveIds` rejects with "Tabs cannot be edited right now…".[^stub] |
 | `tabs.get` | Returns the open tab, or rejects an unknown id with `No tab with id: N.`, as `tabs.remove` does. A caller that forgot the catch fails here as it would in Chrome.[^stub] |
 | `tabs.update` | Applies `pinned`, `url`, `highlighted`, `muted` and `active`, and records each call in `tabUpdates`. A change of `pinned` is reported to `tabs.onUpdated` listeners as `{ pinned }` on a microtask, after the call resolves and only when the state changed. That late echo is what pin follow's self-write ledger exists to recognise.[^stub][^automation-test] |
 | `tabs.onUpdated` | `addListener` only, into `tabUpdatedListeners`. Nothing but a pin change from `tabs.update` fires it.[^stub] |
+| `windows.getCurrent` / `windows.getAll` | `windows` entries carry optional `type` (default `normal`) and `incognito` (default false). `getCurrent` returns the `currentWindowId` entry; `getAll({ windowTypes })` filters by type.[^stub] |
 | `windows.create({ tabId })` | Detaching a tab into a new window drops its group, like a cross-window move.[^stub] |
 | `storage.local` / `storage.session` | `get(null)` returns the whole area (recorded as `"*"`). `getKeys` (Chrome 130+) returns names only (recorded as `"<keys>"`). `set` structured-clones. `onChanged` listeners are called on a microtask, not inline.[^stub] |
 

@@ -28,12 +28,19 @@ export interface StubGroup {
   windowId?: number;
 }
 
+export interface StubWindow {
+  id: number;
+  type?: "normal" | "popup" | "app" | "devtools";
+  incognito?: boolean;
+}
+
 export interface ChromeStub {
   localData: Record<string, unknown>;
   sessionData: Record<string, unknown>;
   openTabs: StubTab[];
   groups: StubGroup[];
-  windows: { id: number }[];
+  /** `type` defaults to "normal" and `incognito` to false, as most tests need. */
+  windows: StubWindow[];
   currentWindowId: number;
   created: { url?: string; pinned?: boolean; active?: boolean; windowId?: number }[];
   removedIds: number[];
@@ -232,6 +239,16 @@ export function installChromeStub(): ChromeStub {
         if (moving.length === 0) return [];
 
         const targetWindowId = props.windowId ?? moving[0].windowId;
+        // As Chromium's tabs_util MoveTabToWindow: the target must be a normal window, and the
+        // tab may not cross between a regular and an incognito window — those are two profiles.
+        const winOf = (id: number) => stub.windows.find((w) => w.id === id);
+        const target = winOf(targetWindowId);
+        if (target && (target.type ?? "normal") !== "normal") {
+          throw new Error("Tabs can only be moved to and from normal windows.");
+        }
+        if (moving.some((t) => !!winOf(t.windowId)?.incognito !== !!target?.incognito)) {
+          throw new Error("Tabs can only be moved between windows in the same profile.");
+        }
         for (const t of moving) {
           if (t.windowId !== targetWindowId) {
             t.windowId = targetWindowId;
@@ -355,8 +372,10 @@ export function installChromeStub(): ChromeStub {
       },
     },
     windows: {
-      getCurrent: async () => ({ id: stub.currentWindowId }),
-      getAll: async () => stub.windows,
+      getCurrent: async () =>
+        stub.windows.find((w) => w.id === stub.currentWindowId) ?? { id: stub.currentWindowId },
+      getAll: async (q: { windowTypes?: string[] } = {}) =>
+        stub.windows.filter((w) => !q.windowTypes || q.windowTypes.includes(w.type ?? "normal")),
       // Detaching a tab into a fresh window drops its group, exactly like a cross-window
       // move — which is why the new-window movers need their own capture step.
       create: async (props: { tabId?: number } = {}) => {
