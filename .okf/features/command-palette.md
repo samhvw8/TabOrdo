@@ -4,7 +4,7 @@ title: Command palette and dashboard actions
 description: How slash commands, @ triage views and dashboard tiles are registered, dispatched to one handler per command, confirmed, and extended.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/actions.ts
 tags: [command-palette, dashboard, actions, triage]
-generated: { by: claude-code/claude-opus-5-5, at: 2026-10-19T18:30:00Z }
+generated: { by: claude-code/claude-opus-5-5, at: 2026-11-18T08:25:00Z }
 sources:
   - id: commands-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/commands.ts
@@ -88,6 +88,7 @@ The triage views live in `lib/views.ts` (see Triage views below).[^views-ts] The
 - `parseCommand` matches the longest known `@` prefix, so `@shared` is not swallowed by `@s` and `@afoo` still means `@a` + `foo`. Slash input is `/(\w+)\s*(.*)`.[^search-ts]
 - `matchCommands`: bare `/` lists every non-hidden command; typed text matches a prefix start or label substring, then falls back to an in-order character match on prefix or description. Hidden aliases resolve once typed.[^commands-ts]
 - Hints show only while the input has no space. `Tab` completes the highlighted hint; `Enter` on a parsed action prefix runs it.[^popup-app]
+- `Alt+Enter` (Option+Enter on macOS) on a bare action command adds the command's alt argument (`typedActionQuery` and `altArgument` in `lib/dashboard.ts`): `/sort` runs `/sort recent`; `/lock`, `/lockgroup` and their aliases `/pin`, `/pingroup` run with `^`. A command with no tile of its own takes the alt of the alias row that carries its tile. Only an alt that keeps the same command counts. An alt that swaps to another command (`/closeleft` → `/closeright`, `/save` → `/load`) stays on the tile, because from the keyboard it would do the opposite of what was typed with no confirm and no relabelled face. `/lock ^` does not toggle a lock off as the Lock Tab tile's alt-click does. Typed text after the command wins over Alt. Ctrl+Enter is not an alt here.[^popup-app][^dashboard-ts]
 - The Help panel lists every command through the same `CommandHints` component, with no row highlighted; picking one fills the palette as a hint does.[^popup-app]
 
 ## Running an action (`handleActionCommand`)
@@ -139,10 +140,10 @@ All triage views are rows in one `TRIAGE_CATEGORIES` table; text after a view re
 - The grid renders `dashboardActionIds` from `chrome.storage.local` (defaults `sort`, `group`, `dedup`, `merge`, `pin`); the pin button on each More panel row adds or removes a tile, and is always visible (filled while the tile is on the grid). A tile's id is its row's id, and stored ids must keep resolving, which is why the two lock tiles still carry the old ids `pin` and `pingroup`, on the alias rows.[^dashboard-ts][^popup-app]
 - `handleOverflowAction` is one switch with a `default: goBack(); dashTile(action)`. `dashTile` wraps `dashAction` around `runTile(id, ctx)`, which runs `TILE_HANDLERS[id]` when the row's tile is marked `own` and the bare command's handler otherwise. So a tile and its slash command share one handler and report the same status text.[^popup-app][^actions-ts]
 - `TILE_HANDLERS` covers the tiles whose id names a command that does something else: Group+ (`group`) groups every loose tab by domain through `lib/arrange.ts` while `/group` groups the matches; Ungroup (`ungroup`) ungroups everything while bare `/ungroup` takes the active tab; Regroup (`regroup`) is a tile-only row with no slash command. Each takes the undo snapshot.[^actions-ts][^commands-ts]
-- The Sort tile runs bare `/sort`, whose domain sort is `sortWindowByDomain` from `lib/arrange.ts`, the function the action-icon menu's Sort also calls.[^actions-ts]
+- The Sort tile runs bare `/sort`, whose domain sort is `sortWindowByDomain` from `lib/arrange.ts`, the function the action-icon menu's Sort also calls. Its alt mode ("Sort Recent") runs `/sort recent` ([sort modes](/features/sort-priority.md)).[^actions-ts][^commands-ts]
 - Only the tiles that need something the component owns keep a `case`: Focus runs `/unfocus` instead while a workspace is saved; Lock Tab toggles on the active tab's lock state (`handlePinCurrent`); AI Group hands off to the background before the lock; Recent fills the palette with `/recent`'s list; Archive opens the archive page.[^popup-app]
 - `dashButtonClick`: `pin` has its own lock/unlock toggle. With Alt or Ctrl held, the tile's `alt` applies: a mode with a `query` runs `dashCommand(action, query)`, otherwise `action` goes through `handleOverflowAction`, confirmation included.[^popup-app]
-- An `alt` names a target row (`to`) and optionally a `query`. Its face defaults to the target tile's label, icon and tooltip, so a swap pair states nothing twice. Swap pairs are symmetric: Close Left/Right, Split V/H, Save/Load, Unite/Isolate, Branch/Branch Up. Mute alt-clicks to Unmute, which has no tile and so supplies its own face; Lock Tab and Lock Group alt-click to a lock at `^`.[^commands-ts][^dashboard-ts][^readme]
+- An `alt` names a target row (`to`) and optionally a `query`. Its face defaults to the target tile's label, icon and tooltip, so a swap pair states nothing twice. Swap pairs are symmetric: Close Left/Right, Split V/H, Save/Load, Unite/Isolate, Branch/Branch Up. Mute alt-clicks to Unmute, which has no tile and so supplies its own face; Lock Tab and Lock Group alt-click to a lock at `^`; Sort All alt-clicks to Sort Recent (`/sort recent`).[^commands-ts][^dashboard-ts][^readme]
 - `tileFace` in the component gives the grid and the More panel the same face: the Lock Tab tile's state (`UNLOCK_FACE` while held), Focus's Unfocus face, and the alt face while Alt is held. The More panel adds the archive size as the Archive row's subtitle.[^popup-app]
 - The More panel lists every tile under the palette's browse clusters, in `ACTION_GROUP_ORDER` and table order.[^dashboard-ts]
 - The More panel has its own filter box, focused when the panel opens. A query replaces the clusters with one list ranked by `searchTiles`: every word must match, and each word scores by where it lands — label or id start, a word in the label, anywhere in the label or id, the tooltip or cluster, the label's letters in order (`dedp`), then one typo for words of 4+ letters (`grpup`). A leading `/` is ignored. ↑/↓ move the selection, Enter runs it, Shift+Enter pins or unpins it, Escape clears the query.[^dashboard-ts][^popup-app]
@@ -187,7 +188,7 @@ All triage views are rows in one `TRIAGE_CATEGORIES` table; text after a view re
 | File | Guards |
 |------|--------|
 | `lib/actions.test.ts` | Dispatch, aliases, `runTile`, per-handler behaviour, the group-header snapshot[^actions-test] |
-| `lib/dashboard.test.ts` | Stored tile ids still resolve, tile faces, alt symmetry, More panel filter ranking and typo tolerance[^dashboard-test] |
+| `lib/dashboard.test.ts` | Stored tile ids still resolve, tile faces, alt symmetry, the Sort tile's alt, `altArgument` (every alt row, aliases), `typedActionQuery`, More panel filter ranking and typo tolerance[^dashboard-test] |
 | `lib/commands.test.ts` | `matchCommands` browse, aliases, fuzzy; unique row ids[^commands-test] |
 
 # Related

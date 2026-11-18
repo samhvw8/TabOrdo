@@ -270,10 +270,15 @@ describe("/group and /ungroup", () => {
 });
 
 describe("/sort", () => {
-  it("accepts title, url and domain", async () => {
-    for (const by of ["title", "url", "domain"]) {
+  it("accepts title, url, domain and recent", async () => {
+    for (const by of ["title", "url", "domain", "recent"]) {
       expect((await runAction("sort", ctx({ query: by })))?.message).toBe(`Sorted tabs by ${by}`);
     }
+  });
+
+  it("reads the mode case-blind and ignores trailing spaces", async () => {
+    expect((await runAction("sort", ctx({ query: "Recent " })))?.message).toBe("Sorted tabs by recent");
+    expect((await runAction("sort", ctx({ query: "TITLE" })))?.message).toBe("Sorted tabs by title");
   });
 
   it("falls back to domain for anything else", async () => {

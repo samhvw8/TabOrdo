@@ -4,7 +4,7 @@ title: Domain sort and sort priority
 description: How a domain sort lays out a window, and the per-domain sort priority rules (first domains, segment-aware anchored path patterns, cross-rule tiers) that change its order without ever overriding a position lock.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabs/sort.ts
 tags: [sorting, sort-priority, path-patterns, tab-order]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-22T04:56:32Z }
+generated: { by: claude-code/claude-opus-5-5, at: 2026-11-18T08:25:00Z }
 sources:
   - id: sort
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabs/sort.ts
@@ -81,7 +81,22 @@ The domain comparator compares in this order:[^sort]
 3. `rank.path`: the cross-rule path tier.
 4. The title.
 
-Title and URL sorts get `noSortRanking`, which also skips a storage read on the auto-sort path.[^sort]
+Title, URL and recent sorts get `noSortRanking`, which also skips a storage read on the auto-sort path.[^sort]
+
+# Sort modes
+
+`SORT_MODES` in `lib/tabs/sort.ts` lists the four modes; `SortBy`, the `/sort` argument check and the seeded fixtures all derive from it. `/sort` reads its argument trimmed and case-blind (`/sort Recent` works); anything else falls back to domain. All of them use the same window layout above; only the comparator changes.[^sort]
+
+| Mode | Order | How you run it |
+|------|-------|----------------|
+| `domain` | Sort priority, then registrable domain, path tier, title | `/sort`, `/sort domain`, the Sort tile, auto-sort, the context menu |
+| `title` | Title | `/sort title`, a group header's Sort button |
+| `url` | URL | `/sort url` |
+| `recent` | `lastAccessed`, newest first; a tab with no `lastAccessed` counts as oldest | `/sort recent`, Alt+Enter on bare `/sort`, Alt-click (or Ctrl-click) on the Sort tile ("Sort Recent") |
+
+The recent comparator returns 0 on a tie. `Array.prototype.sort` is stable, so tied tabs keep their strip order and a second recent sort moves nothing. Groups still go in title order, and sort priority does not apply. The popup and the side panel are not tabs, so the active tab is the most recent and leads its run.[^sort][^sort-test]
+
+**Auto-sort undoes it.** Auto-sort always runs a domain sort, so with auto-sort on, the next page load in the window replaces a recent (or title, or url) order.[^sort]
 
 # Schema
 
@@ -119,7 +134,7 @@ Both ends are anchored. The leading `/` is optional, a trailing `/` on the path 
 
 # Where it applies
 
-It applies to every domain sort: `/sort` (bare, or `/sort domain`), the dashboard Sort action, auto-sort, the context-menu Sort, and the `organizeWindow` pass inside Group and Regroup.[^actions][^sort] `/sort title` and `/sort url` ignore it.[^sort-test]
+It applies to every domain sort: `/sort` (bare, or `/sort domain`), the dashboard Sort action, auto-sort, the context-menu Sort, and the `organizeWindow` pass inside Group and Regroup.[^actions][^sort] `/sort title`, `/sort url` and `/sort recent` ignore it.[^sort-test]
 
 # Locks panel editor
 
@@ -136,9 +151,10 @@ The editor adds a domain (a pasted URL is reduced to its host, and a duplicate d
 # Tests that guard it
 
 - `lib/rules.test.ts`: `pathMatches` (anchoring, `*` never crossing `/`, `**` including none, optional leading slash, trailing slash, literal `?`, length cap), `sortPathOf`, `buildSortRanker`, `rankPositionsOf`, "path tiers across rules".[^rules-test]
+- `lib/tabs/sort.test.ts`: "orders by most recently used when asked, tabs never used last", "orders by recency inside each group too, and a second recent sort moves nothing", and "keeps groups in title order, ties in strip order, and ignores sort priority".[^sort-test]
 - `lib/tabs/sort.test.ts`: "with sort rules" (first domains in order, path order inside a domain, contiguous blocks, disabled rule, title sort untouched, inside a group, yields to a lock) and "two rules on one registrable domain".[^sort-test]
 - `lib/tabs/sort.test.ts` "sortTabsInWindow call count": an already-sorted window makes no moves or regroups, one out-of-order loose tab or group costs one block, a tab stranded ahead of the groups goes to the tail in one call.[^sort-test]
-- `lib/tabs/sort-invariants.test.ts` sorts 1000 seeded windows (locks, group locks, sort rules, two windows) twice. The second sort makes no move.[^sort-invariants-test]
+- `lib/tabs/sort-invariants.test.ts` sorts 1000 seeded windows (locks, group locks, sort rules, two windows, every sort mode, `lastAccessed` ties for the recent sort) twice. The second sort makes no move.[^sort-invariants-test]
 
 # Related
 

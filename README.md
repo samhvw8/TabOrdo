@@ -17,7 +17,7 @@ Requires Chrome 138 or later.
 | `/w` | Current window tabs |
 | `/p` | Chrome-pinned tabs only |
 | `/g` | Current group tabs |
-| `/sort` | Sort tabs by domain |
+| `/sort` | Sort tabs by domain (`/sort title`, `/sort url`, `/sort recent` for most recently used first). Alt+Enter, or Alt-click on the Sort tile, sorts by most recently used, inside each group |
 | `/group` | Group matching tabs |
 | `/branch` | Group this tab and every tab opened from it (optional trailing text names the group) |
 | `/branchup` | Same, starting one level up: the parent tab's whole branch |
@@ -84,6 +84,7 @@ The dashboard shows a live 🔊 banner when any tabs are playing audio — click
 
 | Tile | Click | Alt-click |
 |------|-------|-----------|
+| Sort All | Sort by domain | Sort by most recently used, inside each group (also Alt+Enter on `/sort`) |
 | Lock Tab | Hold at current position | Hold at first position (unlock if it already holds it) |
 | Lock Group | Hold group at current position | Hold group at first position |
 | Mute Tab | Mute active tab | Unmute active tab |

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { TILES, TILE_BY_ID, DEFAULT_DASHBOARD_IDS, searchTiles } from "./dashboard.ts";
+import { TILES, TILE_BY_ID, DEFAULT_DASHBOARD_IDS, searchTiles, altArgument, typedActionQuery } from "./dashboard.ts";
 
 // Everything in dashboard.ts is derived from the action table, so these check the derivation
 // and the promises made to users, not that hand-kept lists agree.
@@ -88,5 +88,50 @@ describe("searchTiles (More panel filter)", () => {
 
   it("returns nothing for gibberish", () => {
     expect(ids("zzqxj")).toEqual([]);
+  });
+});
+
+describe("Sort tile alt and Alt+Enter", () => {
+  it("alt-clicks Sort All to /sort recent with a face of its own", () => {
+    const sort = TILE_BY_ID.get("sort")!;
+    expect(sort.alt).toMatchObject({ action: "sort", query: "recent", label: "Sort Recent" });
+    // The Recent tile (recently closed tabs) is a different action: the faces must not match.
+    expect(sort.alt!.icon).not.toBe(TILE_BY_ID.get("recent")!.icon);
+  });
+
+  // Alt+Enter only fills in the command's alt argument. A swap to another command stays on the
+  // tile, where Close Left/Right arm a confirm first.
+  it("gives the alt argument only when the alt keeps the same command", () => {
+    expect(altArgument("sort")).toBe("recent");
+    expect(altArgument("pin")).toBe("^");
+    expect(altArgument("closeleft")).toBeUndefined();
+    expect(altArgument("mute")).toBeUndefined();
+    expect(altArgument("save")).toBeUndefined();
+    expect(altArgument("dedup")).toBeUndefined();
+    expect(altArgument("constructor")).toBeUndefined();
+  });
+
+  // /lock and /lockgroup are the commands the Lock tiles alias; they have no tile of their own.
+  it("gives a command the alt argument of the tile that aliases it", () => {
+    expect(altArgument("lock")).toBe("^");
+    expect(altArgument("lockgroup")).toBe("^");
+    expect(altArgument("unlock")).toBeUndefined();
+  });
+
+  it("decides what a typed command runs with on Enter", () => {
+    expect(typedActionQuery("sort", "", true)).toBe("recent");
+    expect(typedActionQuery("sort", "", false)).toBe("");
+    // Typed text wins over Alt.
+    expect(typedActionQuery("sort", "title", true)).toBe("title");
+    // A swap alt does not reach the keyboard.
+    expect(typedActionQuery("closeleft", "", true)).toBe("");
+    expect(typedActionQuery("lock", "", true)).toBe("^");
+  });
+
+  it("never gives Alt+Enter an argument for an alt that runs another command", () => {
+    for (const t of TILES) {
+      if (!t.alt) continue;
+      expect(altArgument(t.id), t.id).toBe(t.alt.action === t.id ? t.alt.query : undefined);
+    }
   });
 });

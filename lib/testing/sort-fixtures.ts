@@ -8,10 +8,11 @@
 import type { ChromeStub, StubGroup, StubTab } from "./chrome-stub.ts";
 import type { PinnedGroupEntry, PinnedTabEntry } from "../pin.ts";
 import type { SortRule } from "../rules.ts";
+import type { SortBy } from "../tabs/sort.ts";
 
 export interface SortFixture {
   seed: number;
-  by: "title" | "url" | "domain";
+  by: SortBy;
   windowIds: number[];
   tabs: StubTab[];
   groups: StubGroup[];
@@ -66,6 +67,8 @@ export function buildSortFixture(seed: number): SortFixture {
     windowId,
     groupId,
     index,
+    // A small pool, so the recent sort meets ties; undefined stands for a tab never reported used.
+    lastAccessed: pick([undefined, 1, 2, 3, 4, 5]),
   });
 
   for (const windowId of windowIds) {
@@ -124,7 +127,7 @@ export function buildSortFixture(seed: number): SortFixture {
       }]
     : null;
 
-  const by = r() < 0.7 ? "domain" : pick(["title", "url"] as const);
+  const by: SortBy = r() < 0.6 ? "domain" : pick(["title", "url", "recent"] as const);
 
   // chrome.tabs.query returns strip order; the stub returns array order. Shuffle some fixtures
   // so tie-breaking that leans on query order is exercised both ways.

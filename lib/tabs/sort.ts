@@ -5,25 +5,32 @@ import { getPinnedTabs, getPinnedGroups, lockedGroupOrder, pinAwareSortTabs } fr
 import { getSortRules, buildSortRanker, noSortRanking, type SortRanker } from "../rules.ts";
 
 /**
+ * "recent" puts the most recently used tab first (Chrome's lastAccessed), so the tabs you are
+ * working in gather at the front of each group and of the loose run.
+ */
+export const SORT_MODES = ["domain", "title", "url", "recent"] as const;
+export type SortBy = (typeof SORT_MODES)[number];
+
+/**
  * Sort rules only reorder *within* a domain block and *between* domains, so they mean nothing
  * to a flat title or url sort. Skipping the build there also skips a storage read on the
  * auto-sort path, which runs after every burst of tab loads.
  */
-async function rankerFor(by: "title" | "url" | "domain"): Promise<SortRanker> {
+async function rankerFor(by: SortBy): Promise<SortRanker> {
   if (by !== "domain") return noSortRanking;
   return buildSortRanker(await getSortRules());
 }
 
 export async function sortTabsInWindow(
   windowId: number,
-  by: "title" | "url" | "domain" = "domain"
+  by: SortBy = "domain"
 ): Promise<void> {
   await organizeWindow(windowId, by);
 }
 
 export async function sortTabsInGroup(
   groupId: number,
-  by: "title" | "url" | "domain" = "title"
+  by: SortBy = "title"
 ): Promise<void> {
   const tabs = await chrome.tabs.query({ groupId });
   const group = (await chrome.tabGroups.query({})).find((g) => g.id === groupId);
@@ -44,7 +51,7 @@ export async function sortTabsInGroup(
 
 export async function organizeWindow(
   windowId: number,
-  by: "title" | "url" | "domain" = "domain"
+  by: SortBy = "domain"
 ): Promise<void> {
   const tabs = await chrome.tabs.query({ windowId });
   const groups = await chrome.tabGroups.query({ windowId });
@@ -180,7 +187,7 @@ const callCount = (steps: LayoutStep[]) =>
 function compareTabs(
   a: chrome.tabs.Tab,
   b: chrome.tabs.Tab,
-  by: "title" | "url" | "domain",
+  by: SortBy,
   domainOf: DomainMapper,
   rank: SortRanker
 ): number {
@@ -189,6 +196,10 @@ function compareTabs(
       return (a.title || "").localeCompare(b.title || "");
     case "url":
       return (a.url || "").localeCompare(b.url || "");
+    case "recent":
+      // A tab Chrome never reported as used counts as oldest. Ties return 0: the sort is stable,
+      // so they keep their strip order and sorting again moves nothing.
+      return (b.lastAccessed ?? 0) - (a.lastAccessed ?? 0);
     case "domain": {
       const ra = rank(a.url || "");
       const rb = rank(b.url || "");

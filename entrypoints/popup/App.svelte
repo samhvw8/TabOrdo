@@ -20,7 +20,7 @@
   import { groupDotClass, groupBorderClass, groupBgClass, relTime } from "../../lib/format.ts";
   import { createFlash } from "../../lib/flash.ts";
   import { runAction, runTile, sortGroup, extractGroup, type ActionContext, type ActionResult } from "../../lib/actions.ts";
-  import { TILE_BY_ID, DEFAULT_DASHBOARD_IDS, MORE_SECTIONS, UNLOCK_FACE, searchTiles, type Tile, type TileFace } from "../../lib/dashboard.ts";
+  import { TILE_BY_ID, typedActionQuery, DEFAULT_DASHBOARD_IDS, MORE_SECTIONS, UNLOCK_FACE, searchTiles, type Tile, type TileFace } from "../../lib/dashboard.ts";
   import SearchInput from "../../components/SearchInput.svelte";
   import ResultList from "../../components/ResultList.svelte";
   import CommandHints from "../../components/CommandHints.svelte";
@@ -972,7 +972,8 @@
           e.preventDefault();
           const { prefix, query: searchQuery } = parseCommand(query);
           if (prefix && ACTION_PREFIXES.has(prefix)) {
-            handleActionCommand(prefix, searchQuery);
+            // Alt+Enter on a bare command adds its alt argument (/sort → /sort recent).
+            handleActionCommand(prefix, typedActionQuery(prefix, searchQuery, e.altKey));
           } else if (paletteMode === "commands" && commandHints[selectedIndex]) {
             handleCommandSelect(commandHints[selectedIndex]);
           } else if (prefix === "b" || prefix === "h") {

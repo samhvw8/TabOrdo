@@ -57,6 +57,32 @@ for (const row of ROWS) {
   tile.alt = { action: to, query, label: face.label, tooltip: face.tooltip, icon: face.icon };
 }
 
+/**
+ * What Alt+Enter on a bare typed command adds: the alt-click's argument, but only when the alt
+ * keeps the same command (/sort → /sort recent, /pin → /pin ^). An alt that swaps to another
+ * command (/closeleft → /closeright, /save → /load) stays on the tile, where a confirm and a
+ * relabelled face show what is about to run; from the keyboard it would do the opposite of what
+ * was typed with no warning.
+ */
+export function altArgument(prefix: string): string | undefined {
+  const tile = TILE_BY_ID.get(prefix) ?? ALIAS_TILE.get(prefix);
+  const alt = tile?.alt;
+  return alt && alt.action === tile.id ? alt.query : undefined;
+}
+
+/** A command with no tile of its own reached through the alias row that carries one (/lock via Lock Tab's /pin). */
+const ALIAS_TILE: ReadonlyMap<string, Tile> = new Map(
+  TILES.flatMap((t) => {
+    const row = ACTION_BY_ID.get(t.id);
+    return row && "aliasOf" in row && !TILE_BY_ID.has(row.aliasOf) ? [[row.aliasOf, t] as const] : [];
+  })
+);
+
+/** What a typed action command runs with on Enter: Alt on a bare command adds its alt argument. */
+export function typedActionQuery(prefix: string, query: string, altKey: boolean): string {
+  return (altKey && !query ? altArgument(prefix) : undefined) ?? query;
+}
+
 /** The Lock Tab tile's face while the active tab is held: a click releases it. */
 export const UNLOCK_FACE: TileFace = { label: "Unlock", icon: UNPIN_ICON, tooltip: "Release this tab's held position." };
 

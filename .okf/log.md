@@ -1,5 +1,8 @@
 # Update Log
 
+## 2026-11-18
+* **Update**: New `recent` sort mode (`/sort recent`, newest `lastAccessed` first). Alt-click on the Sort tile and Alt+Enter on bare `/sort` run it. Alt+Enter on a bare command adds its alt argument only when the alt keeps the same command (`altArgument`); swaps such as Close Left/Right stay on the tile. `/lock` and `/lockgroup` take the Lock tiles' `^` through their alias rows (`typedActionQuery`); `/sort` reads its argument trimmed and case-blind; the seeded sort fixtures cover every mode, recent included; `.claude/worktrees/` is gitignored — [sort priority](/features/sort-priority.md), [command palette](/features/command-palette.md).
+
 ## 2026-10-19
 * **Update**: New `/mergeall` command (`mergeAllWindowsWithPinned`): pulls every tab, pinned included, from this profile's other normal windows — [command palette](/features/command-palette.md). The stub now models window `type`/`incognito` and the two `tabs.move` rejections — [chrome stub](/testing/chrome-stub.md).
 * **Fix**: `/merge` now skips incognito, popup and app windows through the same `mergeSources` filter; one tab there used to reject the whole move — [command palette](/features/command-palette.md).

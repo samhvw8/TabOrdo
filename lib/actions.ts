@@ -10,7 +10,7 @@
 // /aigroup (which is deliberately run outside the lock — see App.svelte).
 
 import {
-  closeTabs, sortTabsInWindow, mergeAllWindows, mergeAllWindowsWithPinned, removeDuplicates, muteTab, setTabVolume,
+  closeTabs, sortTabsInWindow, SORT_MODES, mergeAllWindows, mergeAllWindowsWithPinned, removeDuplicates, muteTab, setTabVolume,
   splitTabToWindow, discardTabs, closeTabsToLeft, closeTabsToRight, closeTabsSameSite,
   closeOldTabs, shuffleTabs, uniteDomain, isolateDomain, splitWindow, splitByDomain,
   stackWindows, collapseAllGroups, moveCurrentTab, moveGroup, pinCurrentTab, unpinCurrentTab,
@@ -242,10 +242,8 @@ export const ACTION_HANDLERS: Record<HandledCommand, ActionHandler> = {
   },
 
   sort: async (ctx) => {
-    const allowed = ["title", "url", "domain"] as const;
-    const sortBy = (allowed as readonly string[]).includes(ctx.query)
-      ? (ctx.query as "title" | "url" | "domain")
-      : "domain";
+    const arg = ctx.query.trim().toLowerCase();
+    const sortBy = SORT_MODES.find((by) => by === arg) ?? "domain";
     // By domain is also what the Sort tile and the action-icon menu run: one shared function.
     if (sortBy === "domain") {
       await sortWindowByDomain(ctx.currentWindowId);

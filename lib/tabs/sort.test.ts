@@ -16,7 +16,7 @@ beforeEach(() => {
 const strip = (windowId = 1) =>
   stub.openTabs.filter((t) => t.windowId === windowId).sort((a, b) => a.index! - b.index!).map((t) => t.id);
 
-const tab = (t: Partial<{ id: number; url: string; title: string; pinned: boolean; windowId: number; groupId: number; index: number }>) =>
+const tab = (t: Partial<{ id: number; url: string; title: string; pinned: boolean; windowId: number; groupId: number; index: number; lastAccessed: number }>) =>
   ({ id: 0, url: "https://x.com", title: "", pinned: false, windowId: 1, groupId: -1, index: 0, ...t }) as any;
 
 describe("sortTabsInWindow", () => {
@@ -47,6 +47,50 @@ describe("sortTabsInWindow", () => {
     ];
     await sortTabsInWindow(1, "url");
     expect(strip()).toEqual([2, 1]);
+  });
+
+  it("orders by most recently used when asked, tabs never used last", async () => {
+    stub.openTabs = [
+      tab({ id: 1, url: "https://a.com", index: 0, lastAccessed: 100 }),
+      tab({ id: 2, url: "https://b.com", index: 1 }),
+      tab({ id: 3, url: "https://c.com", index: 2, lastAccessed: 300 }),
+      tab({ id: 4, url: "https://d.com", index: 3, lastAccessed: 200 }),
+    ];
+    await sortTabsInWindow(1, "recent");
+    expect(strip()).toEqual([3, 4, 1, 2]);
+  });
+
+  it("orders by recency inside each group too, and a second recent sort moves nothing", async () => {
+    stub.groups = [{ id: 10, title: "Work", color: "blue", windowId: 1 }];
+    stub.openTabs = [
+      tab({ id: 1, url: "https://a.com", index: 0, groupId: 10, lastAccessed: 1 }),
+      tab({ id: 2, url: "https://b.com", index: 1, groupId: 10, lastAccessed: 9 }),
+      tab({ id: 3, url: "https://c.com", index: 2, lastAccessed: 5 }),
+      tab({ id: 4, url: "https://d.com", index: 3, lastAccessed: 7 }),
+    ];
+    await sortTabsInWindow(1, "recent");
+    expect(strip()).toEqual([2, 1, 4, 3]);
+    stub.moves.length = 0;
+    await sortTabsInWindow(1, "recent");
+    expect(stub.moves).toEqual([]);
+  });
+
+  it("keeps groups in title order, ties in strip order, and ignores sort priority", async () => {
+    await setSortRules([{ id: "r1", domain: "z.com", rankFirst: true, patterns: [], enabled: true }]);
+    stub.groups = [
+      { id: 20, title: "Zeta", color: "blue", windowId: 1 },
+      { id: 10, title: "Alpha", color: "red", windowId: 1 },
+    ];
+    stub.openTabs = [
+      tab({ id: 1, url: "https://a.com", index: 0, groupId: 20, lastAccessed: 50 }),
+      tab({ id: 2, url: "https://b.com", index: 1, groupId: 10, lastAccessed: 1 }),
+      tab({ id: 3, url: "https://c.com", index: 2, lastAccessed: 5 }),
+      tab({ id: 4, url: "https://z.com", index: 3, lastAccessed: 5 }),
+      tab({ id: 5, url: "https://d.com", index: 4, lastAccessed: 6 }),
+    ];
+    await sortTabsInWindow(1, "recent");
+    // Alpha before Zeta whatever their tabs' recency; the z.com rule does not lift tab 4; 3 and 4 tie.
+    expect(strip()).toEqual([2, 1, 5, 3, 4]);
   });
 
   // Chrome pins live at the head of the strip and cannot be reordered past; sorting has to
