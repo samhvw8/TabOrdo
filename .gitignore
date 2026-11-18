@@ -4,6 +4,8 @@ node_modules/
 dist/
 *.zip
 .DS_Store
+# Agent worktrees: full copies of the repo made by Claude Code subagents.
+.claude/worktrees/
 .env.submit
 ss-*.png
 promo-*.png
