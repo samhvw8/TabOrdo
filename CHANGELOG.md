@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.11.0 — 2026-11-18
+
+### Improvements
+
+- **Sort by most recently used** — `/sort recent` puts the tabs you used last first, inside each group and among the ungrouped tabs. Hold `Alt` (`Option` on macOS) and the Sort All tile turns into Sort Recent, or press `Alt+Enter` on `/sort`
+- **`Alt+Enter` on a typed command adds its alt argument** — `/lock` and `/lockgroup` (and `/pin`, `/pingroup`) lock at the first position, as Alt-clicking the Lock tiles does. Commands whose Alt-click runs the opposite action, such as Close Left and Close Right, keep that on the tile, where it asks to confirm
+- **`/sort` reads its argument case-blind** — `/sort Title` or `/sort recent ` with a trailing space no longer falls back to a domain sort
+
 ## 0.10.0 — 2026-10-19
 
 ### Improvements
