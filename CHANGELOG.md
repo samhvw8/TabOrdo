@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.12.0 — 2026-11-19
+
+### Improvements
+
+- **Lock Tab pins a tab outside a group in Chrome** — a tab that is not in a group cannot hold a position, so Lock Tab and `/lock` used to answer "Tab is not in a group". They now pin it in Chrome. On a pinned tab the tile turns into Unpin, and `/unlock` unpins it
+
+### Bug Fixes
+
+- **Locking a tab to the top again no longer sends it to the bottom** — lock one tab to the top, lock a second one to the top, then lock the first one to the top again, and it used to drop to the end of the group. Moving a lock now shifts only the locks between its old and new place, so the others keep their slots
+- **A re-locked tab's title no longer shows the 📌 badge twice in the Locks panel** — re-locking stored the badge into the saved title
+- **Reopening a closed lock from the Locks panel keeps the lock's current slot** — a panel left open used the slot it saw when it loaded
+
 ## 0.11.0 — 2026-11-18
 
 ### Improvements
