@@ -32,12 +32,24 @@ export async function savePinnedTabs(pins: PinnedTabEntry[]): Promise<void> {
   await chrome.storage.local.set({ [STORAGE_KEY]: JSON.parse(JSON.stringify(pins)) });
 }
 
-export async function pinTab(url: string, groupName: string, position: number, title?: string, tabId?: number): Promise<PinnedTabEntry> {
+export async function pinTab(url: string, groupName: string, position: number, rawTitle?: string, tabId?: number): Promise<PinnedTabEntry> {
+  // A locked tab's title carries the badge, so a re-lock would store it.
+  const title = stripPinBadge(rawTitle);
   const pins = await getPinnedTabs();
   const existing = pins.find((p) =>
     p.groupName === groupName && (p.url === url || (tabId && p.tabId === tabId))
   );
   if (existing) {
+    // A move to a new slot slides the locks between the old slot and the new one by one, so the
+    // lock takes its slot and the one it left closes. Setting the slot alone left two locks on
+    // it, and the tie sent the lower tab id to the end of the group. Pushing every lock at or
+    // after the new slot (the first fix) drifted the locks past the old slot to the right.
+    const from = existing.position;
+    for (const p of pins) {
+      if (p === existing || p.groupName !== groupName) continue;
+      if (position < from && p.position >= position && p.position < from) p.position++;
+      else if (position > from && p.position > from && p.position <= position) p.position--;
+    }
     existing.position = position;
     existing.url = url;
     if (title) existing.title = title;

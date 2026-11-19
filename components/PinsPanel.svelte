@@ -257,7 +257,10 @@
       // Re-point the entry at the new tab BEFORE regrouping: while the navigation is still
       // committing, tab.url is empty, so applyPinsToGroup and the badge sync can only find
       // the tab by id.
-      await pinTab(pin.url, pin.groupName, pin.position, pin.title, created.id);
+      // The stored slot, not this row's: another context may have moved the lock since the
+      // panel loaded, and a stale slot here would now slide the other locks.
+      const slot = (await getPinnedTabs()).find((p) => p.id === pin.id)?.position ?? pin.position;
+      await pinTab(pin.url, pin.groupName, slot, pin.title, created.id);
       const group = (await chrome.tabGroups.query({})).find((g) => g.title === pin.groupName);
       if (group) {
         await chrome.tabs.group({ tabIds: [created.id], groupId: group.id });
