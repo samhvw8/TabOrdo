@@ -4,16 +4,20 @@ title: Position locks
 description: /lock, /unlock, /lockgroup and /unlockgroup hold a tab at a slot in its group or a group at a slot among its window's groups; internally they are still "pins" (lib/pin.ts), placed by every sort and by the lock commands, and marked with a 📌 title badge.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/pin.ts
 tags: [locks, pins, tab-order, sorting, title-badge]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-22T21:00:00Z }
+generated: { by: claude-code/claude-opus-5-5, at: 2026-11-19T07:00:00Z }
 sources:
   - id: pin
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/pin.ts
     title: lib/pin.ts
-    last_modified: 2026-09-22
+    last_modified: 2026-11-19
   - id: lock
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabs/lock.ts
     title: lib/tabs/lock.ts
-    last_modified: 2026-08-03
+    last_modified: 2026-11-19
+  - id: lock-test
+    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabs/lock.test.ts
+    title: lib/tabs/lock.test.ts
+    last_modified: 2026-11-19
   - id: sort
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabs/sort.ts
     title: lib/tabs/sort.ts
@@ -25,7 +29,7 @@ sources:
   - id: pins-panel
     resource: https://github.com/samhvw8/TabOrdo/blob/main/components/PinsPanel.svelte
     title: components/PinsPanel.svelte
-    last_modified: 2026-09-22
+    last_modified: 2026-11-19
   - id: pin-writes-test
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/pin-writes.test.ts
     title: lib/pin-writes.test.ts
@@ -33,7 +37,7 @@ sources:
   - id: commands
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/commands.ts
     title: lib/commands.ts
-    last_modified: 2026-08-21
+    last_modified: 2026-11-19
   - id: actions
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/actions.ts
     title: lib/actions.ts
@@ -41,7 +45,11 @@ sources:
   - id: popup-app
     resource: https://github.com/samhvw8/TabOrdo/blob/main/entrypoints/popup/App.svelte
     title: entrypoints/popup/App.svelte (Lock Tab tile)
-    last_modified: 2026-09-17
+    last_modified: 2026-11-19
+  - id: dashboard
+    resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/dashboard.ts
+    title: lib/dashboard.ts (Lock Tab tile faces)
+    last_modified: 2026-11-19
   - id: bg-index
     resource: https://github.com/samhvw8/TabOrdo/blob/main/entrypoints/background/index.ts
     title: entrypoints/background/index.ts
@@ -61,7 +69,7 @@ sources:
   - id: readme
     resource: https://github.com/samhvw8/TabOrdo/blob/main/README.md
     title: README.md
-    last_modified: 2026-08-21
+    last_modified: 2026-11-19
   - id: changelog
     resource: https://github.com/samhvw8/TabOrdo/blob/main/CHANGELOG.md
     title: CHANGELOG.md (0.6.0 Renamed)
@@ -117,6 +125,8 @@ A position lock holds a tab at a slot inside its tab group, or holds a group at 
 
 The aliases are hidden from the browse list but still resolve.[^commands][^actions] The dashboard's Lock Tab tile toggles: it unlocks a locked tab, and Alt/Ctrl-click locks at `^`.[^popup-app]
 
+A tab outside a group cannot hold a position lock, so `/lock` and the Lock Tab tile pin it in **Chrome** instead. On a loose tab the tile shows "Pin" (also with Alt held), and on a Chrome-pinned tab it shows "Unpin"; the tile and `/unlock` unpin it in Chrome. A loose tab needs no committed URL for this. With pin follow on, the Chrome pin also pins every other tab with that URL, grouped copies included, which ejects them from their groups.[^lock][^popup-app][^dashboard] A tab in a group without a title still gets "Group has no title".[^lock][^popup-app]
+
 # Schema
 
 `chrome.storage.local` holds two keys, both keyed by group **title**:[^pin]
@@ -126,7 +136,11 @@ The aliases are hidden from the browse list but still resolve.[^commands][^actio
 | `pinnedTabs` | `PinnedTabEntry` | `id`, `url`, `title?`, `tabId?`, `groupName`, `position` (0-based within the group) |
 | `pinnedGroups` | `PinnedGroupEntry` | `id`, `groupTitle`, `position` (0-based among the window's groups) |
 
-Locking at a slot that is already taken shifts every lock at or after it up by one, so the new lock wins the slot.[^pin][^commit-shift] Re-locking an existing entry only updates its position.
+Locking at a slot that is already taken shifts every lock at or after it up by one, so the new lock wins the slot.[^pin][^commit-shift] Re-locking an existing entry at a new slot is a move: the locks between its old slot and the new one slide one step toward the old slot, so the entry takes its slot and the slot it left closes. Locks outside that range keep their slots. Re-locking at the slot the entry already holds moves nothing.[^pin][^lock-test]
+
+The move used to set the slot alone, so two locks tied on it and the tie sent the lower tab id to the end of the group: lock A at the top, lock B at the top, then Alt-click Lock Tab on A again, and A dropped to the bottom. A first fix pushed every lock at or after the new slot, which drifted the locks past the old slot to the right and left the old slot empty; two reviews caught it. `pinTab` also strips the title badge now, because a re-lock reads the title of a tab that already carries it.[^pin][^lock-test]
+
+`pinGroup` still sets a group lock's slot alone on a re-lock, so the same tie can happen between group locks (broken by title).[^pin]
 
 **Reads.** `getPinnedTabs` and `getPinnedGroups` read storage every time, like the [rules config](/features/grouping-rules.md). A read costs about 0.15–0.2 ms in the worker, and the worker, the popup and the side panel all write both lists, so every read-modify-write sees the other contexts' latest writes.[^pin][^pin-writes-test] `syncPinUrl`, which runs on every url, title and status event of every tab, pays one read per event and writes only when a tracked lock's url or title changed.[^pin] A per-context read cache used to answer those events from memory; it needed a fresh-read rule on every write path and was removed for costing more to keep right than the reads it saved.
 
@@ -195,7 +209,7 @@ This is the sidebar's "Locks" section. It shows [Sort Priority](/features/sort-p
 - **`/movegroup $` and a group locked last end up in different places when loose tabs trail the groups.** `/movegroup $` moves the group to the very end of the window, past them. A lock's last slot counts groups only, so the next sort puts the locked group back ahead of them.[^order][^pin]
 - Which of two tab locks on one slot holds it follows the tab ids, and tab ids change across a browser restart. The pair can swap once after one.[^pin]
 - The restart match prefers the copy of a URL inside the lock's group only among the tabs open when the pass runs. If another copy was matched first and the in-group copy was restored more than a second later, the lock keeps the first one.[^locksync]
-- Locks are keyed by group title. Renaming a group orphans its locks, and every group with that title in any window obeys them. A tab outside a titled group cannot be locked ("Group has no title").[^lock][^pin]
+- Locks are keyed by group title. Renaming a group orphans its locks, and every group with that title in any window obeys them. A tab in an untitled group cannot be locked ("Group has no title"). A tab outside any group is pinned in Chrome instead; see Overview.[^lock][^pin]
 - The lock vocabulary change is incomplete. Status messages say "Pinned at position…" and "Usage: /pin", and the panel's empty states and buttons still say `/pin`, `/pingroup` and "unpin".[^lock][^pins-panel]
 
 # Tests that guard it
@@ -211,7 +225,8 @@ This is the sidebar's "Locks" section. It shows [Sort Priority](/features/sort-p
 - `lib/tabs/order.test.ts` "moveGroup": a move to a slot on the right lands in it, with one `tabGroups.move`.[^order-test]
 - `lib/pin-writes.test.ts`: `syncPinUrl` follows a navigated lock and writes nothing for an untracked or unchanged tab, no failed write laundered into the next one, and no revert of another context's lock (`pinTab`, `syncPinUrl`, `pinGroup`).[^pin-writes-test]
 - `lib/tabs/dedup.test.ts` has the position-pin cases; see [dedup](/features/dedup.md).
-- Nothing tests `pinCurrentTab`, `pinCurrentGroup` or `setTitleBadge` directly.
+- `lib/tabs/lock.test.ts`: re-locking a held tab at `^` takes the top back instead of dropping to the bottom; a move left shifts only the locks between the two slots; a move right takes its slot and closes the one it left, with no drift over repeated moves; re-locking at its own slot moves no other lock; a re-lock stores the title without the badge; a loose tab is pinned in Chrome (also on `^`, and before its URL commits) with no lock stored; an already pinned one is left alone; unlock unpins a Chrome-pinned loose tab and does nothing to a loose unpinned one.[^lock-test]
+- Nothing tests `pinCurrentGroup` or `setTitleBadge` directly.
 
 # Related
 
@@ -219,12 +234,14 @@ This is the sidebar's "Locks" section. It shows [Sort Priority](/features/sort-p
 
 [^pin]: lib/pin.ts
 [^lock]: lib/tabs/lock.ts
+[^lock-test]: lib/tabs/lock.test.ts
 [^sort]: lib/tabs/sort.ts
 [^group]: lib/tabs/group.ts
 [^pins-panel]: components/PinsPanel.svelte
 [^commands]: lib/commands.ts
 [^actions]: lib/actions.ts
 [^popup-app]: entrypoints/popup/App.svelte
+[^dashboard]: lib/dashboard.ts
 [^bg-index]: entrypoints/background/index.ts
 [^locksync]: lib/locksync.ts
 [^locksync-test]: lib/locksync.test.ts
