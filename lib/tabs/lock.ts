@@ -42,10 +42,16 @@ export async function setTitleBadge(tabId: number, on: boolean): Promise<void> {
   }
 }
 
+/** A position lock needs a titled group. A loose tab gets Chrome's pin instead. */
 export async function pinCurrentTab(posStr: string): Promise<string> {
   const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!active?.id || !active.url) return "No active tab";
-  if (active.groupId === -1) return "Tab is not in a group";
+  if (!active?.id) return "No active tab";
+  if (active.groupId === -1) {
+    if (active.pinned) return "Already pinned in Chrome";
+    await chrome.tabs.update(active.id, { pinned: true });
+    return "Pinned in Chrome (tab is not in a group)";
+  }
+  if (!active.url) return "No active tab";
 
   const group = (await chrome.tabGroups.query({})).find((g) => g.id === active.groupId);
   if (!group?.title) return "Group has no title";
@@ -76,8 +82,13 @@ export async function pinCurrentTab(posStr: string): Promise<string> {
 
 export async function unpinCurrentTab(): Promise<string> {
   const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!active?.id || !active.url) return "No active tab";
-  if (active.groupId === -1) return "Tab is not in a group";
+  if (!active?.id) return "No active tab";
+  if (active.groupId === -1) {
+    if (!active.pinned) return "Tab is not locked or pinned";
+    await chrome.tabs.update(active.id, { pinned: false });
+    return "Unpinned in Chrome";
+  }
+  if (!active.url) return "No active tab";
 
   const group = (await chrome.tabGroups.query({})).find((g) => g.id === active.groupId);
   if (!group?.title) return "Group has no title";

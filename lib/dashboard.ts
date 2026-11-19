@@ -85,6 +85,10 @@ export function typedActionQuery(prefix: string, query: string, altKey: boolean)
 
 /** The Lock Tab tile's face while the active tab is held: a click releases it. */
 export const UNLOCK_FACE: TileFace = { label: "Unlock", icon: UNPIN_ICON, tooltip: "Release this tab's held position." };
+/** Lock Tab on a loose tab pins it in Chrome, so on a Chrome-pinned tab the tile unpins. */
+export const CHROME_UNPIN_FACE: TileFace = { label: "Unpin", icon: UNPIN_ICON, tooltip: "Unpin this tab in Chrome." };
+/** A loose tab has no group to hold a slot in, so the tile pins it in Chrome, Alt or not. */
+export const CHROME_PIN_FACE: TileFace = { label: "Pin", icon: ACTION_BY_ID.get("pin")!.tile!.icon, tooltip: "Pin this tab in Chrome. It is not in a group, so it cannot hold a position." };
 
 export const DEFAULT_DASHBOARD_IDS = ["sort", "group", "dedup", "merge", "pin"];
 

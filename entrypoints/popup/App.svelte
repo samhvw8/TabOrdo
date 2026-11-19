@@ -20,7 +20,7 @@
   import { groupDotClass, groupBorderClass, groupBgClass, relTime } from "../../lib/format.ts";
   import { createFlash } from "../../lib/flash.ts";
   import { runAction, runTile, sortGroup, extractGroup, type ActionContext, type ActionResult } from "../../lib/actions.ts";
-  import { TILE_BY_ID, typedActionQuery, DEFAULT_DASHBOARD_IDS, MORE_SECTIONS, UNLOCK_FACE, searchTiles, type Tile, type TileFace } from "../../lib/dashboard.ts";
+  import { TILE_BY_ID, typedActionQuery, DEFAULT_DASHBOARD_IDS, MORE_SECTIONS, UNLOCK_FACE, CHROME_UNPIN_FACE, CHROME_PIN_FACE, searchTiles, type Tile, type TileFace } from "../../lib/dashboard.ts";
   import SearchInput from "../../components/SearchInput.svelte";
   import ResultList from "../../components/ResultList.svelte";
   import CommandHints from "../../components/CommandHints.svelte";
@@ -148,6 +148,13 @@
     }
   }
 
+  // Lock Tab pins a loose tab in Chrome (Chrome-pinned tabs are never in a group), so the
+  // tile then toggles that pin instead of a position lock.
+  let activeTabLoose = $derived.by(() =>
+    dashboardTabs.find(t => t.active && t.windowId === currentWindowId && t.groupId === -1) ?? null
+  );
+  let activeTabChromePinned = $derived(!!activeTabLoose?.pinned);
+
   let activeTabPin = $derived.by(() => {
     const active = dashboardTabs.find(t => t.active && t.windowId === currentWindowId);
     if (!active || active.groupId === -1 || !active.groupTitle) return null;
@@ -157,6 +164,8 @@
   // Mirrors handlePinCurrent: a held tab releases, unless Alt can still move it to the top.
   let pinDisplay = $derived.by((): TileFace => {
     const lock = TILE_BY_ID.get("pin")!;
+    if (activeTabChromePinned) return CHROME_UNPIN_FACE;
+    if (activeTabLoose) return CHROME_PIN_FACE;
     if (activeTabPin && !(altPressed && activeTabPin.position !== 0)) return UNLOCK_FACE;
     return altPressed ? lock.alt! : lock;
   });
@@ -771,7 +780,9 @@
 
   async function handlePinCurrent(e: MouseEvent) {
     const toTop = e.altKey || e.ctrlKey;
-    if (activeTabPin) {
+    if (activeTabChromePinned) {
+      await dashAction(() => unpinCurrentTab());
+    } else if (activeTabPin) {
       if (toTop && activeTabPin.position !== 0) {
         await dashAction(() => pinCurrentTab("^"));
       } else {

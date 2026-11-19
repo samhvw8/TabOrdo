@@ -85,7 +85,7 @@ The dashboard shows a live 🔊 banner when any tabs are playing audio — click
 | Tile | Click | Alt-click |
 |------|-------|-----------|
 | Sort All | Sort by domain | Sort by most recently used, inside each group (also Alt+Enter on `/sort`) |
-| Lock Tab | Hold at current position | Hold at first position (unlock if it already holds it) |
+| Lock Tab | Hold at current position; a tab outside a group is pinned in Chrome (click again to unpin) | Hold at first position (unlock if it already holds it) |
 | Lock Group | Hold group at current position | Hold group at first position |
 | Mute Tab | Mute active tab | Unmute active tab |
 | Branch | Group this tab's branch | Group the parent's whole branch |

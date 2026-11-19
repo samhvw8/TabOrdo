@@ -201,13 +201,13 @@ export const ACTIONS = [
   // "Lock", not "pin": Chrome already owns the word pin for its own tab pinning, and users
   // typing /pin expected that. The old prefixes still work, they just aren't advertised — and
   // the two lock tiles keep the old ids, because those are what users have stored.
-  { id: "lock", description: "Hold tab at a position in its group (^ $ or number)", group: "Order", color: "text-accent-yellow" },
-  { id: "unlock", description: "Release a tab's held position", group: "Order", color: "text-accent-yellow" },
+  { id: "lock", description: "Hold tab at a position in its group (^ $ or number); a tab outside a group is pinned in Chrome", group: "Order", color: "text-accent-yellow" },
+  { id: "unlock", description: "Release a tab's held position, or unpin a loose tab in Chrome", group: "Order", color: "text-accent-yellow" },
   { id: "lockgroup", description: "Hold group at a position in the window (^ $ or number)", group: "Order", color: "text-accent-yellow" },
   { id: "unlockgroup", description: "Release a group's held position", group: "Order", color: "text-accent-yellow" },
   // The tile toggles, releasing a held tab (App.svelte); its faces for that live in dashboard.ts.
   { id: "pin", aliasOf: "lock",
-    tile: { label: "Lock Tab", icon: ICON(PIN_BODY), tooltip: "Hold current tab at its position in the group." },
+    tile: { label: "Lock Tab", icon: ICON(PIN_BODY), tooltip: "Hold current tab at its position in the group. A tab outside a group is pinned in Chrome." },
     alt: { query: "^", label: "Lock Top", tooltip: "Hold tab at the first position in its group.", icon: ICON(`${PIN_BODY}<path d="M5 3h14"/>`) } },
   { id: "unpin", aliasOf: "unlock" },
   { id: "pingroup", aliasOf: "lockgroup",
