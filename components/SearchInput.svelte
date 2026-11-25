@@ -26,8 +26,10 @@
     if (autofocus) inputEl?.focus();
   });
 
-  // The command overlay is painted on top of a transparent-text input, so it only lines up
-  // while both are scrolled to the same offset. The input scrolls itself once the query
+  // The command overlay is painted on top of a transparent-text input. The caret is placed
+  // by the input's own glyphs, so the overlay must use the same font, weight and box (border
+  // included); any width difference shows as drift between the text and the caret. It also
+  // only lines up while both are scrolled to the same offset. The input scrolls itself once the query
   // outruns the box; the overlay clips instead, so it has to be told.
   function syncOverlayScroll() {
     if (overlayEl && inputEl) overlayEl.scrollLeft = inputEl.scrollLeft;
@@ -81,9 +83,9 @@
   {#if cmdPart}
     <div
       bind:this={overlayEl}
-      class="absolute inset-0 pl-8 pr-3 py-2 text-sm pointer-events-none overflow-hidden"
+      class="absolute inset-0 pl-8 pr-3 py-2 border border-transparent text-sm pointer-events-none overflow-hidden"
       style="white-space: pre; line-height: 1.4;"
       aria-hidden="true"
-    ><span class="text-primary font-medium font-[family-name:var(--font-family-mono)]">{cmdPart.cmd}</span><span class="text-text">{cmdPart.rest}</span></div>
+    ><span class="text-primary">{cmdPart.cmd}</span><span class="text-text">{cmdPart.rest}</span></div>
   {/if}
 </div>
