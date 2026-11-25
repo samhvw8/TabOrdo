@@ -20,15 +20,16 @@ describe("findDuplicateGroups", () => {
     expect(ids(groups)).toEqual([[1, 3]]);
   });
 
-  it("ignores tracking params but not the rest of the query or the hash", () => {
+  it("ignores tracking params, trailing slashes, and hashes, but not the rest of the query", () => {
     const groups = findDuplicateGroups([
       row(1, "https://blog.com/post?id=7"),
       row(2, "https://blog.com/post?id=7&utm_source=x&fbclid=y"),
       row(3, "https://blog.com/post?id=7&gclid=z"),
       row(4, "https://blog.com/post?id=8"),
       row(5, "https://blog.com/post?id=7#comments"),
+      row(6, "https://blog.com/post/?id=7"),
     ]);
-    expect(ids(groups)).toEqual([[1, 2, 3]]);
+    expect(ids(groups)).toEqual([[1, 2, 3, 5, 6]]);
   });
 
   it("never groups browser pages or unparseable URLs", () => {
@@ -49,13 +50,14 @@ describe("findDuplicateGroups", () => {
       { id: 3, url: "chrome://settings/", pinned: false, windowId: 1, groupId: -1 },
       { id: 4, url: "chrome://settings/", pinned: false, windowId: 1, groupId: -1 },
       { id: 5, url: "https://b.com/x", pinned: false, windowId: 2, groupId: -1 },
-      { id: 6, url: "https://b.com/x", pinned: false, windowId: 1, groupId: -1 },
+      { id: 6, url: "https://b.com/x/", pinned: false, windowId: 1, groupId: -1 },
       { id: 7, url: "https://b.com/x#top", pinned: false, windowId: 1, groupId: -1 },
+      { id: 8, url: "https://b.com/x?tab=2", pinned: false, windowId: 1, groupId: -1 },
     ];
     stub.openTabs = tabs;
     const extra = [...findDuplicateGroups(tabs).values()].reduce((n, g) => n + g.length - 1, 0);
 
-    expect(extra).toBe(2);
+    expect(extra).toBe(3);
     expect(await removeDuplicates()).toBe(extra);
   });
 });
@@ -102,12 +104,23 @@ describe("removeDuplicates", () => {
     expect(stub.removedIds).toEqual([]);
   });
 
-  it("treats different hashes as different pages", async () => {
+  it("dedupes URLs that differ only by a trailing slash", async () => {
     stub.openTabs = [
-      { id: 1, url: "https://docs.com/guide#intro", pinned: false, windowId: 1, groupId: -1 },
-      { id: 2, url: "https://docs.com/guide#setup", pinned: false, windowId: 1, groupId: -1 },
+      { id: 1, url: "https://www.facebook.com/ducvviett", pinned: false, windowId: 1, groupId: -1, lastAccessed: 10 },
+      { id: 2, url: "https://www.facebook.com/ducvviett/", pinned: false, windowId: 1, groupId: -1, lastAccessed: 20 },
     ];
-    expect(await removeDuplicates()).toBe(0);
+    expect(await removeDuplicates()).toBe(1);
+    expect(stub.removedIds).toEqual([1]);
+  });
+
+  it("dedupes URLs that differ only by a hash fragment", async () => {
+    stub.openTabs = [
+      { id: 1, url: "https://docs.com/guide", pinned: false, windowId: 1, groupId: -1, lastAccessed: 10 },
+      { id: 2, url: "https://docs.com/guide#intro", pinned: false, windowId: 1, groupId: -1, lastAccessed: 30 },
+      { id: 3, url: "https://docs.com/guide#setup", pinned: false, windowId: 1, groupId: -1, lastAccessed: 20 },
+    ];
+    expect(await removeDuplicates()).toBe(2);
+    expect(stub.removedIds.sort()).toEqual([1, 3]);
   });
 
   it("still dedupes the same page when only tracking params differ", async () => {

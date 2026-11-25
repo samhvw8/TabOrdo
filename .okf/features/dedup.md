@@ -4,12 +4,12 @@ title: Duplicate tab removal
 description: How /dedup decides two tabs are the same page, which copy survives, where it is triggered from, why the dupe badge and @d agree with it, and how those rules changed between 0.6.0 and the unreleased single close path.
 resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabs/dedup.ts
 tags: [dedup, tabs, position-locks]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-22T18:00:00Z }
+generated: { by: agy/gemini-4-neon, at: 2026-11-22T15:55:00Z }
 sources:
   - id: dedup-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabs/dedup.ts
     title: Duplicate finding and removal
-    last_modified: 2026-09-22
+    last_modified: 2026-11-22
   - id: close-ts
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabs/close.ts
     title: closeTabs
@@ -37,7 +37,7 @@ sources:
   - id: dedup-test
     resource: https://github.com/samhvw8/TabOrdo/blob/main/lib/tabs/dedup.test.ts
     title: Dedup tests
-    last_modified: 2026-09-22
+    last_modified: 2026-11-22
   - id: changelog
     resource: https://github.com/samhvw8/TabOrdo/blob/main/CHANGELOG.md
     title: CHANGELOG
@@ -76,13 +76,14 @@ sources:
 
 | Part of the URL | Treatment[^dedup-ts] |
 |-----------------|-----------|
-| Protocol, host (with port), path | Kept |
+| Protocol, host (with port) | Kept |
+| Path | Kept, minus trailing slashes on non-root paths (`/a/` → `/a`, `/` stays `/`) |
 | Query string | Kept, minus any `utm_*` key, `fbclid` and `gclid` |
-| Hash | Kept |
+| Hash (`#...`) | Stripped |
 | `chrome:` and `chrome-extension:` pages | Never treated as duplicates |
 | Unparseable URL | Never treated as duplicates |
 
-So `youtube.com/watch?v=A` and `?v=B` are different pages, while a link shared with `?utm_source=x` still matches the original. Tracking parameters "identify the click, not the page".[^dedup-ts][^dedup-test]
+So `youtube.com/watch?v=A` and `?v=B` are different pages, while a link shared with `?utm_source=x`, a trailing slash (`/ducvviett/` vs `/ducvviett`), or a `#...` fragment still matches the original. Tracking parameters "identify the click, not the page".[^dedup-ts][^dedup-test]
 
 `findDuplicateGroups(tabs)` is the one place this rule is applied. It is pure and takes anything with a `url`, so `/dedup` runs it over `TabInfo`s and the popup's "N dupes" badge and `@d` view run it over search rows, through `duplicateTabs` in `lib/views.ts`. A copy the badge counts is one `/dedup` acts on, and the reverse.[^dedup-ts][^views-ts][^popup-app][^dedup-test]
 
@@ -131,13 +132,15 @@ All three reach `closeTabs`, so all three get an undo snapshot and per-tab closi
 | Unreleased | `54b3787` | The snapshot moved from `removeDuplicates` into `closeTabs`; a refused tab is an error again (0.7.2 reported "No duplicates found"); undo restores only tabs that are actually gone.[^commit-54b3787][^changelog] |
 | Unreleased | | The badge and `@d` group through `findDuplicateGroups`. They had compared raw URLs, so the badge could report "2 dupes" for copies differing only by tracking parameters, then `/dedup` closed them, or count duplicate `chrome://` pages that `/dedup` answered "No dupes" to.[^dedup-ts][^popup-app] |
 
+| Unreleased | | `normalizeUrl` strips trailing slashes on non-root paths (`/path/` → `/path`) and strips `#...` hash fragments, using the existing survivor policy.[^dedup-ts][^dedup-test] |
+
 `54b3787` also corrected 0.7.2's diagnosis. `acffcde` said Chrome rejects an id array outright and removes nothing. Chromium in fact removes in order and stops at the first failure; the test stub had modelled the wrong behaviour and 0.7.2 was validated against it.[^commit-acffcde][^commit-54b3787] See [chrome stub](/testing/chrome-stub.md).
 
 # Tests that guard it
 
 `lib/tabs/dedup.test.ts` covers:[^dedup-test]
 
-- Identity: query strings and hashes distinguish pages; tracking-only differences do not.
+- Identity: non-tracking query strings distinguish pages; tracking params, trailing slashes, and `#...` hash fragments do not.
 - Grouping: `findDuplicateGroups` leaves single tabs, browser pages and unparseable URLs out, and finds exactly the copies `removeDuplicates` closes.
 - Survivor: most recent copy when none is pinned; a pinned copy beats a more recent unpinned one; most recent when all are pinned; a Chrome pin and a lock tie and recency settles it; lock resolved by tab id when its URL is stale; a second copy inside the locked group still closes; a lock in another group is ignored.
 - Closing: a close snapshot that undo reopens; no snapshot when nothing closes; the rest close when one id has already gone; a refused duplicate throws after the rest close.

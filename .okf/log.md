@@ -1,5 +1,8 @@
 # Update Log
 
+## 2026-11-22
+* **Fix**: `normalizeUrl` in `lib/tabs/dedup.ts` now strips trailing slashes on non-root paths (`/path/` → `/path`) and strips `#...` hash fragments so trailing-slash and hash variants dedupe under the existing survivor policy — [dedup](/features/dedup.md).
+
 ## 2026-11-19
 * **Fix**: `pinTab` re-locking an existing tab lock at a new slot is now a move: only the locks between the old and new slot slide one step, so the old slot closes. Two locks used to tie on slot 0, and the lower tab id dropped to the bottom of the group. `pinTab` strips the title badge, and the Locks panel reopens a closed lock at its stored slot, not the row's cached one. Reviewed by agy Gemini 4 Hydrogen and Neon — [position locks](/features/position-locks.md).
 * **Update**: `/lock` and the Lock Tab tile pin a tab outside any group in Chrome; on a Chrome-pinned tab the tile shows "Unpin" and `/unlock` unpins it. New `lib/tabs/lock.test.ts` covers both — [position locks](/features/position-locks.md).

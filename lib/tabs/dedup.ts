@@ -82,13 +82,15 @@ function normalizeUrl(url: string): string | null {
   try {
     const u = new URL(url);
     if (u.protocol === "chrome:" || u.protocol === "chrome-extension:") return null;
-    // The query and hash are part of the page's identity: keying on the path alone made
-    // youtube.com/watch?v=A and ?v=B the same tab, and closed one of them. Tracking cruft is
-    // the exception — stripping it keeps a shared link deduping against the original.
+    // The query is part of the page's identity: keying on the path alone made
+    // youtube.com/watch?v=A and ?v=B the same tab, and closed one of them. Tracking cruft,
+    // trailing path slashes, and #hash fragments are stripped so shared links, /path vs /path/,
+    // and anchor/hash copies dedupe against the same page.
     for (const key of [...u.searchParams.keys()]) {
       if (key.startsWith("utm_") || TRACKING_PARAMS.has(key)) u.searchParams.delete(key);
     }
-    return `${u.protocol}//${u.host}${u.pathname}${u.search}${u.hash}`;
+    const pathname = u.pathname.replace(/\/+$/, "") || "/";
+    return `${u.protocol}//${u.host}${pathname}${u.search}`;
   } catch {
     return null;
   }

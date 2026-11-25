@@ -43,9 +43,10 @@ describe("triage views", () => {
       tab(3, { url: "chrome://newtab/" }),
       tab(4, { url: "chrome://newtab/" }),
       tab(5, { url: "https://a.com/#top" }),
+      tab(6, { url: "https://a.com/?page=2" }),
     ]);
-    expect(ids(view("@d", c).rows)).toEqual([1, 2]);
-    expect(duplicateTabs(c.search.items)).toHaveLength(2);
+    expect(ids(view("@d", c).rows)).toEqual([1, 2, 5]);
+    expect(duplicateTabs(c.search.items)).toHaveLength(3);
   });
 
   it("@r lists the 20 most recently used tabs, most recent first", () => {
