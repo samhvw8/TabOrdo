@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.12.2 — 2026-11-25
+
+### Bug Fixes
+
+- **Search caret lines up with `/` and `@` queries** — the colored command text drew on its own box without the input's border and in a heavier weight, so the text drifted from the caret. It now uses the same box and font as the input
+
 ## 0.12.1 — 2026-11-22
 
 ### Bug Fixes
