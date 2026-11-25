@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.12.1 — 2026-11-22
+
+### Bug Fixes
+
+- **`/dedup` matches URLs that differ only by a trailing slash or `#...` hash** — tabs like `facebook.com/user` and `facebook.com/user/`, or `docs.com/guide` and `docs.com/guide#section`, are now treated as duplicates by `/dedup`, `@d`, and the dupe badge. The existing survivor rule (pinned first, then most recently used) decides which copy stays, and non-tracking query parameters still keep pages separate
+
 ## 0.12.0 — 2026-11-19
 
 ### Improvements
